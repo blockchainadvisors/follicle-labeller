@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions }
 import path from 'path';
 import fs from 'fs';
 import JSZip from 'jszip';
+import { initUpdater, checkForUpdates } from './updater';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -580,6 +581,11 @@ function createMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Check for Updates...',
+          click: () => checkForUpdates(),
+        },
+        { type: 'separator' },
+        {
           label: 'About Follicle Labeller',
           click: () => {
             if (mainWindow) {
@@ -669,6 +675,11 @@ app.whenReady().then(() => {
 
   createWindow();
   createMenu();
+
+  // Initialize auto-updater (only in production)
+  if (app.isPackaged && mainWindow) {
+    initUpdater(mainWindow);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

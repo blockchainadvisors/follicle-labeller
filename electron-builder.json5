@@ -10,6 +10,11 @@
     "dist/**/*",
     "dist-electron/**/*"
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "blockchainadvisors",
+    "repo": "follicle-labeller"
+  },
   "fileAssociations": [
     {
       "ext": "fol",

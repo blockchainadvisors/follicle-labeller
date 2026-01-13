@@ -93,6 +93,13 @@ const electronAPI = {
     ipcRenderer.send('app:confirmClose', canClose);
   },
 
+  // Update download progress listener (for optional custom UI)
+  onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => {
+    const handler = (_event: IpcRendererEvent, progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => callback(progress);
+    ipcRenderer.on('update:downloadProgress', handler);
+    return () => ipcRenderer.removeListener('update:downloadProgress', handler);
+  },
+
   // Menu event listeners (return cleanup function)
   onMenuOpenImage: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();

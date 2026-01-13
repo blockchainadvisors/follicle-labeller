@@ -16,6 +16,7 @@
     "electron:build:all": "npm run build && electron-builder --win --mac"
   },
   "dependencies": {
+    "electron-updater": "^6.1.7",
     "jszip": "^3.10.1",
     "lucide-react": "^0.469.0",
     "react": "^18.2.0",

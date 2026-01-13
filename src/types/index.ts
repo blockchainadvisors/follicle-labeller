@@ -235,6 +235,8 @@ declare global {
         annotations?: string;
       } | null>;
       onFileOpen: (callback: (filePath: string) => void) => () => void;
+      // Update progress listener (for optional custom UI)
+      onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => () => void;
     };
   }
 }
