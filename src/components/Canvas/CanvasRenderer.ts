@@ -92,7 +92,10 @@ export class CanvasRenderer {
     }
 
     // Draw drag preview for new shape
-    if (dragState.isDragging && dragState.dragType === 'create' && dragState.startPoint && dragState.currentPoint) {
+    // Also draw during linear width-definition phase (isDragging is false but createPhase is 'width')
+    const isCreating = dragState.isDragging && dragState.dragType === 'create';
+    const isLinearWidthPhase = dragState.createPhase === 'width' && dragState.startPoint && dragState.lineEndPoint;
+    if ((isCreating || isLinearWidthPhase) && dragState.startPoint && dragState.currentPoint) {
       this.drawDragPreview(dragState, viewport.scale, currentShapeType);
     }
 
