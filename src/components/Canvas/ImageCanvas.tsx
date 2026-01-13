@@ -667,6 +667,23 @@ export const ImageCanvas: React.FC = () => {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle shortcuts when user is typing in an input field
+      const target = e.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isInputFocused = tagName === 'input' ||
+        tagName === 'textarea' ||
+        tagName === 'select' ||
+        target?.isContentEditable === true;
+
+      // Skip all shortcuts when typing in input fields
+      if (isInputFocused) {
+        // Only allow Escape to blur the input
+        if (e.key === 'Escape' && target) {
+          target.blur();
+        }
+        return;
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         e.preventDefault();
         deleteFollicle(selectedId);
@@ -681,6 +698,7 @@ export const ImageCanvas: React.FC = () => {
         }
       }
 
+      // Mode shortcuts
       if (e.key === 'c' || e.key === 'C') {
         useCanvasStore.getState().setMode('create');
       }
@@ -691,25 +709,10 @@ export const ImageCanvas: React.FC = () => {
         useCanvasStore.getState().setMode('pan');
       }
 
-      if (e.key === 'Escape') {
-        selectFollicle(null);
-        // Cancel linear creation if in width phase
-        setDragState({
-          isDragging: false,
-          startPoint: null,
-          currentPoint: null,
-          dragType: null,
-          targetId: null,
-          resizeHandle: undefined,
-          createPhase: undefined,
-          lineEndPoint: undefined,
-        });
-      }
-
+      // View toggles
       if (e.key === 'l' || e.key === 'L') {
         useCanvasStore.getState().toggleLabels();
       }
-
       if (e.key === 'o' || e.key === 'O') {
         useCanvasStore.getState().toggleShapes();
       }
@@ -728,6 +731,21 @@ export const ImageCanvas: React.FC = () => {
       // Help toggle
       if (e.key === '?') {
         useCanvasStore.getState().toggleHelp();
+      }
+
+      // Escape to deselect and cancel operations
+      if (e.key === 'Escape') {
+        selectFollicle(null);
+        setDragState({
+          isDragging: false,
+          startPoint: null,
+          currentPoint: null,
+          dragType: null,
+          targetId: null,
+          resizeHandle: undefined,
+          createPhase: undefined,
+          lineEndPoint: undefined,
+        });
       }
 
       // Image navigation: Ctrl+Tab / Ctrl+Shift+Tab

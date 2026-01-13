@@ -371,13 +371,11 @@ function createMenu(): void {
       label: 'View',
       submenu: [
         {
-          label: 'Toggle Shapes',
-          accelerator: 'O',
+          label: 'Toggle Shapes (O)',
           click: () => mainWindow?.webContents.send('menu:toggleShapes'),
         },
         {
-          label: 'Toggle Labels',
-          accelerator: 'L',
+          label: 'Toggle Labels (L)',
           click: () => mainWindow?.webContents.send('menu:toggleLabels'),
         },
         { type: 'separator' },
