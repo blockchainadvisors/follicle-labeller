@@ -4,12 +4,16 @@ export interface Point {
   y: number;
 }
 
+// Image identifier type
+export type ImageId = string;
+
 // Shape types
 export type ShapeType = 'circle' | 'rectangle' | 'linear';
 
 // Base annotation properties shared by all shapes
 interface BaseAnnotation {
   id: string;
+  imageId: ImageId;  // Links annotation to its parent image
   label: string;
   notes: string;
   color: string;
@@ -62,6 +66,20 @@ export interface Viewport {
   offsetX: number;      // Pan offset in screen pixels
   offsetY: number;
   scale: number;        // Zoom level (1.0 = 100%)
+}
+
+// Project image - stores image data and per-image viewport
+export interface ProjectImage {
+  id: ImageId;
+  fileName: string;
+  width: number;
+  height: number;
+  imageData: ArrayBuffer;     // Raw image bytes for saving
+  imageBitmap: ImageBitmap;   // Pre-decoded for rendering
+  imageSrc: string;           // Object URL for display
+  viewport: Viewport;         // Per-image zoom/pan state
+  createdAt: number;
+  sortOrder: number;          // For ordering in explorer
 }
 
 // Interaction modes
@@ -119,13 +137,77 @@ export interface FollicleExportV1 {
   annotations: AnnotationExport[];
 }
 
+// V2 Multi-image export types
+export interface AnnotationExportV2 extends AnnotationExport {
+  imageId: ImageId;
+}
+
+export interface ImageManifestEntry {
+  id: ImageId;
+  fileName: string;
+  archiveFileName: string;  // {id}-{fileName} in archive
+  width: number;
+  height: number;
+  sortOrder: number;
+  viewport: Viewport;
+}
+
+export interface ProjectManifestV2 {
+  version: '2.0';
+  metadata: {
+    exportedAt: string;
+    applicationVersion: string;
+    imageCount: number;
+    annotationCount: number;
+  };
+  images: ImageManifestEntry[];
+}
+
+export interface AnnotationsFileV2 {
+  annotations: AnnotationExportV2[];
+}
+
 // Electron API type declaration
 declare global {
   interface Window {
     electronAPI: {
+      // Single image dialog (for adding images)
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
+      // Legacy V1 operations (still supported for backward compatibility)
       saveProject: (imageData: ArrayBuffer, imageFileName: string, jsonData: string) => Promise<boolean>;
       loadProject: () => Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null>;
+      // V2 Multi-image operations
+      saveProjectV2: (
+        images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+        manifest: string,
+        annotations: string
+      ) => Promise<boolean>;
+      loadProjectV2: () => Promise<{
+        version: '1.0' | '2.0';
+        // V1 format (single image)
+        imageFileName?: string;
+        imageData?: ArrayBuffer;
+        jsonData?: string;
+        // V2 format (multiple images)
+        manifest?: string;
+        images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
+        annotations?: string;
+      } | null>;
+      // Screenshot capture
+      saveScreenshot: (imageData: ArrayBuffer, suggestedName: string) => Promise<boolean>;
+      // Menu event listeners (return cleanup function)
+      onMenuOpenImage: (callback: () => void) => () => void;
+      onMenuLoadProject: (callback: () => void) => () => void;
+      onMenuSaveProject: (callback: () => void) => () => void;
+      onMenuUndo: (callback: () => void) => () => void;
+      onMenuRedo: (callback: () => void) => () => void;
+      onMenuClearAll: (callback: () => void) => () => void;
+      onMenuToggleShapes: (callback: () => void) => () => void;
+      onMenuToggleLabels: (callback: () => void) => () => void;
+      onMenuZoomIn: (callback: () => void) => () => void;
+      onMenuZoomOut: (callback: () => void) => () => void;
+      onMenuResetZoom: (callback: () => void) => () => void;
+      onMenuShowHelp: (callback: () => void) => () => void;
     };
   }
 }

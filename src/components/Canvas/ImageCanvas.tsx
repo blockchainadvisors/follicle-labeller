@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
+import { useProjectStore } from '../../store/projectStore';
 import { CanvasRenderer } from './CanvasRenderer';
 import { DragState, Point, Follicle, LinearAnnotation, isCircle, isRectangle, isLinear } from '../../types';
 import {
@@ -138,7 +139,7 @@ export const ImageCanvas: React.FC = () => {
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
 
   // Store subscriptions
-  const follicles = useFollicleStore(state => state.follicles);
+  const allFollicles = useFollicleStore(state => state.follicles);
   const selectedId = useFollicleStore(state => state.selectedId);
   const addCircle = useFollicleStore(state => state.addCircle);
   const addRectangle = useFollicleStore(state => state.addRectangle);
@@ -150,30 +151,55 @@ export const ImageCanvas: React.FC = () => {
   const resizeLinear = useFollicleStore(state => state.resizeLinear);
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
 
-  const viewport = useCanvasStore(state => state.viewport);
-  const imageBitmap = useCanvasStore(state => state.imageBitmap);
+  // Project store for multi-image support
+  const images = useProjectStore(state => state.images);
+  const activeImageId = useProjectStore(state => state.activeImageId);
+  const pan = useProjectStore(state => state.pan);
+  const zoom = useProjectStore(state => state.zoom);
+  const zoomToFit = useProjectStore(state => state.zoomToFit);
+
+  // Get active image data
+  const activeImage = activeImageId ? images.get(activeImageId) : null;
+  const viewport = activeImage?.viewport ?? { offsetX: 0, offsetY: 0, scale: 1 };
+  const imageBitmap = activeImage?.imageBitmap ?? null;
+
+  // Filter follicles by active image
+  const follicles = activeImageId
+    ? allFollicles.filter(f => f.imageId === activeImageId)
+    : [];
+
   const mode = useCanvasStore(state => state.mode);
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
-  const pan = useCanvasStore(state => state.pan);
-  const zoom = useCanvasStore(state => state.zoom);
-  const zoomToFit = useCanvasStore(state => state.zoomToFit);
   const showLabels = useCanvasStore(state => state.showLabels);
   const showShapes = useCanvasStore(state => state.showShapes);
+  const setCanvasRef = useCanvasStore(state => state.setCanvasRef);
 
   const temporalStore = useTemporalStore();
 
-  // Resize canvas to fit container
+  // Resize canvas to fit container - use ResizeObserver to detect layout changes
   useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
     const updateSize = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setCanvasSize({ width: rect.width, height: rect.height });
-      }
+      const rect = container.getBoundingClientRect();
+      // Only update if size actually changed to avoid unnecessary re-renders
+      setCanvasSize(prev => {
+        if (prev.width !== rect.width || prev.height !== rect.height) {
+          return { width: rect.width, height: rect.height };
+        }
+        return prev;
+      });
     };
 
+    // Use ResizeObserver to detect container size changes (e.g., when sidebar appears)
+    const resizeObserver = new ResizeObserver(updateSize);
+    resizeObserver.observe(container);
+
+    // Initial size
     updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
+
+    return () => resizeObserver.disconnect();
   }, []);
 
   // Initialize renderer
@@ -186,6 +212,12 @@ export const ImageCanvas: React.FC = () => {
 
     rendererRef.current = new CanvasRenderer(ctx);
   }, []);
+
+  // Store canvas ref for screenshot feature
+  useEffect(() => {
+    setCanvasRef(canvasRef.current);
+    return () => setCanvasRef(null);
+  }, [setCanvasRef]);
 
   // Set image when bitmap changes (already pre-decoded for smooth rendering)
   useEffect(() => {
@@ -385,28 +417,93 @@ export const ImageCanvas: React.FC = () => {
     }
 
     if (mode === 'create') {
-      // For linear shapes, check if we're in width-definition phase
-      if (currentShapeType === 'linear' && dragState.createPhase === 'width' && dragState.startPoint && dragState.lineEndPoint) {
-        // Click to finalize the linear shape
-        const halfWidth = pointToLineDistance(point, dragState.startPoint, dragState.lineEndPoint);
-        if (halfWidth > 5) {
-          addLinear(dragState.startPoint, dragState.lineEndPoint, halfWidth);
+      // Check if we're in the middle of creating a shape (second click to finalize)
+      if (dragState.dragType === 'create' && dragState.startPoint && activeImageId) {
+        if (currentShapeType === 'circle') {
+          // Second click - finalize circle
+          const radius = distance(dragState.startPoint, point);
+          if (radius > 5) {
+            addCircle(activeImageId, dragState.startPoint, radius);
+          }
+          setDragState({
+            isDragging: false,
+            startPoint: null,
+            currentPoint: null,
+            dragType: null,
+            targetId: null,
+            createPhase: undefined,
+            lineEndPoint: undefined,
+          });
+          return;
+        } else if (currentShapeType === 'rectangle') {
+          // Second click - finalize rectangle
+          const x = Math.min(dragState.startPoint.x, point.x);
+          const y = Math.min(dragState.startPoint.y, point.y);
+          const width = Math.abs(point.x - dragState.startPoint.x);
+          const height = Math.abs(point.y - dragState.startPoint.y);
+          if (width > 10 && height > 10) {
+            addRectangle(activeImageId, x, y, width, height);
+          }
+          setDragState({
+            isDragging: false,
+            startPoint: null,
+            currentPoint: null,
+            dragType: null,
+            targetId: null,
+            createPhase: undefined,
+            lineEndPoint: undefined,
+          });
+          return;
+        } else if (currentShapeType === 'linear') {
+          if (dragState.createPhase === 'line') {
+            // Second click - finalize line, move to width phase
+            const lineLength = distance(dragState.startPoint, point);
+            if (lineLength > 10) {
+              setDragState({
+                isDragging: false,
+                startPoint: dragState.startPoint,
+                currentPoint: point,
+                dragType: 'create',
+                targetId: null,
+                createPhase: 'width',
+                lineEndPoint: point,
+              });
+            } else {
+              // Line too short, cancel
+              setDragState({
+                isDragging: false,
+                startPoint: null,
+                currentPoint: null,
+                dragType: null,
+                targetId: null,
+                createPhase: undefined,
+                lineEndPoint: undefined,
+              });
+            }
+            return;
+          } else if (dragState.createPhase === 'width' && dragState.lineEndPoint) {
+            // Third click - finalize linear shape
+            const halfWidth = pointToLineDistance(point, dragState.startPoint, dragState.lineEndPoint);
+            if (halfWidth > 5) {
+              addLinear(activeImageId, dragState.startPoint, dragState.lineEndPoint, halfWidth);
+            }
+            setDragState({
+              isDragging: false,
+              startPoint: null,
+              currentPoint: null,
+              dragType: null,
+              targetId: null,
+              createPhase: undefined,
+              lineEndPoint: undefined,
+            });
+            return;
+          }
         }
-        setDragState({
-          isDragging: false,
-          startPoint: null,
-          currentPoint: null,
-          dragType: null,
-          targetId: null,
-          createPhase: undefined,
-          lineEndPoint: undefined,
-        });
-        return;
       }
 
-      // Start new shape creation
+      // First click - start new shape creation
       setDragState({
-        isDragging: true,
+        isDragging: false,  // Not dragging, just tracking mouse
         startPoint: point,
         currentPoint: point,
         dragType: 'create',
@@ -414,12 +511,12 @@ export const ImageCanvas: React.FC = () => {
         createPhase: currentShapeType === 'linear' ? 'line' : undefined,
       });
     }
-  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findAnnotationAtPoint, currentShapeType, dragState, addLinear]);
+  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findAnnotationAtPoint, currentShapeType, dragState, addLinear, addCircle, addRectangle, activeImageId]);
 
   // Mouse move handler
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    // Handle width-definition phase for linear shapes (not dragging, but tracking mouse)
-    if (dragState.createPhase === 'width' && dragState.startPoint && dragState.lineEndPoint) {
+    // Handle shape creation - track mouse even when not dragging (click-to-click mode)
+    if (dragState.dragType === 'create' && dragState.startPoint) {
       const point = getImagePoint(e);
       setDragState(prev => ({ ...prev, currentPoint: point }));
       return;
@@ -446,37 +543,8 @@ export const ImageCanvas: React.FC = () => {
   const handleMouseUp = useCallback(() => {
     if (!dragState.isDragging) return;
 
-    if (dragState.dragType === 'create' && dragState.startPoint && dragState.currentPoint) {
-      if (currentShapeType === 'circle') {
-        const radius = distance(dragState.startPoint, dragState.currentPoint);
-        if (radius > 5) {
-          addCircle(dragState.startPoint, radius);
-        }
-      } else if (currentShapeType === 'rectangle') {
-        const x = Math.min(dragState.startPoint.x, dragState.currentPoint.x);
-        const y = Math.min(dragState.startPoint.y, dragState.currentPoint.y);
-        const width = Math.abs(dragState.currentPoint.x - dragState.startPoint.x);
-        const height = Math.abs(dragState.currentPoint.y - dragState.startPoint.y);
-        if (width > 10 && height > 10) {
-          addRectangle(x, y, width, height);
-        }
-      } else if (currentShapeType === 'linear' && dragState.createPhase === 'line') {
-        // End of line definition phase - transition to width phase
-        const lineLength = distance(dragState.startPoint, dragState.currentPoint);
-        if (lineLength > 10) {
-          setDragState({
-            isDragging: false,
-            startPoint: dragState.startPoint,
-            currentPoint: dragState.currentPoint,
-            dragType: 'create',
-            targetId: null,
-            createPhase: 'width',
-            lineEndPoint: dragState.currentPoint,
-          });
-          return; // Don't reset drag state - continue to width phase
-        }
-      }
-    }
+    // Shape creation is now click-to-click, so don't finalize on mouse up
+    // Just handle move, resize, and pan operations
 
     if (dragState.dragType === 'move' && dragState.targetId && dragState.currentPoint && dragState.startPoint) {
       const deltaX = dragState.currentPoint.x - dragState.startPoint.x;
@@ -554,7 +622,7 @@ export const ImageCanvas: React.FC = () => {
       createPhase: undefined,
       lineEndPoint: undefined,
     });
-  }, [dragState, currentShapeType, addCircle, addRectangle, moveAnnotation, resizeCircle, resizeRectangle, resizeLinear, follicles]);
+  }, [dragState, moveAnnotation, resizeCircle, resizeRectangle, resizeLinear, follicles]);
 
   // Wheel zoom handler
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -630,6 +698,30 @@ export const ImageCanvas: React.FC = () => {
       }
       if (e.key === '3') {
         useCanvasStore.getState().setShapeType('linear');
+      }
+
+      // Help toggle
+      if (e.key === '?') {
+        useCanvasStore.getState().toggleHelp();
+      }
+
+      // Image navigation: Ctrl+Tab / Ctrl+Shift+Tab
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Tab') {
+        e.preventDefault();
+        const projectState = useProjectStore.getState();
+        const { imageOrder, activeImageId, setActiveImage } = projectState;
+        if (imageOrder.length <= 1 || !activeImageId) return;
+
+        const currentIndex = imageOrder.indexOf(activeImageId);
+        let newIndex: number;
+        if (e.shiftKey) {
+          // Previous image
+          newIndex = currentIndex <= 0 ? imageOrder.length - 1 : currentIndex - 1;
+        } else {
+          // Next image
+          newIndex = currentIndex >= imageOrder.length - 1 ? 0 : currentIndex + 1;
+        }
+        setActiveImage(imageOrder[newIndex]);
       }
     };
 

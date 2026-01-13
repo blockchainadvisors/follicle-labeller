@@ -1,6 +1,6 @@
 # Follicle Labeller
 
-A desktop application for medical image annotation, specifically designed to label and annotate follicles (ovarian structures) in medical images. Built with Electron, React, and TypeScript.
+A desktop application for medical image annotation, specifically designed to label and annotate hair follicles in medical/healthcare images. Built with Electron, React, and TypeScript.
 
 ## Features
 
@@ -35,6 +35,11 @@ A desktop application for medical image annotation, specifically designed to lab
 ### Undo/Redo
 - Full undo/redo support with 50-level history
 - Keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z)
+
+### Help & Documentation
+- Built-in user guide accessible via Help button or `?` key
+- Comprehensive documentation covering all features
+- Screenshot capture for exporting canvas views
 
 ## Installation
 
@@ -120,9 +125,12 @@ The packaged application will be available in the `release` directory.
 | `3` | Linear shape |
 | `L` | Toggle labels visibility |
 | `O` | Toggle shapes visibility |
+| `?` | Toggle help panel |
 | `Delete` / `Backspace` | Delete selected annotation |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Shift+Z` | Redo |
+| `Ctrl+Tab` | Next image |
+| `Ctrl+Shift+Tab` | Previous image |
 | `Escape` | Deselect / Cancel operation |
 | `Middle Mouse` | Pan (in any mode) |
 | `Scroll Wheel` | Zoom in/out |

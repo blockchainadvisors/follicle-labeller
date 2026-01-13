@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import JSZip from 'jszip';
@@ -94,7 +94,7 @@ ipcMain.handle('dialog:saveProject', async (_, imageData: ArrayBuffer, imageFile
   }
 });
 
-// Load project from .fol archive
+// Load project from .fol archive (legacy V1)
 ipcMain.handle('dialog:loadProject', async () => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return null;
@@ -147,9 +147,308 @@ ipcMain.handle('dialog:loadProject', async () => {
   }
 });
 
+// V2 Save project with multiple images
+ipcMain.handle('dialog:saveProjectV2', async (
+  _,
+  images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+  manifestJson: string,
+  annotationsJson: string
+) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return false;
+
+  const result = await dialog.showSaveDialog(window, {
+    defaultPath: 'project.fol',
+    filters: [
+      { name: 'Follicle Project', extensions: ['fol'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) return false;
+
+  try {
+    const zip = new JSZip();
+
+    // Add manifest
+    zip.file('manifest.json', manifestJson);
+
+    // Add images in images/ folder
+    const imagesFolder = zip.folder('images');
+    if (imagesFolder) {
+      for (const image of images) {
+        const archiveFileName = `${image.id}-${image.fileName}`;
+        imagesFolder.file(archiveFileName, Buffer.from(image.data));
+      }
+    }
+
+    // Add annotations
+    zip.file('annotations.json', annotationsJson);
+
+    // Generate and save the archive
+    const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(result.filePath, content);
+
+    return true;
+  } catch (error) {
+    console.error('Failed to save project:', error);
+    return false;
+  }
+});
+
+// V2 Load project with support for both V1 and V2 formats
+ipcMain.handle('dialog:loadProjectV2', async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return null;
+
+  const result = await dialog.showOpenDialog(window, {
+    properties: ['openFile'],
+    filters: [
+      { name: 'Follicle Project', extensions: ['fol'] }
+    ]
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  try {
+    const filePath = result.filePaths[0];
+    const data = fs.readFileSync(filePath);
+
+    const zip = await JSZip.loadAsync(data);
+
+    // Check if this is V2 (has manifest.json)
+    const hasManifest = 'manifest.json' in zip.files;
+
+    if (hasManifest) {
+      // V2 format
+      const manifest = await zip.files['manifest.json'].async('string');
+      const annotations = await zip.files['annotations.json'].async('string');
+
+      // Load all images from images/ folder
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
+      const imagesFolder = zip.folder('images');
+
+      if (imagesFolder) {
+        for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
+          if (file.dir) continue;
+
+          // Extract filename from path (remove 'images/' prefix)
+          const archiveFileName = relativePath.replace('images/', '');
+          if (!archiveFileName) continue;
+
+          // Parse id and fileName from archiveFileName (format: {id}-{fileName})
+          const dashIndex = archiveFileName.indexOf('-');
+          if (dashIndex === -1) continue;
+
+          const id = archiveFileName.substring(0, dashIndex);
+          const fileName = archiveFileName.substring(dashIndex + 1);
+
+          const imageBuffer = await file.async('nodebuffer');
+          const imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+
+          images.push({ id, fileName, data: imageData });
+        }
+      }
+
+      return {
+        version: '2.0' as const,
+        manifest,
+        images,
+        annotations,
+      };
+    } else {
+      // V1 format - return in V1 structure for migration
+      let imageFileName = '';
+      let imageData: ArrayBuffer | null = null;
+      let jsonData = '';
+
+      for (const fileName of Object.keys(zip.files)) {
+        if (fileName === 'annotations.json') {
+          jsonData = await zip.files[fileName].async('string');
+        } else if (!zip.files[fileName].dir) {
+          imageFileName = fileName;
+          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+        }
+      }
+
+      if (!imageData || !jsonData) {
+        throw new Error('Invalid .fol file: missing image or annotations');
+      }
+
+      return {
+        version: '1.0' as const,
+        imageFileName,
+        imageData,
+        jsonData,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to load project:', error);
+    return null;
+  }
+});
+
+// Save screenshot to file
+ipcMain.handle('dialog:saveScreenshot', async (_, imageData: ArrayBuffer, suggestedName: string) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return false;
+
+  const result = await dialog.showSaveDialog(window, {
+    defaultPath: suggestedName,
+    filters: [
+      { name: 'PNG Image', extensions: ['png'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) return false;
+
+  try {
+    fs.writeFileSync(result.filePath, Buffer.from(imageData));
+    return true;
+  } catch (error) {
+    console.error('Failed to save screenshot:', error);
+    return false;
+  }
+});
+
+// Create application menu
+function createMenu(): void {
+  const isMac = process.platform === 'darwin';
+
+  const template: MenuItemConstructorOptions[] = [
+    // macOS app menu
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' as const },
+        { type: 'separator' as const },
+        { role: 'quit' as const },
+      ]
+    }] : []),
+
+    // File menu
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'Open Image...',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => mainWindow?.webContents.send('menu:openImage'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Load Project...',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: () => mainWindow?.webContents.send('menu:loadProject'),
+        },
+        {
+          label: 'Save Project',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => mainWindow?.webContents.send('menu:saveProject'),
+        },
+        { type: 'separator' },
+        isMac ? { role: 'close' as const } : { role: 'quit' as const },
+      ],
+    },
+
+    // Edit menu
+    {
+      label: 'Edit',
+      submenu: [
+        {
+          label: 'Undo',
+          accelerator: 'CmdOrCtrl+Z',
+          click: () => mainWindow?.webContents.send('menu:undo'),
+        },
+        {
+          label: 'Redo',
+          accelerator: 'CmdOrCtrl+Shift+Z',
+          click: () => mainWindow?.webContents.send('menu:redo'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Clear All Annotations',
+          click: () => mainWindow?.webContents.send('menu:clearAll'),
+        },
+      ],
+    },
+
+    // View menu
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Toggle Shapes',
+          accelerator: 'O',
+          click: () => mainWindow?.webContents.send('menu:toggleShapes'),
+        },
+        {
+          label: 'Toggle Labels',
+          accelerator: 'L',
+          click: () => mainWindow?.webContents.send('menu:toggleLabels'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+=',
+          click: () => mainWindow?.webContents.send('menu:zoomIn'),
+        },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CmdOrCtrl+-',
+          click: () => mainWindow?.webContents.send('menu:zoomOut'),
+        },
+        {
+          label: 'Reset Zoom',
+          accelerator: 'CmdOrCtrl+0',
+          click: () => mainWindow?.webContents.send('menu:resetZoom'),
+        },
+        { type: 'separator' },
+        { role: 'toggleDevTools' },
+      ],
+    },
+
+    // Help menu
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'User Guide',
+          accelerator: 'F1',
+          click: () => mainWindow?.webContents.send('menu:showHelp'),
+        },
+        { type: 'separator' },
+        {
+          label: 'About Follicle Labeller',
+          click: () => {
+            if (mainWindow) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: 'About Follicle Labeller',
+                message: 'Follicle Labeller v1.0.0',
+                detail: 'Medical image annotation tool for follicle labeling.',
+              });
+            }
+          },
+        },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
 // App lifecycle
 app.whenReady().then(() => {
   createWindow();
+  createMenu();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

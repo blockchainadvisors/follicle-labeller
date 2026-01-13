@@ -1,5 +1,6 @@
 import React from 'react';
 import { useFollicleStore } from '../../store/follicleStore';
+import { useProjectStore } from '../../store/projectStore';
 import { isCircle, isRectangle, isLinear } from '../../types';
 
 export const PropertyPanel: React.FC = () => {
@@ -10,7 +11,10 @@ export const PropertyPanel: React.FC = () => {
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
   const updateFollicle = useFollicleStore(state => state.updateFollicle);
 
-  const selected = follicles.find(f => f.id === selectedId);
+  const activeImageId = useProjectStore(state => state.activeImageId);
+
+  // Only show selected annotation if it belongs to the active image
+  const selected = follicles.find(f => f.id === selectedId && f.imageId === activeImageId);
 
   if (!selected) {
     return (
@@ -21,13 +25,14 @@ export const PropertyPanel: React.FC = () => {
           <div className="tips">
             <h4>Tips:</h4>
             <ul>
-              <li><strong>Create:</strong> Click and drag to draw a shape</li>
-              <li><strong>Circle (1):</strong> Click center, drag radius</li>
-              <li><strong>Rectangle (2):</strong> Click corner, drag size</li>
-              <li><strong>Linear (3):</strong> Drag line, then click for width</li>
+              <li><strong>Create:</strong> Click to start, click again to finish</li>
+              <li><strong>Circle (1):</strong> Click center, click for radius</li>
+              <li><strong>Rectangle (2):</strong> Click corner, click opposite corner</li>
+              <li><strong>Linear (3):</strong> Click start, click end, click for width</li>
               <li><strong>Select:</strong> Click on an annotation</li>
               <li><strong>Move:</strong> Drag a selected annotation</li>
               <li><strong>Resize:</strong> Drag the edge/corner handles</li>
+              <li><strong>Cancel:</strong> Press Escape to cancel creation</li>
               <li><strong>Delete:</strong> Press Delete key</li>
             </ul>
           </div>

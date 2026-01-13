@@ -1,16 +1,16 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import { Follicle, Point, CircleAnnotation, RectangleAnnotation, LinearAnnotation, isCircle, isRectangle, isLinear } from '../types';
+import { Follicle, Point, CircleAnnotation, RectangleAnnotation, LinearAnnotation, ImageId, isCircle, isRectangle, isLinear } from '../types';
 import { generateId } from '../utils/id-generator';
 
 interface FollicleState {
   follicles: Follicle[];
   selectedId: string | null;
 
-  // Actions
-  addCircle: (center: Point, radius: number) => string;
-  addRectangle: (x: number, y: number, width: number, height: number) => string;
-  addLinear: (startPoint: Point, endPoint: Point, halfWidth: number) => string;
+  // Actions (with imageId for multi-image support)
+  addCircle: (imageId: ImageId, center: Point, radius: number) => string;
+  addRectangle: (imageId: ImageId, x: number, y: number, width: number, height: number) => string;
+  addLinear: (imageId: ImageId, startPoint: Point, endPoint: Point, halfWidth: number) => string;
   updateFollicle: (id: string, updates: Partial<Follicle>) => void;
   deleteFollicle: (id: string) => void;
   selectFollicle: (id: string | null) => void;
@@ -24,9 +24,11 @@ interface FollicleState {
   // Bulk operations
   clearAll: () => void;
   importFollicles: (follicles: Follicle[]) => void;
+  deleteFolliclesForImage: (imageId: ImageId) => void;
 
-  // Computed
+  // Selectors
   getSelected: () => Follicle | null;
+  getFolliclesForImage: (imageId: ImageId) => Follicle[];
 }
 
 // Default colors for new annotations (cycles through)
@@ -44,10 +46,11 @@ export const useFollicleStore = create<FollicleState>()(
       follicles: [],
       selectedId: null,
 
-      addCircle: (center, radius) => {
+      addCircle: (imageId, center, radius) => {
         const id = generateId();
         const newCircle: CircleAnnotation = {
           id,
+          imageId,
           shape: 'circle',
           center,
           radius: Math.max(radius, 5),
@@ -66,10 +69,11 @@ export const useFollicleStore = create<FollicleState>()(
         return id;
       },
 
-      addRectangle: (x, y, width, height) => {
+      addRectangle: (imageId, x, y, width, height) => {
         const id = generateId();
         const newRect: RectangleAnnotation = {
           id,
+          imageId,
           shape: 'rectangle',
           x,
           y,
@@ -90,10 +94,11 @@ export const useFollicleStore = create<FollicleState>()(
         return id;
       },
 
-      addLinear: (startPoint, endPoint, halfWidth) => {
+      addLinear: (imageId, startPoint, endPoint, halfWidth) => {
         const id = generateId();
         const newLinear: LinearAnnotation = {
           id,
+          imageId,
           shape: 'linear',
           startPoint,
           endPoint,
@@ -202,9 +207,25 @@ export const useFollicleStore = create<FollicleState>()(
         set({ follicles, selectedId: null });
       },
 
+      deleteFolliclesForImage: (imageId) => {
+        set(state => {
+          const remainingFollicles = state.follicles.filter(f => f.imageId !== imageId);
+          // Deselect if selected annotation was on removed image
+          const selectedStillExists = remainingFollicles.some(f => f.id === state.selectedId);
+          return {
+            follicles: remainingFollicles,
+            selectedId: selectedStillExists ? state.selectedId : null,
+          };
+        });
+      },
+
       getSelected: () => {
         const { follicles, selectedId } = get();
         return follicles.find(f => f.id === selectedId) || null;
+      },
+
+      getFolliclesForImage: (imageId) => {
+        return get().follicles.filter(f => f.imageId === imageId);
       },
     }),
     {

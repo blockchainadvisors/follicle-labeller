@@ -1,26 +1,85 @@
-import React from 'react';
+import React, { useEffect, useCallback } from 'react';
+import {
+  Pencil,
+  MousePointer2,
+  Hand,
+  Circle,
+  Square,
+  Minus,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Camera,
+  HelpCircle,
+  Eye,
+  EyeOff,
+  Tag,
+} from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
+import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
-import { generateExport, parseImport } from '../../utils/export-utils';
+import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
+import { ProjectImage } from '../../types';
+
+// Reusable icon button component
+interface IconButtonProps {
+  icon: React.ReactNode;
+  tooltip: string;
+  shortcut?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+}
+
+const IconButton: React.FC<IconButtonProps> = ({
+  icon,
+  tooltip,
+  shortcut,
+  onClick,
+  disabled = false,
+  active = false,
+}) => {
+  const tooltipText = shortcut ? `${tooltip} (${shortcut})` : tooltip;
+
+  return (
+    <button
+      className={`icon-button ${active ? 'active' : ''}`}
+      onClick={onClick}
+      disabled={disabled}
+      title={tooltipText}
+      aria-label={tooltip}
+    >
+      {icon}
+    </button>
+  );
+};
 
 export const Toolbar: React.FC = () => {
   const mode = useCanvasStore(state => state.mode);
   const setMode = useCanvasStore(state => state.setMode);
-  const viewport = useCanvasStore(state => state.viewport);
-  const zoom = useCanvasStore(state => state.zoom);
-  const resetZoom = useCanvasStore(state => state.resetZoom);
-  const setImage = useCanvasStore(state => state.setImage);
-  const imageLoaded = useCanvasStore(state => state.imageLoaded);
-  const imageData = useCanvasStore(state => state.imageData);
-  const fileName = useCanvasStore(state => state.fileName);
-  const imageWidth = useCanvasStore(state => state.imageWidth);
-  const imageHeight = useCanvasStore(state => state.imageHeight);
   const showLabels = useCanvasStore(state => state.showLabels);
   const toggleLabels = useCanvasStore(state => state.toggleLabels);
   const showShapes = useCanvasStore(state => state.showShapes);
   const toggleShapes = useCanvasStore(state => state.toggleShapes);
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const setShapeType = useCanvasStore(state => state.setShapeType);
+  const showHelp = useCanvasStore(state => state.showHelp);
+  const toggleHelp = useCanvasStore(state => state.toggleHelp);
+  const canvasRef = useCanvasStore(state => state.canvasRef);
+
+  // Project store for multi-image support
+  const images = useProjectStore(state => state.images);
+  const imageOrder = useProjectStore(state => state.imageOrder);
+  const activeImageId = useProjectStore(state => state.activeImageId);
+  const addImage = useProjectStore(state => state.addImage);
+  const clearProject = useProjectStore(state => state.clearProject);
+  const zoom = useProjectStore(state => state.zoom);
+  const resetZoom = useProjectStore(state => state.resetZoom);
+
+  // Get active image info
+  const activeImage = activeImageId ? images.get(activeImageId) : null;
+  const imageLoaded = activeImage !== null;
+  const viewport = activeImage?.viewport ?? { offsetX: 0, offsetY: 0, scale: 1 };
 
   const follicles = useFollicleStore(state => state.follicles);
   const importFollicles = useFollicleStore(state => state.importFollicles);
@@ -28,7 +87,13 @@ export const Toolbar: React.FC = () => {
 
   const temporalStore = useTemporalStore();
 
-  const handleOpenImage = async () => {
+  // Get annotation count for active image only
+  const activeImageAnnotationCount = activeImageId
+    ? follicles.filter(f => f.imageId === activeImageId).length
+    : 0;
+
+  // Handler functions
+  const handleOpenImage = useCallback(async () => {
     try {
       const result = await window.electronAPI.openImageDialog();
       if (result) {
@@ -37,209 +102,276 @@ export const Toolbar: React.FC = () => {
 
         // Create pre-decoded ImageBitmap for smooth rendering
         const bitmap = await createImageBitmap(blob);
-        setImage(url, bitmap.width, bitmap.height, result.fileName, result.data, bitmap);
+
+        const newImage: ProjectImage = {
+          id: generateImageId(),
+          fileName: result.fileName,
+          width: bitmap.width,
+          height: bitmap.height,
+          imageData: result.data,
+          imageBitmap: bitmap,
+          imageSrc: url,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: imageOrder.length,
+        };
+
+        addImage(newImage);
       }
     } catch (error) {
       console.error('Failed to open image:', error);
     }
-  };
+  }, [addImage, imageOrder.length]);
 
-  const handleSave = async () => {
-    if (!imageData || !fileName) return;
+  const handleSave = useCallback(async () => {
+    if (images.size === 0) return;
 
     try {
-      const exportData = generateExport(
-        follicles,
-        fileName,
-        imageWidth,
-        imageHeight
+      const { manifest, annotations, imageList } = generateExportV2(
+        Array.from(images.values()),
+        follicles
       );
-      const json = JSON.stringify(exportData, null, 2);
-      const saved = await window.electronAPI.saveProject(imageData, fileName, json);
+
+      const saved = await window.electronAPI.saveProjectV2(
+        imageList,
+        JSON.stringify(manifest, null, 2),
+        JSON.stringify(annotations, null, 2)
+      );
+
       if (saved) {
         console.log('Project saved successfully');
       }
     } catch (error) {
       console.error('Failed to save project:', error);
     }
-  };
+  }, [images, follicles]);
 
-  const handleLoad = async () => {
+  const handleLoad = useCallback(async () => {
     try {
-      const result = await window.electronAPI.loadProject();
-      if (result) {
-        // Load image with pre-decoded bitmap
-        const blob = new Blob([result.imageData]);
-        const url = URL.createObjectURL(blob);
+      const result = await window.electronAPI.loadProjectV2();
+      if (!result) return;
 
-        // Create pre-decoded ImageBitmap for smooth rendering
-        const bitmap = await createImageBitmap(blob);
-        setImage(url, bitmap.width, bitmap.height, result.imageFileName, result.imageData, bitmap);
+      // Clear existing project
+      clearProject();
+      clearAll();
 
-        // Load annotations
-        const imported = parseImport(result.jsonData);
-        importFollicles(imported);
+      const { loadedImages, loadedFollicles } = await parseImportV2(result);
+
+      // Add all loaded images
+      for (const image of loadedImages) {
+        addImage(image);
       }
+
+      // Import all annotations
+      importFollicles(loadedFollicles);
     } catch (error) {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  };
+  }, [clearProject, clearAll, addImage, importFollicles]);
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
-  };
+  }, [temporalStore]);
 
-  const handleRedo = () => {
+  const handleRedo = useCallback(() => {
     temporalStore.getState().redo();
-  };
+  }, [temporalStore]);
+
+  const handleScreenshot = useCallback(async () => {
+    if (!canvasRef) return;
+
+    try {
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvasRef.toBlob(resolve, 'image/png');
+      });
+
+      if (!blob) {
+        console.error('Failed to create screenshot blob');
+        return;
+      }
+
+      const arrayBuffer = await blob.arrayBuffer();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const suggestedName = `screenshot-${timestamp}.png`;
+
+      const saved = await window.electronAPI.saveScreenshot(arrayBuffer, suggestedName);
+      if (saved) {
+        console.log('Screenshot saved successfully');
+      }
+    } catch (error) {
+      console.error('Failed to save screenshot:', error);
+    }
+  }, [canvasRef]);
+
+  const handleZoomIn = useCallback(() => zoom(0.2), [zoom]);
+  const handleZoomOut = useCallback(() => zoom(-0.2), [zoom]);
+
+  // Register menu event listeners
+  useEffect(() => {
+    const cleanups = [
+      window.electronAPI.onMenuOpenImage(handleOpenImage),
+      window.electronAPI.onMenuLoadProject(handleLoad),
+      window.electronAPI.onMenuSaveProject(handleSave),
+      window.electronAPI.onMenuUndo(handleUndo),
+      window.electronAPI.onMenuRedo(handleRedo),
+      window.electronAPI.onMenuClearAll(clearAll),
+      window.electronAPI.onMenuToggleShapes(toggleShapes),
+      window.electronAPI.onMenuToggleLabels(toggleLabels),
+      window.electronAPI.onMenuZoomIn(handleZoomIn),
+      window.electronAPI.onMenuZoomOut(handleZoomOut),
+      window.electronAPI.onMenuResetZoom(resetZoom),
+      window.electronAPI.onMenuShowHelp(toggleHelp),
+    ];
+
+    return () => cleanups.forEach(cleanup => cleanup());
+  }, [
+    handleOpenImage,
+    handleLoad,
+    handleSave,
+    handleUndo,
+    handleRedo,
+    clearAll,
+    toggleShapes,
+    toggleLabels,
+    handleZoomIn,
+    handleZoomOut,
+    resetZoom,
+    toggleHelp,
+  ]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 
   return (
     <div className="toolbar">
-      {/* File operations */}
-      <div className="toolbar-group">
-        <button onClick={handleOpenImage} title="Open Image">
-          Open Image
-        </button>
-        <button onClick={handleLoad} title="Load Project (.fol)">
-          Load
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={!imageLoaded}
-          title="Save Project (.fol)"
-        >
-          Save
-        </button>
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* Mode selection */}
-      <div className="toolbar-group">
-        <button
-          className={mode === 'create' ? 'active' : ''}
+      {/* Mode tools */}
+      <div className="toolbar-group" role="group" aria-label="Interaction modes">
+        <IconButton
+          icon={<Pencil size={18} />}
+          tooltip="Create Mode"
+          shortcut="C"
           onClick={() => setMode('create')}
-          title="Create Mode (C)"
-        >
-          Create
-        </button>
-        <button
-          className={mode === 'select' ? 'active' : ''}
+          active={mode === 'create'}
+        />
+        <IconButton
+          icon={<MousePointer2 size={18} />}
+          tooltip="Select Mode"
+          shortcut="V"
           onClick={() => setMode('select')}
-          title="Select Mode (V)"
-        >
-          Select
-        </button>
-        <button
-          className={mode === 'pan' ? 'active' : ''}
+          active={mode === 'select'}
+        />
+        <IconButton
+          icon={<Hand size={18} />}
+          tooltip="Pan Mode"
+          shortcut="H"
           onClick={() => setMode('pan')}
-          title="Pan Mode (H)"
-        >
-          Pan
-        </button>
+          active={mode === 'pan'}
+        />
       </div>
 
       <div className="toolbar-divider" />
 
-      {/* Shape type selection */}
-      <div className="toolbar-group">
-        <button
-          className={currentShapeType === 'circle' ? 'active' : ''}
+      {/* Shape tools */}
+      <div className="toolbar-group" role="group" aria-label="Shape types">
+        <IconButton
+          icon={<Circle size={18} />}
+          tooltip="Circle Shape"
+          shortcut="1"
           onClick={() => setShapeType('circle')}
-          title="Circle Shape (1)"
-        >
-          Circle
-        </button>
-        <button
-          className={currentShapeType === 'rectangle' ? 'active' : ''}
+          active={currentShapeType === 'circle'}
+        />
+        <IconButton
+          icon={<Square size={18} />}
+          tooltip="Rectangle Shape"
+          shortcut="2"
           onClick={() => setShapeType('rectangle')}
-          title="Rectangle Shape (2)"
-        >
-          Rectangle
-        </button>
-        <button
-          className={currentShapeType === 'linear' ? 'active' : ''}
+          active={currentShapeType === 'rectangle'}
+        />
+        <IconButton
+          icon={<Minus size={18} strokeWidth={3} />}
+          tooltip="Linear Shape"
+          shortcut="3"
           onClick={() => setShapeType('linear')}
-          title="Linear Shape (3) - Rotated rectangle"
-        >
-          Linear
-        </button>
+          active={currentShapeType === 'linear'}
+        />
       </div>
 
       <div className="toolbar-divider" />
 
       {/* Zoom controls */}
-      <div className="toolbar-group">
-        <button onClick={() => zoom(-0.2)} title="Zoom Out">
-          -
-        </button>
+      <div className="toolbar-group" role="group" aria-label="Zoom controls">
+        <IconButton
+          icon={<ZoomOut size={18} />}
+          tooltip="Zoom Out"
+          shortcut="Ctrl+-"
+          onClick={handleZoomOut}
+        />
         <span className="zoom-display">{zoomPercent}%</span>
-        <button onClick={() => zoom(0.2)} title="Zoom In">
-          +
-        </button>
-        <button onClick={resetZoom} title="Reset Zoom">
-          Reset
-        </button>
+        <IconButton
+          icon={<ZoomIn size={18} />}
+          tooltip="Zoom In"
+          shortcut="Ctrl+="
+          onClick={handleZoomIn}
+        />
+        <IconButton
+          icon={<RotateCcw size={18} />}
+          tooltip="Reset Zoom"
+          shortcut="Ctrl+0"
+          onClick={resetZoom}
+        />
       </div>
 
       <div className="toolbar-divider" />
 
-      {/* Undo/Redo */}
-      <div className="toolbar-group">
-        <button onClick={handleUndo} title="Undo (Ctrl+Z)">
-          Undo
-        </button>
-        <button onClick={handleRedo} title="Redo (Ctrl+Shift+Z)">
-          Redo
-        </button>
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* View options */}
-      <div className="toolbar-group">
-        <button
-          className={showShapes ? 'active' : ''}
+      {/* View toggles */}
+      <div className="toolbar-group" role="group" aria-label="View options">
+        <IconButton
+          icon={showShapes ? <Eye size={18} /> : <EyeOff size={18} />}
+          tooltip="Toggle Shapes"
+          shortcut="O"
           onClick={toggleShapes}
-          title="Toggle Shapes (O)"
-        >
-          Shapes
-        </button>
-        <button
-          className={showLabels ? 'active' : ''}
+          active={showShapes}
+        />
+        <IconButton
+          icon={<Tag size={18} />}
+          tooltip="Toggle Labels"
+          shortcut="L"
           onClick={toggleLabels}
           disabled={!showShapes}
-          title="Toggle Labels (L)"
-        >
-          Labels
-        </button>
+          active={showLabels}
+        />
       </div>
 
       <div className="toolbar-divider" />
 
-      {/* Clear all */}
-      <div className="toolbar-group">
-        <button
-          onClick={clearAll}
-          disabled={follicles.length === 0}
-          className="danger"
-          title="Clear All Selections"
-        >
-          Clear All
-        </button>
+      {/* Screenshot and Help */}
+      <div className="toolbar-group" role="group" aria-label="Actions">
+        <IconButton
+          icon={<Camera size={18} />}
+          tooltip="Save Screenshot"
+          onClick={handleScreenshot}
+          disabled={!imageLoaded}
+        />
+        <IconButton
+          icon={<HelpCircle size={18} />}
+          tooltip="User Guide"
+          shortcut="?"
+          onClick={toggleHelp}
+          active={showHelp}
+        />
       </div>
 
-      {/* Status */}
+      {/* Status display */}
       <div className="toolbar-spacer" />
       <div className="toolbar-status">
-        {imageLoaded ? (
+        {imageLoaded && activeImage ? (
           <>
-            <span className="file-name">{fileName}</span>
-            <span className="image-size">{imageWidth} x {imageHeight}</span>
-            <span className="follicle-count">{follicles.length} annotations</span>
+            {images.size > 1 && (
+              <span className="image-count">{images.size} images</span>
+            )}
+            <span className="file-name">{activeImage.fileName}</span>
+            <span className="image-size">{activeImage.width} x {activeImage.height}</span>
+            <span className="follicle-count">{activeImageAnnotationCount} annotations</span>
           </>
         ) : (
           <span className="no-image">No image loaded</span>
