@@ -2,11 +2,8 @@ name: Build Electron App
 
 on:
   push:
-    branches: [main, master, developer]
     tags:
       - 'v*'
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
