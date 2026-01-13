@@ -5,7 +5,7 @@ export interface Point {
 }
 
 // Shape types
-export type ShapeType = 'circle' | 'rectangle';
+export type ShapeType = 'circle' | 'rectangle' | 'linear';
 
 // Base annotation properties shared by all shapes
 interface BaseAnnotation {
@@ -33,8 +33,16 @@ export interface RectangleAnnotation extends BaseAnnotation {
   height: number;
 }
 
+// Linear annotation (rotated rectangle defined by centerline + half-width)
+export interface LinearAnnotation extends BaseAnnotation {
+  shape: 'linear';
+  startPoint: Point;   // Start of the centerline
+  endPoint: Point;     // End of the centerline
+  halfWidth: number;   // Half-width perpendicular to centerline
+}
+
 // Union type for all annotations (keeping Follicle name for compatibility)
-export type Follicle = CircleAnnotation | RectangleAnnotation;
+export type Follicle = CircleAnnotation | RectangleAnnotation | LinearAnnotation;
 
 // Type guards
 export function isCircle(f: Follicle): f is CircleAnnotation {
@@ -43,6 +51,10 @@ export function isCircle(f: Follicle): f is CircleAnnotation {
 
 export function isRectangle(f: Follicle): f is RectangleAnnotation {
   return f.shape === 'rectangle';
+}
+
+export function isLinear(f: Follicle): f is LinearAnnotation {
+  return f.shape === 'linear';
 }
 
 // Viewport state for canvas
@@ -62,7 +74,10 @@ export interface DragState {
   currentPoint: Point | null;
   dragType: 'create' | 'move' | 'resize' | 'pan' | null;
   targetId: string | null;
-  resizeHandle?: string;  // For rectangles: 'nw', 'ne', 'sw', 'se'
+  resizeHandle?: string;  // For rectangles: 'nw', 'ne', 'sw', 'se'; for linear: 'start', 'end', 'width'
+  // Multi-phase creation for linear shapes
+  createPhase?: 'line' | 'width';  // 'line' = defining centerline, 'width' = defining half-width
+  lineEndPoint?: Point;  // Stored end point after first phase of linear creation
 }
 
 // JSON export schema
@@ -81,6 +96,12 @@ export interface AnnotationExport {
   y?: number;
   width?: number;
   height?: number;
+  // Linear properties
+  startX?: number;
+  startY?: number;
+  endX?: number;
+  endY?: number;
+  halfWidth?: number;
 }
 
 export interface FollicleExportV1 {

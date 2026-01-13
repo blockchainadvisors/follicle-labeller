@@ -160,6 +160,13 @@ export const Toolbar: React.FC = () => {
         >
           Rectangle
         </button>
+        <button
+          className={currentShapeType === 'linear' ? 'active' : ''}
+          onClick={() => setShapeType('linear')}
+          title="Linear Shape (3) - Rotated rectangle"
+        >
+          Linear
+        </button>
       </div>
 
       <div className="toolbar-divider" />

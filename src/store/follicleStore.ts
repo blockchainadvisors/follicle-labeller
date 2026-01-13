@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import { Follicle, Point, CircleAnnotation, RectangleAnnotation, isCircle, isRectangle } from '../types';
+import { Follicle, Point, CircleAnnotation, RectangleAnnotation, LinearAnnotation, isCircle, isRectangle, isLinear } from '../types';
 import { generateId } from '../utils/id-generator';
 
 interface FollicleState {
@@ -10,12 +10,14 @@ interface FollicleState {
   // Actions
   addCircle: (center: Point, radius: number) => string;
   addRectangle: (x: number, y: number, width: number, height: number) => string;
+  addLinear: (startPoint: Point, endPoint: Point, halfWidth: number) => string;
   updateFollicle: (id: string, updates: Partial<Follicle>) => void;
   deleteFollicle: (id: string) => void;
   selectFollicle: (id: string | null) => void;
   moveAnnotation: (id: string, deltaX: number, deltaY: number) => void;
   resizeCircle: (id: string, newRadius: number) => void;
   resizeRectangle: (id: string, x: number, y: number, width: number, height: number) => void;
+  resizeLinear: (id: string, startPoint: Point, endPoint: Point, halfWidth: number) => void;
   setLabel: (id: string, label: string) => void;
   setNotes: (id: string, notes: string) => void;
 
@@ -88,6 +90,29 @@ export const useFollicleStore = create<FollicleState>()(
         return id;
       },
 
+      addLinear: (startPoint, endPoint, halfWidth) => {
+        const id = generateId();
+        const newLinear: LinearAnnotation = {
+          id,
+          shape: 'linear',
+          startPoint,
+          endPoint,
+          halfWidth: Math.max(halfWidth, 5),
+          label: `Linear ${get().follicles.filter(f => isLinear(f)).length + 1}`,
+          notes: '',
+          color: ANNOTATION_COLORS[colorIndex++ % ANNOTATION_COLORS.length],
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        set(state => ({
+          follicles: [...state.follicles, newLinear],
+          selectedId: id,
+        }));
+
+        return id;
+      },
+
       updateFollicle: (id, updates) => {
         set(state => ({
           follicles: state.follicles.map(f =>
@@ -125,6 +150,17 @@ export const useFollicleStore = create<FollicleState>()(
             x: follicle.x + deltaX,
             y: follicle.y + deltaY,
           } as Partial<RectangleAnnotation>);
+        } else if (isLinear(follicle)) {
+          get().updateFollicle(id, {
+            startPoint: {
+              x: follicle.startPoint.x + deltaX,
+              y: follicle.startPoint.y + deltaY,
+            },
+            endPoint: {
+              x: follicle.endPoint.x + deltaX,
+              y: follicle.endPoint.y + deltaY,
+            },
+          } as Partial<LinearAnnotation>);
         }
       },
 
@@ -139,6 +175,14 @@ export const useFollicleStore = create<FollicleState>()(
           width: Math.max(width, 10),
           height: Math.max(height, 10),
         } as Partial<RectangleAnnotation>);
+      },
+
+      resizeLinear: (id, startPoint, endPoint, halfWidth) => {
+        get().updateFollicle(id, {
+          startPoint,
+          endPoint,
+          halfWidth: Math.max(halfWidth, 5),
+        } as Partial<LinearAnnotation>);
       },
 
       setLabel: (id, label) => {

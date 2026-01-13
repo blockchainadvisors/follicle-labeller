@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { CanvasRenderer } from './CanvasRenderer';
-import { DragState, Point, Follicle, isCircle, isRectangle } from '../../types';
+import { DragState, Point, Follicle, LinearAnnotation, isCircle, isRectangle, isLinear } from '../../types';
 import {
   screenToImage,
   distance,
@@ -38,6 +38,87 @@ function getRectangleResizeHandle(
   return null;
 }
 
+// Calculate distance from point to line (not segment - extends infinitely)
+function pointToLineDistance(point: Point, lineStart: Point, lineEnd: Point): number {
+  const dx = lineEnd.x - lineStart.x;
+  const dy = lineEnd.y - lineStart.y;
+  const lineLengthSquared = dx * dx + dy * dy;
+
+  if (lineLengthSquared === 0) {
+    return distance(point, lineStart);
+  }
+
+  const t = ((point.x - lineStart.x) * dx + (point.y - lineStart.y) * dy) / lineLengthSquared;
+  const closestX = lineStart.x + t * dx;
+  const closestY = lineStart.y + t * dy;
+
+  return distance(point, { x: closestX, y: closestY });
+}
+
+// Check if point is inside a linear shape (rotated rectangle)
+function isPointInLinear(point: Point, linear: LinearAnnotation): boolean {
+  const { startPoint, endPoint, halfWidth } = linear;
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+  const length = Math.sqrt(dx * dx + dy * dy);
+
+  if (length === 0) return false;
+
+  // Transform point to local coordinates where the line is along the x-axis
+  const ux = dx / length;
+  const uy = dy / length;
+
+  // Vector from start to point
+  const px = point.x - startPoint.x;
+  const py = point.y - startPoint.y;
+
+  // Project onto line direction (along) and perpendicular (perp)
+  const along = px * ux + py * uy;
+  const perp = Math.abs(-px * uy + py * ux);
+
+  return along >= 0 && along <= length && perp <= halfWidth;
+}
+
+// Get resize handle for linear shape
+function getLinearResizeHandle(
+  point: Point,
+  linear: LinearAnnotation,
+  tolerance: number
+): string | null {
+  const { startPoint, endPoint, halfWidth } = linear;
+
+  // Check start point
+  if (distance(point, startPoint) <= tolerance) {
+    return 'start';
+  }
+
+  // Check end point
+  if (distance(point, endPoint) <= tolerance) {
+    return 'end';
+  }
+
+  // Check width handles (at midpoint, perpendicular to line)
+  const midX = (startPoint.x + endPoint.x) / 2;
+  const midY = (startPoint.y + endPoint.y) / 2;
+  const dx = endPoint.x - startPoint.x;
+  const dy = endPoint.y - startPoint.y;
+  const length = Math.sqrt(dx * dx + dy * dy);
+
+  if (length > 0) {
+    const perpX = -dy / length;
+    const perpY = dx / length;
+
+    const widthHandle1 = { x: midX + perpX * halfWidth, y: midY + perpY * halfWidth };
+    const widthHandle2 = { x: midX - perpX * halfWidth, y: midY - perpY * halfWidth };
+
+    if (distance(point, widthHandle1) <= tolerance || distance(point, widthHandle2) <= tolerance) {
+      return 'width';
+    }
+  }
+
+  return null;
+}
+
 export const ImageCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,10 +142,12 @@ export const ImageCanvas: React.FC = () => {
   const selectedId = useFollicleStore(state => state.selectedId);
   const addCircle = useFollicleStore(state => state.addCircle);
   const addRectangle = useFollicleStore(state => state.addRectangle);
+  const addLinear = useFollicleStore(state => state.addLinear);
   const selectFollicle = useFollicleStore(state => state.selectFollicle);
   const moveAnnotation = useFollicleStore(state => state.moveAnnotation);
   const resizeCircle = useFollicleStore(state => state.resizeCircle);
   const resizeRectangle = useFollicleStore(state => state.resizeRectangle);
+  const resizeLinear = useFollicleStore(state => state.resizeLinear);
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
 
   const viewport = useCanvasStore(state => state.viewport);
@@ -174,6 +257,10 @@ export const ImageCanvas: React.FC = () => {
         if (isPointInRectangle(point, f.x, f.y, f.width, f.height)) {
           return f;
         }
+      } else if (isLinear(f)) {
+        if (isPointInLinear(point, f)) {
+          return f;
+        }
       }
     }
     return null;
@@ -233,6 +320,19 @@ export const ImageCanvas: React.FC = () => {
             });
             return;
           }
+        } else if (isLinear(selected)) {
+          const handle = getLinearResizeHandle(point, selected, 10 / viewport.scale);
+          if (handle) {
+            setDragState({
+              isDragging: true,
+              startPoint: point,
+              currentPoint: point,
+              dragType: 'resize',
+              targetId: selected.id,
+              resizeHandle: handle,
+            });
+            return;
+          }
         }
 
         // Check if clicking inside selected annotation (for move)
@@ -246,6 +346,15 @@ export const ImageCanvas: React.FC = () => {
           });
           return;
         } else if (isRectangle(selected) && isPointInRectangle(point, selected.x, selected.y, selected.width, selected.height)) {
+          setDragState({
+            isDragging: true,
+            startPoint: point,
+            currentPoint: point,
+            dragType: 'move',
+            targetId: selected.id,
+          });
+          return;
+        } else if (isLinear(selected) && isPointInLinear(point, selected)) {
           setDragState({
             isDragging: true,
             startPoint: point,
@@ -276,18 +385,46 @@ export const ImageCanvas: React.FC = () => {
     }
 
     if (mode === 'create') {
+      // For linear shapes, check if we're in width-definition phase
+      if (currentShapeType === 'linear' && dragState.createPhase === 'width' && dragState.startPoint && dragState.lineEndPoint) {
+        // Click to finalize the linear shape
+        const halfWidth = pointToLineDistance(point, dragState.startPoint, dragState.lineEndPoint);
+        if (halfWidth > 5) {
+          addLinear(dragState.startPoint, dragState.lineEndPoint, halfWidth);
+        }
+        setDragState({
+          isDragging: false,
+          startPoint: null,
+          currentPoint: null,
+          dragType: null,
+          targetId: null,
+          createPhase: undefined,
+          lineEndPoint: undefined,
+        });
+        return;
+      }
+
+      // Start new shape creation
       setDragState({
         isDragging: true,
         startPoint: point,
         currentPoint: point,
         dragType: 'create',
         targetId: null,
+        createPhase: currentShapeType === 'linear' ? 'line' : undefined,
       });
     }
-  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findAnnotationAtPoint]);
+  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findAnnotationAtPoint, currentShapeType, dragState, addLinear]);
 
   // Mouse move handler
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // Handle width-definition phase for linear shapes (not dragging, but tracking mouse)
+    if (dragState.createPhase === 'width' && dragState.startPoint && dragState.lineEndPoint) {
+      const point = getImagePoint(e);
+      setDragState(prev => ({ ...prev, currentPoint: point }));
+      return;
+    }
+
     if (!dragState.isDragging) return;
 
     if (dragState.dragType === 'pan') {
@@ -315,13 +452,28 @@ export const ImageCanvas: React.FC = () => {
         if (radius > 5) {
           addCircle(dragState.startPoint, radius);
         }
-      } else {
+      } else if (currentShapeType === 'rectangle') {
         const x = Math.min(dragState.startPoint.x, dragState.currentPoint.x);
         const y = Math.min(dragState.startPoint.y, dragState.currentPoint.y);
         const width = Math.abs(dragState.currentPoint.x - dragState.startPoint.x);
         const height = Math.abs(dragState.currentPoint.y - dragState.startPoint.y);
         if (width > 10 && height > 10) {
           addRectangle(x, y, width, height);
+        }
+      } else if (currentShapeType === 'linear' && dragState.createPhase === 'line') {
+        // End of line definition phase - transition to width phase
+        const lineLength = distance(dragState.startPoint, dragState.currentPoint);
+        if (lineLength > 10) {
+          setDragState({
+            isDragging: false,
+            startPoint: dragState.startPoint,
+            currentPoint: dragState.currentPoint,
+            dragType: 'create',
+            targetId: null,
+            createPhase: 'width',
+            lineEndPoint: dragState.currentPoint,
+          });
+          return; // Don't reset drag state - continue to width phase
         }
       }
     }
@@ -369,6 +521,25 @@ export const ImageCanvas: React.FC = () => {
           }
 
           resizeRectangle(dragState.targetId, newX, newY, newWidth, newHeight);
+        } else if (isLinear(target) && dragState.resizeHandle) {
+          // Handle linear resize based on which handle was dragged
+          let newStart = target.startPoint;
+          let newEnd = target.endPoint;
+          let newHalfWidth = target.halfWidth;
+
+          switch (dragState.resizeHandle) {
+            case 'start':
+              newStart = dragState.currentPoint;
+              break;
+            case 'end':
+              newEnd = dragState.currentPoint;
+              break;
+            case 'width':
+              newHalfWidth = pointToLineDistance(dragState.currentPoint, target.startPoint, target.endPoint);
+              break;
+          }
+
+          resizeLinear(dragState.targetId, newStart, newEnd, newHalfWidth);
         }
       }
     }
@@ -380,8 +551,10 @@ export const ImageCanvas: React.FC = () => {
       dragType: null,
       targetId: null,
       resizeHandle: undefined,
+      createPhase: undefined,
+      lineEndPoint: undefined,
     });
-  }, [dragState, currentShapeType, addCircle, addRectangle, moveAnnotation, resizeCircle, resizeRectangle, follicles]);
+  }, [dragState, currentShapeType, addCircle, addRectangle, moveAnnotation, resizeCircle, resizeRectangle, resizeLinear, follicles]);
 
   // Wheel zoom handler
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -427,6 +600,17 @@ export const ImageCanvas: React.FC = () => {
 
       if (e.key === 'Escape') {
         selectFollicle(null);
+        // Cancel linear creation if in width phase
+        setDragState({
+          isDragging: false,
+          startPoint: null,
+          currentPoint: null,
+          dragType: null,
+          targetId: null,
+          resizeHandle: undefined,
+          createPhase: undefined,
+          lineEndPoint: undefined,
+        });
       }
 
       if (e.key === 'l' || e.key === 'L') {
@@ -443,6 +627,9 @@ export const ImageCanvas: React.FC = () => {
       }
       if (e.key === '2') {
         useCanvasStore.getState().setShapeType('rectangle');
+      }
+      if (e.key === '3') {
+        useCanvasStore.getState().setShapeType('linear');
       }
     };
 

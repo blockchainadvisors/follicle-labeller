@@ -16,7 +16,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'Follicle Labeler',
+    title: 'Follicle Labeller',
   });
 
   // Load content based on environment

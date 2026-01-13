@@ -1,5 +1,5 @@
 {
-  "name": "follicle-labeler",
+  "name": "follicle-labeller",
   "version": "1.0.0",
   "description": "Medical image follicle annotation tool",
   "main": "dist-electron/main.js",

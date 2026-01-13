@@ -1,6 +1,6 @@
 import React from 'react';
 import { useFollicleStore } from '../../store/follicleStore';
-import { isCircle, isRectangle } from '../../types';
+import { isCircle, isRectangle, isLinear } from '../../types';
 
 export const PropertyPanel: React.FC = () => {
   const selectedId = useFollicleStore(state => state.selectedId);
@@ -24,6 +24,7 @@ export const PropertyPanel: React.FC = () => {
               <li><strong>Create:</strong> Click and drag to draw a shape</li>
               <li><strong>Circle (1):</strong> Click center, drag radius</li>
               <li><strong>Rectangle (2):</strong> Click corner, drag size</li>
+              <li><strong>Linear (3):</strong> Drag line, then click for width</li>
               <li><strong>Select:</strong> Click on an annotation</li>
               <li><strong>Move:</strong> Drag a selected annotation</li>
               <li><strong>Resize:</strong> Drag the edge/corner handles</li>
@@ -35,7 +36,7 @@ export const PropertyPanel: React.FC = () => {
     );
   }
 
-  const shapeLabel = isCircle(selected) ? 'Circle' : 'Rectangle';
+  const shapeLabel = isCircle(selected) ? 'Circle' : isRectangle(selected) ? 'Rectangle' : 'Linear';
 
   return (
     <div className="property-panel">
@@ -101,6 +102,47 @@ export const PropertyPanel: React.FC = () => {
               <span>W: {Math.round(selected.width)} px</span>
               <span>H: {Math.round(selected.height)} px</span>
             </div>
+          </div>
+        </>
+      )}
+
+      {isLinear(selected) && (
+        <>
+          <div className="property-group readonly">
+            <label>Start Point</label>
+            <div className="coordinate-display">
+              <span>X: {Math.round(selected.startPoint.x)}</span>
+              <span>Y: {Math.round(selected.startPoint.y)}</span>
+            </div>
+          </div>
+
+          <div className="property-group readonly">
+            <label>End Point</label>
+            <div className="coordinate-display">
+              <span>X: {Math.round(selected.endPoint.x)}</span>
+              <span>Y: {Math.round(selected.endPoint.y)}</span>
+            </div>
+          </div>
+
+          <div className="property-group readonly">
+            <label>Dimensions</label>
+            <div className="coordinate-display">
+              <span>L: {Math.round(Math.sqrt(
+                Math.pow(selected.endPoint.x - selected.startPoint.x, 2) +
+                Math.pow(selected.endPoint.y - selected.startPoint.y, 2)
+              ))} px</span>
+              <span>W: {Math.round(selected.halfWidth * 2)} px</span>
+            </div>
+          </div>
+
+          <div className="property-group readonly">
+            <label>Angle</label>
+            <span className="radius-display">
+              {Math.round(Math.atan2(
+                selected.endPoint.y - selected.startPoint.y,
+                selected.endPoint.x - selected.startPoint.x
+              ) * 180 / Math.PI)}°
+            </span>
           </div>
         </>
       )}

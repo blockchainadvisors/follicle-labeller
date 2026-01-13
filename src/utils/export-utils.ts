@@ -1,4 +1,4 @@
-import { Follicle, FollicleExportV1, CircleAnnotation, RectangleAnnotation, isCircle } from '../types';
+import { Follicle, FollicleExportV1, CircleAnnotation, RectangleAnnotation, LinearAnnotation, isCircle, isRectangle } from '../types';
 
 /**
  * Generate export JSON from follicles (annotations)
@@ -33,7 +33,7 @@ export function generateExport(
           centerY: Math.round(f.center.y * 100) / 100,
           radius: Math.round(f.radius * 100) / 100,
         };
-      } else {
+      } else if (isRectangle(f)) {
         return {
           id: f.id,
           shape: 'rectangle' as const,
@@ -44,6 +44,20 @@ export function generateExport(
           y: Math.round(f.y * 100) / 100,
           width: Math.round(f.width * 100) / 100,
           height: Math.round(f.height * 100) / 100,
+        };
+      } else {
+        // Linear shape
+        return {
+          id: f.id,
+          shape: 'linear' as const,
+          label: f.label,
+          notes: f.notes,
+          color: f.color,
+          startX: Math.round(f.startPoint.x * 100) / 100,
+          startY: Math.round(f.startPoint.y * 100) / 100,
+          endX: Math.round(f.endPoint.x * 100) / 100,
+          endY: Math.round(f.endPoint.y * 100) / 100,
+          halfWidth: Math.round(f.halfWidth * 100) / 100,
         };
       }
     }),
@@ -79,6 +93,14 @@ export function parseImport(json: string): Follicle[] {
         width: f.width,
         height: f.height,
       } as RectangleAnnotation;
+    } else if (f.shape === 'linear' && f.startX !== undefined && f.startY !== undefined && f.endX !== undefined && f.endY !== undefined && f.halfWidth !== undefined) {
+      return {
+        ...base,
+        shape: 'linear' as const,
+        startPoint: { x: f.startX, y: f.startY },
+        endPoint: { x: f.endX, y: f.endY },
+        halfWidth: f.halfWidth,
+      } as LinearAnnotation;
     } else {
       // Default to circle for backwards compatibility
       return {
