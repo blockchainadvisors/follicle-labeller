@@ -16,8 +16,7 @@
       "name": "Follicle Labeller Project",
       "description": "Follicle Labeller Project File",
       "mimeType": "application/x-follicle-labeller",
-      "role": "Editor",
-      "icon": "public/icon"
+      "role": "Editor"
     }
   ],
   "win": {
