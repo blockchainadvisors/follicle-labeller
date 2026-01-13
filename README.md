@@ -1,6 +1,21 @@
 # Follicle Labeller
 
+[![Build Electron App](https://github.com/blockchainadvisors/follicle-labeller/actions/workflows/build.yml/badge.svg)](https://github.com/blockchainadvisors/follicle-labeller/actions/workflows/build.yml)
+[![Latest Release](https://img.shields.io/github/v/release/blockchainadvisors/follicle-labeller?include_prereleases)](https://github.com/blockchainadvisors/follicle-labeller/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/blockchainadvisors/follicle-labeller/total)](https://github.com/blockchainadvisors/follicle-labeller/releases)
+
 A desktop application for medical image annotation, specifically designed to label and annotate hair follicles in medical/healthcare images. Built with Electron, React, and TypeScript.
+
+## Download
+
+Download the latest version for your platform from the [**Releases page**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest):
+
+| Platform | File |
+|----------|------|
+| Windows | `follicle-labeller-X.X.X-windows-setup.exe` |
+| macOS | `follicle-labeller-X.X.X-macos.dmg` |
+
+See [all releases](https://github.com/blockchainadvisors/follicle-labeller/releases) for previous versions.
 
 ## Features
 

@@ -2,7 +2,7 @@ name: Build Electron App
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, developer]
     tags:
       - 'v*'
   pull_request:
@@ -104,7 +104,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: release/*
-          draft: true
+          draft: false
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
