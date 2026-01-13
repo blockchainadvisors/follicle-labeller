@@ -218,6 +218,19 @@ declare global {
       onMenuZoomOut: (callback: () => void) => () => void;
       onMenuResetZoom: (callback: () => void) => () => void;
       onMenuShowHelp: (callback: () => void) => () => void;
+      // File association handlers
+      getFileToOpen: () => Promise<string | null>;
+      loadProjectFromPath: (filePath: string) => Promise<{
+        version: '1.0' | '2.0';
+        filePath: string;
+        imageFileName?: string;
+        imageData?: ArrayBuffer;
+        jsonData?: string;
+        manifest?: string;
+        images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
+        annotations?: string;
+      } | null>;
+      onFileOpen: (callback: (filePath: string) => void) => () => void;
     };
   }
 }

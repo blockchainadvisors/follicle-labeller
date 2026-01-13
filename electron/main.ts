@@ -5,6 +5,9 @@ import JSZip from 'jszip';
 
 let mainWindow: BrowserWindow | null = null;
 
+// File to open when launched via file association
+let fileToOpen: string | null = null;
+
 function createWindow(): void {
   // Determine icon path based on platform
   const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
@@ -330,6 +333,95 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
   }
 });
 
+// Load project from specific file path (for file association)
+ipcMain.handle('file:loadProject', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
+
+    // Check if this is V2 (has manifest.json)
+    const hasManifest = 'manifest.json' in zip.files;
+
+    if (hasManifest) {
+      // V2 format
+      const manifest = await zip.files['manifest.json'].async('string');
+      const annotations = await zip.files['annotations.json'].async('string');
+
+      // Load all images from images/ folder
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
+      const imagesFolder = zip.folder('images');
+
+      if (imagesFolder) {
+        for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
+          if (file.dir) continue;
+
+          const archiveFileName = relativePath.replace('images/', '');
+          if (!archiveFileName) continue;
+
+          const dashIndex = archiveFileName.indexOf('-');
+          if (dashIndex === -1) continue;
+
+          const id = archiveFileName.substring(0, dashIndex);
+          const fileName = archiveFileName.substring(dashIndex + 1);
+
+          const imageBuffer = await file.async('nodebuffer');
+          const imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+
+          images.push({ id, fileName, data: imageData });
+        }
+      }
+
+      return {
+        version: '2.0' as const,
+        filePath,
+        manifest,
+        images,
+        annotations,
+      };
+    } else {
+      // V1 format
+      let imageFileName = '';
+      let imageData: ArrayBuffer | null = null;
+      let jsonData = '';
+
+      for (const fileName of Object.keys(zip.files)) {
+        if (fileName === 'annotations.json') {
+          jsonData = await zip.files[fileName].async('string');
+        } else if (!zip.files[fileName].dir) {
+          imageFileName = fileName;
+          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+        }
+      }
+
+      if (!imageData || !jsonData) {
+        throw new Error('Invalid .fol file: missing image or annotations');
+      }
+
+      return {
+        version: '1.0' as const,
+        filePath,
+        imageFileName,
+        imageData,
+        jsonData,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to load project from path:', error);
+    return null;
+  }
+});
+
 // Menu item references for dynamic enable/disable
 let saveMenuItem: Electron.MenuItem | null = null;
 let saveAsMenuItem: Electron.MenuItem | null = null;
@@ -490,8 +582,46 @@ function createMenu(): void {
   closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
+// Handle file open from command line (Windows/Linux)
+function getFileFromArgs(args: string[]): string | null {
+  // Skip the first arg (executable path) and look for .fol files
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg && arg.endsWith('.fol') && fs.existsSync(arg)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+// macOS: Handle file open before app is ready
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (filePath.endsWith('.fol')) {
+    if (mainWindow) {
+      // App is already running, send to renderer
+      mainWindow.webContents.send('file:open', filePath);
+    } else {
+      // App is starting, store for later
+      fileToOpen = filePath;
+    }
+  }
+});
+
+// IPC handler for renderer to request file to open on startup
+ipcMain.handle('app:getFileToOpen', () => {
+  const file = fileToOpen;
+  fileToOpen = null; // Clear after returning
+  return file;
+});
+
 // App lifecycle
 app.whenReady().then(() => {
+  // Check for file in command line args (Windows/Linux)
+  if (process.platform !== 'darwin') {
+    fileToOpen = getFileFromArgs(process.argv);
+  }
+
   createWindow();
   createMenu();
 
@@ -501,6 +631,26 @@ app.whenReady().then(() => {
     }
   });
 });
+
+// Windows: Handle second instance (single instance lock)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_, commandLine) => {
+    // Someone tried to run a second instance, focus our window and open the file
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+
+      // Check for .fol file in command line
+      const file = getFileFromArgs(commandLine);
+      if (file) {
+        mainWindow.webContents.send('file:open', file);
+      }
+    }
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

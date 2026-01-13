@@ -193,32 +193,37 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
 
+  // Load project from parsed result (shared logic)
+  const loadProjectFromResult = useCallback(async (result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>) => {
+    if (!result) return;
+
+    // Clear existing project
+    clearProject();
+    clearAll();
+
+    const { loadedImages, loadedFollicles } = await parseImportV2(result);
+
+    // Add all loaded images
+    for (const image of loadedImages) {
+      addImage(image);
+    }
+
+    // Import all annotations
+    importFollicles(loadedFollicles);
+
+    // Set the current project path
+    setCurrentProjectPath(result.filePath);
+  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
+
   const handleLoad = useCallback(async () => {
     try {
       const result = await window.electronAPI.loadProjectV2();
-      if (!result) return;
-
-      // Clear existing project
-      clearProject();
-      clearAll();
-
-      const { loadedImages, loadedFollicles } = await parseImportV2(result);
-
-      // Add all loaded images
-      for (const image of loadedImages) {
-        addImage(image);
-      }
-
-      // Import all annotations
-      importFollicles(loadedFollicles);
-
-      // Set the current project path
-      setCurrentProjectPath(result.filePath);
+      await loadProjectFromResult(result);
     } catch (error) {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
+  }, [loadProjectFromResult]);
 
   const handleCloseProject = useCallback(() => {
     clearProject();
@@ -272,6 +277,33 @@ export const Toolbar: React.FC = () => {
     resetZoom,
     toggleHelp,
   ]);
+
+  // Handle file open from file association (double-click .fol file)
+  useEffect(() => {
+    const loadFromPath = async (filePath: string) => {
+      try {
+        const result = await window.electronAPI.loadProjectFromPath(filePath);
+        await loadProjectFromResult(result);
+      } catch (error) {
+        console.error('Failed to load project from file association:', error);
+        alert('Failed to load project file. Please check the file format.');
+      }
+    };
+
+    // Check for file to open on startup
+    window.electronAPI.getFileToOpen().then((filePath) => {
+      if (filePath) {
+        loadFromPath(filePath);
+      }
+    });
+
+    // Listen for file open while app is running
+    const cleanup = window.electronAPI.onFileOpen((filePath) => {
+      loadFromPath(filePath);
+    });
+
+    return cleanup;
+  }, [loadProjectFromResult]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 

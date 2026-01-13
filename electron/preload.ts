@@ -53,6 +53,30 @@ const electronAPI = {
   } | null> =>
     ipcRenderer.invoke('dialog:loadProjectV2'),
 
+  // Get file to open on startup (from file association)
+  getFileToOpen: (): Promise<string | null> =>
+    ipcRenderer.invoke('app:getFileToOpen'),
+
+  // Load project from specific file path (for file association)
+  loadProjectFromPath: (filePath: string): Promise<{
+    version: '1.0' | '2.0';
+    filePath: string;
+    imageFileName?: string;
+    imageData?: ArrayBuffer;
+    jsonData?: string;
+    manifest?: string;
+    images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
+    annotations?: string;
+  } | null> =>
+    ipcRenderer.invoke('file:loadProject', filePath),
+
+  // Listen for file open events (when app is already running)
+  onFileOpen: (callback: (filePath: string) => void) => {
+    const handler = (_event: IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on('file:open', handler);
+    return () => ipcRenderer.removeListener('file:open', handler);
+  },
+
   // Menu event listeners (return cleanup function)
   onMenuOpenImage: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
