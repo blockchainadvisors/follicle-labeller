@@ -147,7 +147,9 @@ export const ImageCanvas: React.FC = () => {
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const point = getImagePoint(e);
 
-    if (mode === 'pan') {
+    // Middle mouse button (wheel click) always triggers pan
+    if (e.button === 1 || mode === 'pan') {
+      e.preventDefault();
       setDragState({
         isDragging: true,
         startPoint: { x: e.clientX, y: e.clientY },
@@ -369,6 +371,8 @@ export const ImageCanvas: React.FC = () => {
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
+        onAuxClick={(e) => e.preventDefault()}
+        onContextMenu={(e) => e.preventDefault()}
         style={{ cursor: getCursor() }}
       />
     </div>
