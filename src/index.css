@@ -1,0 +1,362 @@
+/* Reset and base styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --bg-tertiary: #0f3460;
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0a0;
+  --accent: #4ECDC4;
+  --accent-hover: #3dbdb5;
+  --danger: #e94560;
+  --danger-hover: #d63d56;
+  --border: #2a2a4a;
+  --success: #4caf50;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* App layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  min-height: 48px;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--border);
+  margin: 0 4px;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s ease;
+}
+
+.toolbar button:hover:not(:disabled) {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar button.active {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.toolbar button.danger:hover:not(:disabled) {
+  background-color: var(--danger);
+  border-color: var(--danger);
+}
+
+.zoom-display {
+  min-width: 50px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-status .file-name {
+  color: var(--accent);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-status .image-size {
+  color: var(--text-secondary);
+}
+
+.toolbar-status .follicle-count {
+  color: var(--success);
+}
+
+.toolbar-status .no-image {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Canvas container */
+.canvas-container {
+  flex: 1;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  position: relative;
+}
+
+.canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Property Panel */
+.property-panel {
+  width: 280px;
+  background-color: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.property-panel h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+
+.property-panel.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.property-panel .empty-state {
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.property-panel .empty-state h3 {
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.property-panel .empty-state p {
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+
+.property-panel .tips {
+  text-align: left;
+  background-color: var(--bg-tertiary);
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.property-panel .tips h4 {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+
+.property-panel .tips ul {
+  list-style: none;
+  font-size: 12px;
+}
+
+.property-panel .tips li {
+  margin-bottom: 6px;
+}
+
+.property-panel .tips strong {
+  color: var(--text-primary);
+}
+
+.property-group {
+  margin-bottom: 16px;
+}
+
+.property-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.property-group input[type="text"],
+.property-group textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.property-group input[type="text"]:focus,
+.property-group textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.property-group textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.property-group.readonly span {
+  display: block;
+  padding: 8px 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.coordinate-display {
+  display: flex;
+  gap: 16px;
+}
+
+.coordinate-display span {
+  flex: 1;
+  padding: 8px 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.color-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.color-picker input[type="color"] {
+  width: 40px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  cursor: pointer;
+}
+
+.color-picker input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.color-picker input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.color-picker .color-value {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.property-actions {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.delete-button {
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.delete-button:hover {
+  background-color: var(--danger);
+  color: var(--text-primary);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Selection highlight */
+::selection {
+  background-color: var(--accent);
+  color: var(--text-primary);
+}
