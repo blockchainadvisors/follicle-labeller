@@ -35,11 +35,9 @@ export const Toolbar: React.FC = () => {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
 
-        const img = new Image();
-        img.onload = () => {
-          setImage(url, img.width, img.height, result.fileName, result.data);
-        };
-        img.src = url;
+        // Create pre-decoded ImageBitmap for smooth rendering
+        const bitmap = await createImageBitmap(blob);
+        setImage(url, bitmap.width, bitmap.height, result.fileName, result.data, bitmap);
       }
     } catch (error) {
       console.error('Failed to open image:', error);
@@ -70,19 +68,17 @@ export const Toolbar: React.FC = () => {
     try {
       const result = await window.electronAPI.loadProject();
       if (result) {
-        // Load image
+        // Load image with pre-decoded bitmap
         const blob = new Blob([result.imageData]);
         const url = URL.createObjectURL(blob);
 
-        const img = new Image();
-        img.onload = () => {
-          setImage(url, img.width, img.height, result.imageFileName, result.imageData);
+        // Create pre-decoded ImageBitmap for smooth rendering
+        const bitmap = await createImageBitmap(blob);
+        setImage(url, bitmap.width, bitmap.height, result.imageFileName, result.imageData, bitmap);
 
-          // Load annotations
-          const imported = parseImport(result.jsonData);
-          importFollicles(imported);
-        };
-        img.src = url;
+        // Load annotations
+        const imported = parseImport(result.jsonData);
+        importFollicles(imported);
       }
     } catch (error) {
       console.error('Failed to load project:', error);

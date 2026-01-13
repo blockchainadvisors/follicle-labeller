@@ -2,13 +2,13 @@ import { Follicle, Viewport, DragState, ShapeType, isCircle, isRectangle, Circle
 
 export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D;
-  private image: HTMLImageElement | null = null;
+  private image: ImageBitmap | HTMLImageElement | null = null;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
 
-  setImage(image: HTMLImageElement): void {
+  setImage(image: ImageBitmap | HTMLImageElement | null): void {
     this.image = image;
   }
 

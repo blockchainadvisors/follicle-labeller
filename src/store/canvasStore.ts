@@ -11,6 +11,7 @@ interface CanvasState {
   imageHeight: number;
   imageSrc: string | null;
   imageData: ArrayBuffer | null;
+  imageBitmap: ImageBitmap | null;  // Pre-decoded bitmap for smooth rendering
   fileName: string | null;
 
   // Interaction mode
@@ -27,7 +28,7 @@ interface CanvasState {
   zoomToFit: (canvasWidth: number, canvasHeight: number) => void;
   resetZoom: () => void;
   pan: (deltaX: number, deltaY: number) => void;
-  setImage: (src: string, width: number, height: number, fileName: string, imageData: ArrayBuffer) => void;
+  setImage: (src: string, width: number, height: number, fileName: string, imageData: ArrayBuffer, bitmap: ImageBitmap) => void;
   clearImage: () => void;
   setMode: (mode: InteractionMode) => void;
   setShapeType: (shapeType: ShapeType) => void;
@@ -45,6 +46,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   imageHeight: 0,
   imageSrc: null,
   imageData: null,
+  imageBitmap: null,
   fileName: null,
   mode: 'create',
   currentShapeType: 'circle',
@@ -117,22 +119,34 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
   },
 
-  setImage: (src, width, height, fileName, imageData) => {
+  setImage: (src, width, height, fileName, imageData, bitmap) => {
+    // Close previous bitmap if exists to free memory
+    const prevBitmap = get().imageBitmap;
+    if (prevBitmap) {
+      prevBitmap.close();
+    }
     set({
       imageSrc: src,
       imageWidth: width,
       imageHeight: height,
       imageLoaded: true,
       imageData,
+      imageBitmap: bitmap,
       fileName,
       viewport: { offsetX: 0, offsetY: 0, scale: 1 },
     });
   },
 
   clearImage: () => {
+    // Close bitmap to free memory
+    const bitmap = get().imageBitmap;
+    if (bitmap) {
+      bitmap.close();
+    }
     set({
       imageSrc: null,
       imageData: null,
+      imageBitmap: null,
       imageWidth: 0,
       imageHeight: 0,
       imageLoaded: false,

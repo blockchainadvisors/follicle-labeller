@@ -68,7 +68,7 @@ export const ImageCanvas: React.FC = () => {
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
 
   const viewport = useCanvasStore(state => state.viewport);
-  const imageSrc = useCanvasStore(state => state.imageSrc);
+  const imageBitmap = useCanvasStore(state => state.imageBitmap);
   const mode = useCanvasStore(state => state.mode);
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const pan = useCanvasStore(state => state.pan);
@@ -104,23 +104,22 @@ export const ImageCanvas: React.FC = () => {
     rendererRef.current = new CanvasRenderer(ctx);
   }, []);
 
-  // Load image when source changes
+  // Set image when bitmap changes (already pre-decoded for smooth rendering)
   useEffect(() => {
-    if (!imageSrc) {
+    if (!imageBitmap) {
       imageRef.current = null;
+      if (rendererRef.current) {
+        rendererRef.current.setImage(null);
+      }
       return;
     }
 
-    const img = new Image();
-    img.onload = () => {
-      imageRef.current = img;
-      if (rendererRef.current) {
-        rendererRef.current.setImage(img);
-      }
-      zoomToFit(canvasSize.width, canvasSize.height);
-    };
-    img.src = imageSrc;
-  }, [imageSrc, zoomToFit, canvasSize.width, canvasSize.height]);
+    // Use pre-decoded ImageBitmap directly - no additional loading needed
+    if (rendererRef.current) {
+      rendererRef.current.setImage(imageBitmap);
+    }
+    zoomToFit(canvasSize.width, canvasSize.height);
+  }, [imageBitmap, zoomToFit, canvasSize.width, canvasSize.height]);
 
   // Render loop
   useEffect(() => {
