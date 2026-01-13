@@ -586,7 +586,7 @@ function createMenu(): void {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
                 title: 'About Follicle Labeller',
-                message: 'Follicle Labeller v1.0.0',
+                message: `Follicle Labeller v${app.getVersion()}`,
                 detail: 'Medical image annotation tool for follicle labeling.',
               });
             }
