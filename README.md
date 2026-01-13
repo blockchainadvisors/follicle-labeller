@@ -220,8 +220,20 @@ The `.fol` file is a ZIP archive containing:
 
 ## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contributing
 
-[Add contribution guidelines here]
+This project was created and is maintained by [@LorenzoNey](https://github.com/LorenzoNey).
+
+Contributions are welcome! If you'd like to contribute:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## Author
+
+**LorenzoNey** - *Initial work and maintenance* - [@LorenzoNey](https://github.com/LorenzoNey)
