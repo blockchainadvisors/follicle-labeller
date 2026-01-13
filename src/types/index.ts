@@ -180,10 +180,18 @@ declare global {
       saveProjectV2: (
         images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
         manifest: string,
+        annotations: string,
+        defaultPath?: string
+      ) => Promise<{ success: boolean; filePath?: string }>;
+      saveProjectV2ToPath: (
+        filePath: string,
+        images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+        manifest: string,
         annotations: string
-      ) => Promise<boolean>;
+      ) => Promise<{ success: boolean; filePath?: string }>;
       loadProjectV2: () => Promise<{
         version: '1.0' | '2.0';
+        filePath: string;
         // V1 format (single image)
         imageFileName?: string;
         imageData?: ArrayBuffer;
@@ -193,10 +201,14 @@ declare global {
         images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
         annotations?: string;
       } | null>;
+      // Update menu state
+      setProjectState: (hasProject: boolean) => void;
       // Menu event listeners (return cleanup function)
       onMenuOpenImage: (callback: () => void) => () => void;
       onMenuLoadProject: (callback: () => void) => () => void;
       onMenuSaveProject: (callback: () => void) => () => void;
+      onMenuSaveProjectAs: (callback: () => void) => () => void;
+      onMenuCloseProject: (callback: () => void) => () => void;
       onMenuUndo: (callback: () => void) => () => void;
       onMenuRedo: (callback: () => void) => () => void;
       onMenuClearAll: (callback: () => void) => () => void;
