@@ -6,6 +6,8 @@
 
 A desktop application for medical image annotation, specifically designed to label and annotate hair follicles in medical/healthcare images. Built with Electron, React, and TypeScript.
 
+![Follicle Labeller Demo](public/screenshots/follicle-labeller-screenshot-1.png)
+
 ## Download
 
 Download the latest version for your platform from the [**Releases page**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest):
@@ -54,7 +56,6 @@ See [all releases](https://github.com/blockchainadvisors/follicle-labeller/relea
 ### Help & Documentation
 - Built-in user guide accessible via Help button or `?` key
 - Comprehensive documentation covering all features
-- Screenshot capture for exporting canvas views
 
 ## Installation
 
