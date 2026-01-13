@@ -218,6 +218,10 @@ declare global {
       onMenuZoomOut: (callback: () => void) => () => void;
       onMenuResetZoom: (callback: () => void) => () => void;
       onMenuShowHelp: (callback: () => void) => () => void;
+      // Unsaved changes handling
+      showUnsavedChangesDialog: () => Promise<'save' | 'discard' | 'cancel'>;
+      onCheckUnsavedChanges: (callback: () => void) => () => void;
+      confirmClose: (canClose: boolean) => void;
       // File association handlers
       getFileToOpen: () => Promise<string | null>;
       loadProjectFromPath: (filePath: string) => Promise<{

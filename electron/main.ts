@@ -8,6 +8,9 @@ let mainWindow: BrowserWindow | null = null;
 // File to open when launched via file association
 let fileToOpen: string | null = null;
 
+// Track if we're force closing (bypass unsaved changes check)
+let forceClose = false;
+
 function createWindow(): void {
   // Determine icon path based on platform
   const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
@@ -40,10 +43,30 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Handle window close - check for unsaved changes
+  mainWindow.on('close', (event) => {
+    if (forceClose) {
+      forceClose = false;
+      return; // Allow close
+    }
+
+    // Prevent close and ask renderer about unsaved changes
+    event.preventDefault();
+    mainWindow?.webContents.send('app:checkUnsavedChanges');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+// IPC handler for renderer to confirm close after checking unsaved changes
+ipcMain.on('app:confirmClose', (_, canClose: boolean) => {
+  if (canClose && mainWindow) {
+    forceClose = true;
+    mainWindow.close();
+  }
+});
 
 // IPC Handlers
 
@@ -582,6 +605,28 @@ function createMenu(): void {
   closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
+// Show unsaved changes dialog
+// Returns: 'save' | 'discard' | 'cancel'
+ipcMain.handle('dialog:unsavedChanges', async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return 'discard';
+
+  const result = await dialog.showMessageBox(window, {
+    type: 'warning',
+    title: 'Unsaved Changes',
+    message: 'You have unsaved changes. Do you want to save before closing?',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+
+  switch (result.response) {
+    case 0: return 'save';
+    case 1: return 'discard';
+    default: return 'cancel';
+  }
+});
+
 // Handle file open from command line (Windows/Linux)
 function getFileFromArgs(args: string[]): string | null {
   // Skip the first arg (executable path) and look for .fol files
@@ -632,25 +677,7 @@ app.whenReady().then(() => {
   });
 });
 
-// Windows: Handle second instance (single instance lock)
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', (_, commandLine) => {
-    // Someone tried to run a second instance, focus our window and open the file
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-
-      // Check for .fol file in command line
-      const file = getFileFromArgs(commandLine);
-      if (file) {
-        mainWindow.webContents.send('file:open', file);
-      }
-    }
-  });
-}
+// Allow multiple instances - each double-clicked file opens a new window
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

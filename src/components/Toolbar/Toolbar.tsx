@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import {
   Pencil,
   MousePointer2,
@@ -76,6 +76,9 @@ export const Toolbar: React.FC = () => {
   const resetZoom = useProjectStore(state => state.resetZoom);
   const currentProjectPath = useProjectStore(state => state.currentProjectPath);
   const setCurrentProjectPath = useProjectStore(state => state.setCurrentProjectPath);
+  const isDirty = useProjectStore(state => state.isDirty);
+  const setDirty = useProjectStore(state => state.setDirty);
+  const markClean = useProjectStore(state => state.markClean);
 
   // Get active image info
   const activeImage = activeImageId ? images.get(activeImageId) : null;
@@ -98,6 +101,15 @@ export const Toolbar: React.FC = () => {
     const hasProject = images.size > 0;
     window.electronAPI.setProjectState(hasProject);
   }, [images.size]);
+
+  // Track follicle changes to mark project as dirty
+  const prevFolliclesRef = useRef(follicles);
+  useEffect(() => {
+    if (prevFolliclesRef.current !== follicles && images.size > 0) {
+      setDirty(true);
+    }
+    prevFolliclesRef.current = follicles;
+  }, [follicles, images.size, setDirty]);
 
   // Handler functions
   const handleOpenImage = useCallback(async () => {
@@ -130,8 +142,8 @@ export const Toolbar: React.FC = () => {
     }
   }, [addImage, imageOrder.length]);
 
-  const handleSave = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -160,15 +172,18 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
 
-  const handleSaveAs = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSaveAs = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -186,12 +201,33 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+
+  // Check for unsaved changes and prompt user
+  // Returns true if safe to proceed, false if user cancelled
+  const checkUnsavedChanges = useCallback(async (): Promise<boolean> => {
+    if (!isDirty) return true;
+
+    const response = await window.electronAPI.showUnsavedChangesDialog();
+
+    if (response === 'save') {
+      const saved = await handleSave();
+      return saved;
+    } else if (response === 'discard') {
+      return true;
+    } else {
+      // Cancel
+      return false;
+    }
+  }, [isDirty, handleSave]);
 
   // Load project from parsed result (shared logic)
   const loadProjectFromResult = useCallback(async (result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>) => {
@@ -216,6 +252,10 @@ export const Toolbar: React.FC = () => {
   }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
 
   const handleLoad = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     try {
       const result = await window.electronAPI.loadProjectV2();
       await loadProjectFromResult(result);
@@ -223,12 +263,16 @@ export const Toolbar: React.FC = () => {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  }, [loadProjectFromResult]);
+  }, [loadProjectFromResult, checkUnsavedChanges]);
 
-  const handleCloseProject = useCallback(() => {
+  const handleCloseProject = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     clearProject();
     clearAll();
-  }, [clearProject, clearAll]);
+  }, [clearProject, clearAll, checkUnsavedChanges]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -304,6 +348,17 @@ export const Toolbar: React.FC = () => {
 
     return cleanup;
   }, [loadProjectFromResult]);
+
+  // Handle app close - check for unsaved changes
+  useEffect(() => {
+    const handleCheckUnsavedChanges = async () => {
+      const canClose = await checkUnsavedChanges();
+      window.electronAPI.confirmClose(canClose);
+    };
+
+    const cleanup = window.electronAPI.onCheckUnsavedChanges(handleCheckUnsavedChanges);
+    return cleanup;
+  }, [checkUnsavedChanges]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 

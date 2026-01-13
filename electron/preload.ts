@@ -77,6 +77,22 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('file:open', handler);
   },
 
+  // Unsaved changes dialog - returns 'save' | 'discard' | 'cancel'
+  showUnsavedChangesDialog: (): Promise<'save' | 'discard' | 'cancel'> =>
+    ipcRenderer.invoke('dialog:unsavedChanges'),
+
+  // Listen for unsaved changes check request from main
+  onCheckUnsavedChanges: (callback: () => void) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('app:checkUnsavedChanges', handler);
+    return () => ipcRenderer.removeListener('app:checkUnsavedChanges', handler);
+  },
+
+  // Confirm close to main process
+  confirmClose: (canClose: boolean): void => {
+    ipcRenderer.send('app:confirmClose', canClose);
+  },
+
   // Menu event listeners (return cleanup function)
   onMenuOpenImage: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
