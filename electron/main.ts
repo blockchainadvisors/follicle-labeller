@@ -157,25 +157,13 @@ ipcMain.handle('dialog:loadProject', async () => {
   }
 });
 
-// V2 Save project with multiple images
-ipcMain.handle('dialog:saveProjectV2', async (
-  _,
+// Helper function to save project to a specific path
+async function saveProjectToPath(
+  filePath: string,
   images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
   manifestJson: string,
   annotationsJson: string
-) => {
-  const window = BrowserWindow.getFocusedWindow();
-  if (!window) return false;
-
-  const result = await dialog.showSaveDialog(window, {
-    defaultPath: 'project.fol',
-    filters: [
-      { name: 'Follicle Project', extensions: ['fol'] }
-    ]
-  });
-
-  if (result.canceled || !result.filePath) return false;
-
+): Promise<boolean> {
   try {
     const zip = new JSZip();
 
@@ -196,13 +184,49 @@ ipcMain.handle('dialog:saveProjectV2', async (
 
     // Generate and save the archive
     const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-    fs.writeFileSync(result.filePath, content);
+    fs.writeFileSync(filePath, content);
 
     return true;
   } catch (error) {
     console.error('Failed to save project:', error);
     return false;
   }
+}
+
+// V2 Save project with multiple images (Save As - shows dialog)
+ipcMain.handle('dialog:saveProjectV2', async (
+  _,
+  images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+  manifestJson: string,
+  annotationsJson: string,
+  defaultPath?: string
+) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return { success: false };
+
+  const result = await dialog.showSaveDialog(window, {
+    defaultPath: defaultPath || 'project.fol',
+    filters: [
+      { name: 'Follicle Project', extensions: ['fol'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) return { success: false };
+
+  const success = await saveProjectToPath(result.filePath, images, manifestJson, annotationsJson);
+  return { success, filePath: success ? result.filePath : undefined };
+});
+
+// V2 Save project to specific path (silent save - no dialog)
+ipcMain.handle('file:saveProjectV2', async (
+  _,
+  filePath: string,
+  images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+  manifestJson: string,
+  annotationsJson: string
+) => {
+  const success = await saveProjectToPath(filePath, images, manifestJson, annotationsJson);
+  return { success, filePath: success ? filePath : undefined };
 });
 
 // V2 Load project with support for both V1 and V2 formats
@@ -264,6 +288,7 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
 
       return {
         version: '2.0' as const,
+        filePath,
         manifest,
         images,
         annotations,
@@ -293,6 +318,7 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
 
       return {
         version: '1.0' as const,
+        filePath,
         imageFileName,
         imageData,
         jsonData,
@@ -338,6 +364,11 @@ function createMenu(): void {
           label: 'Save Project',
           accelerator: 'CmdOrCtrl+S',
           click: () => mainWindow?.webContents.send('menu:saveProject'),
+        },
+        {
+          label: 'Save Project As...',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => mainWindow?.webContents.send('menu:saveProjectAs'),
         },
         { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const },

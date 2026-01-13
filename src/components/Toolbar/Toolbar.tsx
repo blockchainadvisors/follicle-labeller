@@ -13,6 +13,7 @@ import {
   Eye,
   EyeOff,
   Tag,
+  ImagePlus,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
@@ -73,6 +74,8 @@ export const Toolbar: React.FC = () => {
   const clearProject = useProjectStore(state => state.clearProject);
   const zoom = useProjectStore(state => state.zoom);
   const resetZoom = useProjectStore(state => state.resetZoom);
+  const currentProjectPath = useProjectStore(state => state.currentProjectPath);
+  const setCurrentProjectPath = useProjectStore(state => state.setCurrentProjectPath);
 
   // Get active image info
   const activeImage = activeImageId ? images.get(activeImageId) : null;
@@ -130,19 +133,59 @@ export const Toolbar: React.FC = () => {
         follicles
       );
 
-      const saved = await window.electronAPI.saveProjectV2(
-        imageList,
-        JSON.stringify(manifest, null, 2),
-        JSON.stringify(annotations, null, 2)
-      );
+      let result: { success: boolean; filePath?: string };
 
-      if (saved) {
-        console.log('Project saved successfully');
+      if (currentProjectPath) {
+        // Silent save to existing path
+        result = await window.electronAPI.saveProjectV2ToPath(
+          currentProjectPath,
+          imageList,
+          JSON.stringify(manifest, null, 2),
+          JSON.stringify(annotations, null, 2)
+        );
+      } else {
+        // Show save dialog
+        result = await window.electronAPI.saveProjectV2(
+          imageList,
+          JSON.stringify(manifest, null, 2),
+          JSON.stringify(annotations, null, 2)
+        );
+      }
+
+      if (result.success && result.filePath) {
+        setCurrentProjectPath(result.filePath);
+        console.log('Project saved successfully to:', result.filePath);
       }
     } catch (error) {
       console.error('Failed to save project:', error);
     }
-  }, [images, follicles]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+
+  const handleSaveAs = useCallback(async () => {
+    if (images.size === 0) return;
+
+    try {
+      const { manifest, annotations, imageList } = generateExportV2(
+        Array.from(images.values()),
+        follicles
+      );
+
+      // Always show save dialog
+      const result = await window.electronAPI.saveProjectV2(
+        imageList,
+        JSON.stringify(manifest, null, 2),
+        JSON.stringify(annotations, null, 2),
+        currentProjectPath || undefined
+      );
+
+      if (result.success && result.filePath) {
+        setCurrentProjectPath(result.filePath);
+        console.log('Project saved successfully to:', result.filePath);
+      }
+    } catch (error) {
+      console.error('Failed to save project:', error);
+    }
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
 
   const handleLoad = useCallback(async () => {
     try {
@@ -162,11 +205,14 @@ export const Toolbar: React.FC = () => {
 
       // Import all annotations
       importFollicles(loadedFollicles);
+
+      // Set the current project path
+      setCurrentProjectPath(result.filePath);
     } catch (error) {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  }, [clearProject, clearAll, addImage, importFollicles]);
+  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -185,6 +231,7 @@ export const Toolbar: React.FC = () => {
       window.electronAPI.onMenuOpenImage(handleOpenImage),
       window.electronAPI.onMenuLoadProject(handleLoad),
       window.electronAPI.onMenuSaveProject(handleSave),
+      window.electronAPI.onMenuSaveProjectAs(handleSaveAs),
       window.electronAPI.onMenuUndo(handleUndo),
       window.electronAPI.onMenuRedo(handleRedo),
       window.electronAPI.onMenuClearAll(clearAll),
@@ -201,6 +248,7 @@ export const Toolbar: React.FC = () => {
     handleOpenImage,
     handleLoad,
     handleSave,
+    handleSaveAs,
     handleUndo,
     handleRedo,
     clearAll,
@@ -216,6 +264,18 @@ export const Toolbar: React.FC = () => {
 
   return (
     <div className="toolbar">
+      {/* Add Image */}
+      <div className="toolbar-group" role="group" aria-label="Add image">
+        <IconButton
+          icon={<ImagePlus size={18} />}
+          tooltip="Add Image"
+          shortcut="Ctrl+O"
+          onClick={handleOpenImage}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
       {/* Mode tools */}
       <div className="toolbar-group" role="group" aria-label="Interaction modes">
         <IconButton

@@ -6,6 +6,7 @@ interface ProjectState {
   images: Map<ImageId, ProjectImage>;
   imageOrder: ImageId[];  // Order for explorer display
   activeImageId: ImageId | null;
+  currentProjectPath: string | null;  // Path to the currently loaded/saved project file
 
   // Actions
   addImage: (image: ProjectImage) => void;
@@ -13,6 +14,7 @@ interface ProjectState {
   setActiveImage: (imageId: ImageId | null) => void;
   setImageViewport: (imageId: ImageId, viewport: Partial<Viewport>) => void;
   reorderImages: (newOrder: ImageId[]) => void;
+  setCurrentProjectPath: (path: string | null) => void;
   clearProject: () => void;
 
   // Viewport actions for active image
@@ -33,6 +35,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   images: new Map(),
   imageOrder: [],
   activeImageId: null,
+  currentProjectPath: null,
 
   addImage: (image) => {
     set(state => {
@@ -120,6 +123,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
+  setCurrentProjectPath: (path) => {
+    set({ currentProjectPath: path });
+  },
+
   clearProject: () => {
     // Close all bitmaps and revoke URLs
     const state = get();
@@ -136,6 +143,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       images: new Map(),
       imageOrder: [],
       activeImageId: null,
+      currentProjectPath: null,
     });
   },
 

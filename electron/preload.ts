@@ -17,17 +17,28 @@ const electronAPI = {
   loadProject: (): Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null> =>
     ipcRenderer.invoke('dialog:loadProject'),
 
-  // V2: Save project with multiple images
+  // V2: Save project with multiple images (Save As - shows dialog)
   saveProjectV2: (
     images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
     manifest: string,
+    annotations: string,
+    defaultPath?: string
+  ): Promise<{ success: boolean; filePath?: string }> =>
+    ipcRenderer.invoke('dialog:saveProjectV2', images, manifest, annotations, defaultPath),
+
+  // V2: Save project to specific path (silent save - no dialog)
+  saveProjectV2ToPath: (
+    filePath: string,
+    images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+    manifest: string,
     annotations: string
-  ): Promise<boolean> =>
-    ipcRenderer.invoke('dialog:saveProjectV2', images, manifest, annotations),
+  ): Promise<{ success: boolean; filePath?: string }> =>
+    ipcRenderer.invoke('file:saveProjectV2', filePath, images, manifest, annotations),
 
   // V2: Load project with support for V1 and V2 formats
   loadProjectV2: (): Promise<{
     version: '1.0' | '2.0';
+    filePath: string;
     imageFileName?: string;
     imageData?: ArrayBuffer;
     jsonData?: string;
@@ -52,6 +63,11 @@ const electronAPI = {
     const handler = (_event: IpcRendererEvent) => callback();
     ipcRenderer.on('menu:saveProject', handler);
     return () => ipcRenderer.removeListener('menu:saveProject', handler);
+  },
+  onMenuSaveProjectAs: (callback: MenuCallback) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('menu:saveProjectAs', handler);
+    return () => ipcRenderer.removeListener('menu:saveProjectAs', handler);
   },
   onMenuUndo: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
