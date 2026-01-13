@@ -69,6 +69,11 @@ const electronAPI = {
     ipcRenderer.on('menu:saveProjectAs', handler);
     return () => ipcRenderer.removeListener('menu:saveProjectAs', handler);
   },
+  onMenuCloseProject: (callback: MenuCallback) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('menu:closeProject', handler);
+    return () => ipcRenderer.removeListener('menu:closeProject', handler);
+  },
   onMenuUndo: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
     ipcRenderer.on('menu:undo', handler);

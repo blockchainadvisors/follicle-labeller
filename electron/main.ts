@@ -371,6 +371,12 @@ function createMenu(): void {
           click: () => mainWindow?.webContents.send('menu:saveProjectAs'),
         },
         { type: 'separator' },
+        {
+          label: 'Close Project',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => mainWindow?.webContents.send('menu:closeProject'),
+        },
+        { type: 'separator' },
         isMac ? { role: 'close' as const } : { role: 'quit' as const },
       ],
     },

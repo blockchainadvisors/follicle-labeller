@@ -214,6 +214,11 @@ export const Toolbar: React.FC = () => {
     }
   }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
 
+  const handleCloseProject = useCallback(() => {
+    clearProject();
+    clearAll();
+  }, [clearProject, clearAll]);
+
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
   }, [temporalStore]);
@@ -232,6 +237,7 @@ export const Toolbar: React.FC = () => {
       window.electronAPI.onMenuLoadProject(handleLoad),
       window.electronAPI.onMenuSaveProject(handleSave),
       window.electronAPI.onMenuSaveProjectAs(handleSaveAs),
+      window.electronAPI.onMenuCloseProject(handleCloseProject),
       window.electronAPI.onMenuUndo(handleUndo),
       window.electronAPI.onMenuRedo(handleRedo),
       window.electronAPI.onMenuClearAll(clearAll),
@@ -249,6 +255,7 @@ export const Toolbar: React.FC = () => {
     handleLoad,
     handleSave,
     handleSaveAs,
+    handleCloseProject,
     handleUndo,
     handleRedo,
     clearAll,
