@@ -64,8 +64,8 @@ declare global {
   interface Window {
     electronAPI: {
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
-      saveJsonDialog: (data: string) => Promise<boolean>;
-      openJsonDialog: () => Promise<{ filePath: string; data: string } | null>;
+      saveProject: (imageData: ArrayBuffer, imageFileName: string, jsonData: string) => Promise<boolean>;
+      loadProject: () => Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null>;
     };
   }
 }

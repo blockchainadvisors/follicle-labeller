@@ -6,13 +6,13 @@ const electronAPI = {
   openImageDialog: (): Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null> =>
     ipcRenderer.invoke('dialog:openImage'),
 
-  // Save JSON to file - returns true if saved successfully
-  saveJsonDialog: (data: string): Promise<boolean> =>
-    ipcRenderer.invoke('dialog:saveJson', data),
+  // Save project as .fol archive (image + annotations)
+  saveProject: (imageData: ArrayBuffer, imageFileName: string, jsonData: string): Promise<boolean> =>
+    ipcRenderer.invoke('dialog:saveProject', imageData, imageFileName, jsonData),
 
-  // Open JSON file dialog - returns file path and content
-  openJsonDialog: (): Promise<{ filePath: string; data: string } | null> =>
-    ipcRenderer.invoke('dialog:openJson'),
+  // Load project from .fol archive
+  loadProject: (): Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null> =>
+    ipcRenderer.invoke('dialog:loadProject'),
 };
 
 // Expose the API to the renderer process

@@ -10,6 +10,7 @@ interface CanvasState {
   imageWidth: number;
   imageHeight: number;
   imageSrc: string | null;
+  imageData: ArrayBuffer | null;
   fileName: string | null;
 
   // Interaction mode
@@ -25,7 +26,7 @@ interface CanvasState {
   zoomToFit: (canvasWidth: number, canvasHeight: number) => void;
   resetZoom: () => void;
   pan: (deltaX: number, deltaY: number) => void;
-  setImage: (src: string, width: number, height: number, fileName: string) => void;
+  setImage: (src: string, width: number, height: number, fileName: string, imageData: ArrayBuffer) => void;
   clearImage: () => void;
   setMode: (mode: InteractionMode) => void;
   toggleLabels: () => void;
@@ -41,6 +42,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   imageWidth: 0,
   imageHeight: 0,
   imageSrc: null,
+  imageData: null,
   fileName: null,
   mode: 'create',
   showLabels: true,
@@ -112,12 +114,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }));
   },
 
-  setImage: (src, width, height, fileName) => {
+  setImage: (src, width, height, fileName, imageData) => {
     set({
       imageSrc: src,
       imageWidth: width,
       imageHeight: height,
       imageLoaded: true,
+      imageData,
       fileName,
       viewport: { offsetX: 0, offsetY: 0, scale: 1 },
     });
@@ -126,6 +129,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   clearImage: () => {
     set({
       imageSrc: null,
+      imageData: null,
       imageWidth: 0,
       imageHeight: 0,
       imageLoaded: false,

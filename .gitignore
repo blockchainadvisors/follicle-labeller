@@ -30,3 +30,6 @@ npm_out.txt
 npm_err.txt
 run_dev.bat
 run_npm.bat
+add_jszip.bat
+jszip_out.txt
+jszip_err.txt

@@ -11,6 +11,7 @@ export const Toolbar: React.FC = () => {
   const resetZoom = useCanvasStore(state => state.resetZoom);
   const setImage = useCanvasStore(state => state.setImage);
   const imageLoaded = useCanvasStore(state => state.imageLoaded);
+  const imageData = useCanvasStore(state => state.imageData);
   const fileName = useCanvasStore(state => state.fileName);
   const imageWidth = useCanvasStore(state => state.imageWidth);
   const imageHeight = useCanvasStore(state => state.imageHeight);
@@ -34,7 +35,7 @@ export const Toolbar: React.FC = () => {
 
         const img = new Image();
         img.onload = () => {
-          setImage(url, img.width, img.height, result.fileName);
+          setImage(url, img.width, img.height, result.fileName, result.data);
         };
         img.src = url;
       }
@@ -43,34 +44,47 @@ export const Toolbar: React.FC = () => {
     }
   };
 
-  const handleExport = async () => {
+  const handleSave = async () => {
+    if (!imageData || !fileName) return;
+
     try {
       const exportData = generateExport(
         follicles,
-        fileName || 'unknown',
+        fileName,
         imageWidth,
         imageHeight
       );
       const json = JSON.stringify(exportData, null, 2);
-      const saved = await window.electronAPI.saveJsonDialog(json);
+      const saved = await window.electronAPI.saveProject(imageData, fileName, json);
       if (saved) {
-        console.log('Export saved successfully');
+        console.log('Project saved successfully');
       }
     } catch (error) {
-      console.error('Failed to export:', error);
+      console.error('Failed to save project:', error);
     }
   };
 
-  const handleImport = async () => {
+  const handleLoad = async () => {
     try {
-      const result = await window.electronAPI.openJsonDialog();
+      const result = await window.electronAPI.loadProject();
       if (result) {
-        const imported = parseImport(result.data);
-        importFollicles(imported);
+        // Load image
+        const blob = new Blob([result.imageData]);
+        const url = URL.createObjectURL(blob);
+
+        const img = new Image();
+        img.onload = () => {
+          setImage(url, img.width, img.height, result.imageFileName, result.imageData);
+
+          // Load annotations
+          const imported = parseImport(result.jsonData);
+          importFollicles(imported);
+        };
+        img.src = url;
       }
     } catch (error) {
-      console.error('Failed to import:', error);
-      alert('Failed to import JSON file. Please check the file format.');
+      console.error('Failed to load project:', error);
+      alert('Failed to load project file. Please check the file format.');
     }
   };
 
@@ -91,15 +105,15 @@ export const Toolbar: React.FC = () => {
         <button onClick={handleOpenImage} title="Open Image">
           Open Image
         </button>
-        <button onClick={handleImport} title="Import JSON">
-          Import
+        <button onClick={handleLoad} title="Load Project (.fol)">
+          Load
         </button>
         <button
-          onClick={handleExport}
-          disabled={follicles.length === 0}
-          title="Export to JSON"
+          onClick={handleSave}
+          disabled={!imageLoaded}
+          title="Save Project (.fol)"
         >
-          Export
+          Save
         </button>
       </div>
 

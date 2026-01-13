@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import JSZip from 'jszip';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -57,42 +58,93 @@ ipcMain.handle('dialog:openImage', async () => {
   };
 });
 
-// Save JSON file dialog
-ipcMain.handle('dialog:saveJson', async (_, data: string) => {
+// Save project as .fol archive (contains image + JSON)
+ipcMain.handle('dialog:saveProject', async (_, imageData: ArrayBuffer, imageFileName: string, jsonData: string) => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return false;
 
+  const defaultName = imageFileName ? imageFileName.replace(/\.[^.]+$/, '.fol') : 'project.fol';
+
   const result = await dialog.showSaveDialog(window, {
-    defaultPath: 'follicle-labels.json',
+    defaultPath: defaultName,
     filters: [
-      { name: 'JSON', extensions: ['json'] }
+      { name: 'Follicle Project', extensions: ['fol'] }
     ]
   });
 
   if (result.canceled || !result.filePath) return false;
 
-  fs.writeFileSync(result.filePath, data, 'utf-8');
-  return true;
+  try {
+    const zip = new JSZip();
+
+    // Add image to archive
+    zip.file(imageFileName, Buffer.from(imageData));
+
+    // Add JSON data to archive
+    zip.file('annotations.json', jsonData);
+
+    // Generate and save the archive
+    const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    fs.writeFileSync(result.filePath, content);
+
+    return true;
+  } catch (error) {
+    console.error('Failed to save project:', error);
+    return false;
+  }
 });
 
-// Open JSON file dialog (import)
-ipcMain.handle('dialog:openJson', async () => {
+// Load project from .fol archive
+ipcMain.handle('dialog:loadProject', async () => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return null;
 
   const result = await dialog.showOpenDialog(window, {
     properties: ['openFile'],
     filters: [
-      { name: 'JSON', extensions: ['json'] }
+      { name: 'Follicle Project', extensions: ['fol'] }
     ]
   });
 
   if (result.canceled || result.filePaths.length === 0) return null;
 
-  const filePath = result.filePaths[0];
-  const data = fs.readFileSync(filePath, 'utf-8');
+  try {
+    const filePath = result.filePaths[0];
+    const data = fs.readFileSync(filePath);
 
-  return { filePath, data };
+    const zip = await JSZip.loadAsync(data);
+
+    // Find the image file (any file that's not annotations.json)
+    let imageFileName = '';
+    let imageData: ArrayBuffer | null = null;
+    let jsonData = '';
+
+    for (const fileName of Object.keys(zip.files)) {
+      if (fileName === 'annotations.json') {
+        jsonData = await zip.files[fileName].async('string');
+      } else {
+        imageFileName = fileName;
+        const imageBuffer = await zip.files[fileName].async('nodebuffer');
+        imageData = imageBuffer.buffer.slice(
+          imageBuffer.byteOffset,
+          imageBuffer.byteOffset + imageBuffer.byteLength
+        );
+      }
+    }
+
+    if (!imageData || !jsonData) {
+      throw new Error('Invalid .fol file: missing image or annotations');
+    }
+
+    return {
+      imageFileName,
+      imageData,
+      jsonData,
+    };
+  } catch (error) {
+    console.error('Failed to load project:', error);
+    return null;
+  }
 });
 
 // App lifecycle
