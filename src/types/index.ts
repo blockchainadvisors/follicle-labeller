@@ -193,8 +193,6 @@ declare global {
         images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
         annotations?: string;
       } | null>;
-      // Screenshot capture
-      saveScreenshot: (imageData: ArrayBuffer, suggestedName: string) => Promise<boolean>;
       // Menu event listeners (return cleanup function)
       onMenuOpenImage: (callback: () => void) => () => void;
       onMenuLoadProject: (callback: () => void) => () => void;

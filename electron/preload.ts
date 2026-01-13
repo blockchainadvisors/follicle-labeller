@@ -37,10 +37,6 @@ const electronAPI = {
   } | null> =>
     ipcRenderer.invoke('dialog:loadProjectV2'),
 
-  // Save screenshot to file
-  saveScreenshot: (imageData: ArrayBuffer, suggestedName: string): Promise<boolean> =>
-    ipcRenderer.invoke('dialog:saveScreenshot', imageData, suggestedName),
-
   // Menu event listeners (return cleanup function)
   onMenuOpenImage: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();

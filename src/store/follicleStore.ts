@@ -53,7 +53,7 @@ export const useFollicleStore = create<FollicleState>()(
           imageId,
           shape: 'circle',
           center,
-          radius: Math.max(radius, 5),
+          radius: Math.max(radius, 1),
           label: `Circle ${get().follicles.filter(f => isCircle(f)).length + 1}`,
           notes: '',
           color: ANNOTATION_COLORS[colorIndex++ % ANNOTATION_COLORS.length],
@@ -77,8 +77,8 @@ export const useFollicleStore = create<FollicleState>()(
           shape: 'rectangle',
           x,
           y,
-          width: Math.max(width, 10),
-          height: Math.max(height, 10),
+          width: Math.max(width, 1),
+          height: Math.max(height, 1),
           label: `Rectangle ${get().follicles.filter(f => isRectangle(f)).length + 1}`,
           notes: '',
           color: ANNOTATION_COLORS[colorIndex++ % ANNOTATION_COLORS.length],
@@ -102,7 +102,7 @@ export const useFollicleStore = create<FollicleState>()(
           shape: 'linear',
           startPoint,
           endPoint,
-          halfWidth: Math.max(halfWidth, 5),
+          halfWidth: Math.max(halfWidth, 1),
           label: `Linear ${get().follicles.filter(f => isLinear(f)).length + 1}`,
           notes: '',
           color: ANNOTATION_COLORS[colorIndex++ % ANNOTATION_COLORS.length],
@@ -170,15 +170,15 @@ export const useFollicleStore = create<FollicleState>()(
       },
 
       resizeCircle: (id, newRadius) => {
-        get().updateFollicle(id, { radius: Math.max(newRadius, 5) } as Partial<CircleAnnotation>);
+        get().updateFollicle(id, { radius: Math.max(newRadius, 1) } as Partial<CircleAnnotation>);
       },
 
       resizeRectangle: (id, x, y, width, height) => {
         get().updateFollicle(id, {
           x,
           y,
-          width: Math.max(width, 10),
-          height: Math.max(height, 10),
+          width: Math.max(width, 1),
+          height: Math.max(height, 1),
         } as Partial<RectangleAnnotation>);
       },
 
@@ -186,7 +186,7 @@ export const useFollicleStore = create<FollicleState>()(
         get().updateFollicle(id, {
           startPoint,
           endPoint,
-          halfWidth: Math.max(halfWidth, 5),
+          halfWidth: Math.max(halfWidth, 1),
         } as Partial<LinearAnnotation>);
       },
 

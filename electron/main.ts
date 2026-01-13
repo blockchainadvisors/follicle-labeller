@@ -6,11 +6,21 @@ import JSZip from 'jszip';
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow(): void {
+  // Determine icon path based on platform
+  const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, iconName)
+    : path.join(__dirname, '../public', iconName);
+
+  // Check if icon exists (may not exist in dev if not generated)
+  const iconExists = fs.existsSync(iconPath);
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1000,
     minHeight: 700,
+    ...(iconExists && { icon: iconPath }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -291,29 +301,6 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
   } catch (error) {
     console.error('Failed to load project:', error);
     return null;
-  }
-});
-
-// Save screenshot to file
-ipcMain.handle('dialog:saveScreenshot', async (_, imageData: ArrayBuffer, suggestedName: string) => {
-  const window = BrowserWindow.getFocusedWindow();
-  if (!window) return false;
-
-  const result = await dialog.showSaveDialog(window, {
-    defaultPath: suggestedName,
-    filters: [
-      { name: 'PNG Image', extensions: ['png'] }
-    ]
-  });
-
-  if (result.canceled || !result.filePath) return false;
-
-  try {
-    fs.writeFileSync(result.filePath, Buffer.from(imageData));
-    return true;
-  } catch (error) {
-    console.error('Failed to save screenshot:', error);
-    return false;
   }
 });
 

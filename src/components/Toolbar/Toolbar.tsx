@@ -9,7 +9,6 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
-  Camera,
   HelpCircle,
   Eye,
   EyeOff,
@@ -65,7 +64,6 @@ export const Toolbar: React.FC = () => {
   const setShapeType = useCanvasStore(state => state.setShapeType);
   const showHelp = useCanvasStore(state => state.showHelp);
   const toggleHelp = useCanvasStore(state => state.toggleHelp);
-  const canvasRef = useCanvasStore(state => state.canvasRef);
 
   // Project store for multi-image support
   const images = useProjectStore(state => state.images);
@@ -177,32 +175,6 @@ export const Toolbar: React.FC = () => {
   const handleRedo = useCallback(() => {
     temporalStore.getState().redo();
   }, [temporalStore]);
-
-  const handleScreenshot = useCallback(async () => {
-    if (!canvasRef) return;
-
-    try {
-      const blob = await new Promise<Blob | null>((resolve) => {
-        canvasRef.toBlob(resolve, 'image/png');
-      });
-
-      if (!blob) {
-        console.error('Failed to create screenshot blob');
-        return;
-      }
-
-      const arrayBuffer = await blob.arrayBuffer();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const suggestedName = `screenshot-${timestamp}.png`;
-
-      const saved = await window.electronAPI.saveScreenshot(arrayBuffer, suggestedName);
-      if (saved) {
-        console.log('Screenshot saved successfully');
-      }
-    } catch (error) {
-      console.error('Failed to save screenshot:', error);
-    }
-  }, [canvasRef]);
 
   const handleZoomIn = useCallback(() => zoom(0.2), [zoom]);
   const handleZoomOut = useCallback(() => zoom(-0.2), [zoom]);
@@ -344,14 +316,8 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Screenshot and Help */}
-      <div className="toolbar-group" role="group" aria-label="Actions">
-        <IconButton
-          icon={<Camera size={18} />}
-          tooltip="Save Screenshot"
-          onClick={handleScreenshot}
-          disabled={!imageLoaded}
-        />
+      {/* Help */}
+      <div className="toolbar-group" role="group" aria-label="Help">
         <IconButton
           icon={<HelpCircle size={18} />}
           tooltip="User Guide"

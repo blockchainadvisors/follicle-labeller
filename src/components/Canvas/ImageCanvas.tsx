@@ -1,9 +1,10 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
+import { ImagePlus } from 'lucide-react';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
-import { useProjectStore } from '../../store/projectStore';
+import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { CanvasRenderer } from './CanvasRenderer';
-import { DragState, Point, Follicle, LinearAnnotation, isCircle, isRectangle, isLinear } from '../../types';
+import { DragState, Point, Follicle, LinearAnnotation, ProjectImage, isCircle, isRectangle, isLinear } from '../../types';
 import {
   screenToImage,
   distance,
@@ -153,7 +154,9 @@ export const ImageCanvas: React.FC = () => {
 
   // Project store for multi-image support
   const images = useProjectStore(state => state.images);
+  const imageOrder = useProjectStore(state => state.imageOrder);
   const activeImageId = useProjectStore(state => state.activeImageId);
+  const addImage = useProjectStore(state => state.addImage);
   const pan = useProjectStore(state => state.pan);
   const zoom = useProjectStore(state => state.zoom);
   const zoomToFit = useProjectStore(state => state.zoomToFit);
@@ -172,7 +175,6 @@ export const ImageCanvas: React.FC = () => {
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const showLabels = useCanvasStore(state => state.showLabels);
   const showShapes = useCanvasStore(state => state.showShapes);
-  const setCanvasRef = useCanvasStore(state => state.setCanvasRef);
 
   const temporalStore = useTemporalStore();
 
@@ -212,12 +214,6 @@ export const ImageCanvas: React.FC = () => {
 
     rendererRef.current = new CanvasRenderer(ctx);
   }, []);
-
-  // Store canvas ref for screenshot feature
-  useEffect(() => {
-    setCanvasRef(canvasRef.current);
-    return () => setCanvasRef(null);
-  }, [setCanvasRef]);
 
   // Set image when bitmap changes (already pre-decoded for smooth rendering)
   useEffect(() => {
@@ -422,7 +418,7 @@ export const ImageCanvas: React.FC = () => {
         if (currentShapeType === 'circle') {
           // Second click - finalize circle
           const radius = distance(dragState.startPoint, point);
-          if (radius > 5) {
+          if (radius > 1) {
             addCircle(activeImageId, dragState.startPoint, radius);
           }
           setDragState({
@@ -441,7 +437,7 @@ export const ImageCanvas: React.FC = () => {
           const y = Math.min(dragState.startPoint.y, point.y);
           const width = Math.abs(point.x - dragState.startPoint.x);
           const height = Math.abs(point.y - dragState.startPoint.y);
-          if (width > 10 && height > 10) {
+          if (width > 1 && height > 1) {
             addRectangle(activeImageId, x, y, width, height);
           }
           setDragState({
@@ -458,7 +454,7 @@ export const ImageCanvas: React.FC = () => {
           if (dragState.createPhase === 'line') {
             // Second click - finalize line, move to width phase
             const lineLength = distance(dragState.startPoint, point);
-            if (lineLength > 10) {
+            if (lineLength > 1) {
               setDragState({
                 isDragging: false,
                 startPoint: dragState.startPoint,
@@ -484,7 +480,7 @@ export const ImageCanvas: React.FC = () => {
           } else if (dragState.createPhase === 'width' && dragState.lineEndPoint) {
             // Third click - finalize linear shape
             const halfWidth = pointToLineDistance(point, dragState.startPoint, dragState.lineEndPoint);
-            if (halfWidth > 5) {
+            if (halfWidth > 1) {
               addLinear(activeImageId, dragState.startPoint, dragState.lineEndPoint, halfWidth);
             }
             setDragState({
@@ -639,6 +635,35 @@ export const ImageCanvas: React.FC = () => {
     zoom(delta, centerPoint);
   }, [zoom]);
 
+  // Open image dialog handler
+  const handleOpenImage = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.openImageDialog();
+      if (result) {
+        const blob = new Blob([result.data]);
+        const url = URL.createObjectURL(blob);
+        const bitmap = await createImageBitmap(blob);
+
+        const newImage: ProjectImage = {
+          id: generateImageId(),
+          fileName: result.fileName,
+          width: bitmap.width,
+          height: bitmap.height,
+          imageData: result.data,
+          imageBitmap: bitmap,
+          imageSrc: url,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: imageOrder.length,
+        };
+
+        addImage(newImage);
+      }
+    } catch (error) {
+      console.error('Failed to open image:', error);
+    }
+  }, [addImage, imageOrder.length]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -745,6 +770,8 @@ export const ImageCanvas: React.FC = () => {
     }
   };
 
+  const hasImage = images.size > 0;
+
   return (
     <div
       ref={containerRef}
@@ -761,8 +788,15 @@ export const ImageCanvas: React.FC = () => {
         onWheel={handleWheel}
         onAuxClick={(e) => e.preventDefault()}
         onContextMenu={(e) => e.preventDefault()}
-        style={{ cursor: getCursor() }}
+        style={{ cursor: hasImage ? getCursor() : 'pointer' }}
       />
+      {!hasImage && (
+        <div className="canvas-empty-state" onClick={handleOpenImage}>
+          <ImagePlus size={64} strokeWidth={1.5} />
+          <p>Click to open an image</p>
+          <span>or use File → Open Image (Ctrl+O)</span>
+        </div>
+      )}
     </div>
   );
 };

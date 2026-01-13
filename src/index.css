@@ -202,6 +202,47 @@ body {
   /* Don't stretch canvas - let it use its natural size from width/height attributes */
 }
 
+/* Empty state overlay for when no image is loaded */
+.canvas-empty-state {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+}
+
+.canvas-empty-state:hover {
+  color: var(--text-primary);
+}
+
+.canvas-empty-state:hover svg {
+  color: var(--accent);
+}
+
+.canvas-empty-state svg {
+  color: var(--text-muted);
+  transition: color 0.2s ease;
+}
+
+.canvas-empty-state p {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.canvas-empty-state span {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
 /* Property Panel */
 .property-panel {
   width: 280px;

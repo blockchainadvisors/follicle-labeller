@@ -15,16 +15,12 @@ interface CanvasState {
   // Help panel
   showHelp: boolean;
 
-  // Canvas reference for screenshots
-  canvasRef: HTMLCanvasElement | null;
-
   // Actions
   setMode: (mode: InteractionMode) => void;
   setShapeType: (shapeType: ShapeType) => void;
   toggleLabels: () => void;
   toggleShapes: () => void;
   toggleHelp: () => void;
-  setCanvasRef: (ref: HTMLCanvasElement | null) => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -33,7 +29,6 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   showLabels: true,
   showShapes: true,
   showHelp: false,
-  canvasRef: null,
 
   setMode: (mode) => {
     set({ mode });
@@ -53,9 +48,5 @@ export const useCanvasStore = create<CanvasState>((set) => ({
 
   toggleHelp: () => {
     set(state => ({ showHelp: !state.showHelp }));
-  },
-
-  setCanvasRef: (ref) => {
-    set({ canvasRef: ref });
   },
 }));
