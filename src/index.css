@@ -512,13 +512,17 @@ body {
 }
 
 .image-item:hover {
-  background-color: var(--bg-tertiary);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .image-item.active {
   background-color: var(--bg-tertiary);
   border: 1px solid var(--accent);
   margin: -1px;
+}
+
+.image-item.active:hover {
+  background-color: var(--bg-tertiary);
 }
 
 .image-thumbnail {
