@@ -93,6 +93,12 @@ export const Toolbar: React.FC = () => {
     ? follicles.filter(f => f.imageId === activeImageId).length
     : 0;
 
+  // Update menu state when project changes
+  useEffect(() => {
+    const hasProject = images.size > 0;
+    window.electronAPI.setProjectState(hasProject);
+  }, [images.size]);
+
   // Handler functions
   const handleOpenImage = useCallback(async () => {
     try {

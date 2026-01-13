@@ -35,6 +35,11 @@ const electronAPI = {
   ): Promise<{ success: boolean; filePath?: string }> =>
     ipcRenderer.invoke('file:saveProjectV2', filePath, images, manifest, annotations),
 
+  // Update menu state based on project
+  setProjectState: (hasProject: boolean): void => {
+    ipcRenderer.send('menu:setProjectState', hasProject);
+  },
+
   // V2: Load project with support for V1 and V2 formats
   loadProjectV2: (): Promise<{
     version: '1.0' | '2.0';

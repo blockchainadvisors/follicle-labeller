@@ -330,6 +330,18 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
   }
 });
 
+// Menu item references for dynamic enable/disable
+let saveMenuItem: Electron.MenuItem | null = null;
+let saveAsMenuItem: Electron.MenuItem | null = null;
+let closeProjectMenuItem: Electron.MenuItem | null = null;
+
+// Update menu items based on project state
+ipcMain.on('menu:setProjectState', (_, hasProject: boolean) => {
+  if (saveMenuItem) saveMenuItem.enabled = hasProject;
+  if (saveAsMenuItem) saveAsMenuItem.enabled = hasProject;
+  if (closeProjectMenuItem) closeProjectMenuItem.enabled = hasProject;
+});
+
 // Create application menu
 function createMenu(): void {
   const isMac = process.platform === 'darwin';
@@ -361,19 +373,25 @@ function createMenu(): void {
           click: () => mainWindow?.webContents.send('menu:loadProject'),
         },
         {
+          id: 'save-project',
           label: 'Save Project',
           accelerator: 'CmdOrCtrl+S',
+          enabled: false,
           click: () => mainWindow?.webContents.send('menu:saveProject'),
         },
         {
+          id: 'save-project-as',
           label: 'Save Project As...',
           accelerator: 'CmdOrCtrl+Shift+S',
+          enabled: false,
           click: () => mainWindow?.webContents.send('menu:saveProjectAs'),
         },
         { type: 'separator' },
         {
+          id: 'close-project',
           label: 'Close Project',
           accelerator: 'CmdOrCtrl+W',
+          enabled: false,
           click: () => mainWindow?.webContents.send('menu:closeProject'),
         },
         { type: 'separator' },
@@ -465,6 +483,11 @@ function createMenu(): void {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+
+  // Store references to menu items for dynamic enable/disable
+  saveMenuItem = menu.getMenuItemById('save-project');
+  saveAsMenuItem = menu.getMenuItemById('save-project-as');
+  closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
 // App lifecycle
