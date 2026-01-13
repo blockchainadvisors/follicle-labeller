@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Viewport, InteractionMode, Point } from '../types';
+import { Viewport, InteractionMode, Point, ShapeType } from '../types';
 
 interface CanvasState {
   // Viewport
@@ -15,10 +15,11 @@ interface CanvasState {
 
   // Interaction mode
   mode: InteractionMode;
+  currentShapeType: ShapeType;
 
   // Display options
   showLabels: boolean;
-  showCircles: boolean;
+  showShapes: boolean;
 
   // Actions
   setViewport: (viewport: Partial<Viewport>) => void;
@@ -29,8 +30,9 @@ interface CanvasState {
   setImage: (src: string, width: number, height: number, fileName: string, imageData: ArrayBuffer) => void;
   clearImage: () => void;
   setMode: (mode: InteractionMode) => void;
+  setShapeType: (shapeType: ShapeType) => void;
   toggleLabels: () => void;
-  toggleCircles: () => void;
+  toggleShapes: () => void;
 }
 
 const ZOOM_MIN = 0.1;
@@ -45,8 +47,9 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   imageData: null,
   fileName: null,
   mode: 'create',
+  currentShapeType: 'circle',
   showLabels: true,
-  showCircles: true,
+  showShapes: true,
 
   setViewport: (viewport) => {
     set(state => ({
@@ -141,11 +144,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({ mode });
   },
 
+  setShapeType: (shapeType) => {
+    set({ currentShapeType: shapeType });
+  },
+
   toggleLabels: () => {
     set(state => ({ showLabels: !state.showLabels }));
   },
 
-  toggleCircles: () => {
-    set(state => ({ showCircles: !state.showCircles }));
+  toggleShapes: () => {
+    set(state => ({ showShapes: !state.showShapes }));
   },
 }));

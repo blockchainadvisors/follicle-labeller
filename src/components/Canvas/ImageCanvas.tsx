@@ -2,13 +2,41 @@ import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { CanvasRenderer } from './CanvasRenderer';
-import { DragState, Point, Follicle } from '../../types';
+import { DragState, Point, Follicle, isCircle, isRectangle } from '../../types';
 import {
   screenToImage,
   distance,
   isPointInCircle,
-  isPointOnCircleEdge,
 } from '../../utils/coordinate-transform';
+
+// Check if point is inside a rectangle
+function isPointInRectangle(point: Point, x: number, y: number, width: number, height: number): boolean {
+  return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
+}
+
+// Check if point is near a rectangle corner (for resize)
+function getRectangleResizeHandle(
+  point: Point,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  tolerance: number
+): string | null {
+  const corners = [
+    { handle: 'nw', x: x, y: y },
+    { handle: 'ne', x: x + width, y: y },
+    { handle: 'sw', x: x, y: y + height },
+    { handle: 'se', x: x + width, y: y + height },
+  ];
+
+  for (const corner of corners) {
+    if (distance(point, { x: corner.x, y: corner.y }) <= tolerance) {
+      return corner.handle;
+    }
+  }
+  return null;
+}
 
 export const ImageCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -23,6 +51,7 @@ export const ImageCanvas: React.FC = () => {
     currentPoint: null,
     dragType: null,
     targetId: null,
+    resizeHandle: undefined,
   });
 
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
@@ -30,20 +59,23 @@ export const ImageCanvas: React.FC = () => {
   // Store subscriptions
   const follicles = useFollicleStore(state => state.follicles);
   const selectedId = useFollicleStore(state => state.selectedId);
-  const addFollicle = useFollicleStore(state => state.addFollicle);
+  const addCircle = useFollicleStore(state => state.addCircle);
+  const addRectangle = useFollicleStore(state => state.addRectangle);
   const selectFollicle = useFollicleStore(state => state.selectFollicle);
-  const moveFollicle = useFollicleStore(state => state.moveFollicle);
-  const resizeFollicle = useFollicleStore(state => state.resizeFollicle);
+  const moveAnnotation = useFollicleStore(state => state.moveAnnotation);
+  const resizeCircle = useFollicleStore(state => state.resizeCircle);
+  const resizeRectangle = useFollicleStore(state => state.resizeRectangle);
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
 
   const viewport = useCanvasStore(state => state.viewport);
   const imageSrc = useCanvasStore(state => state.imageSrc);
   const mode = useCanvasStore(state => state.mode);
+  const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const pan = useCanvasStore(state => state.pan);
   const zoom = useCanvasStore(state => state.zoom);
   const zoomToFit = useCanvasStore(state => state.zoomToFit);
   const showLabels = useCanvasStore(state => state.showLabels);
-  const showCircles = useCanvasStore(state => state.showCircles);
+  const showShapes = useCanvasStore(state => state.showShapes);
 
   const temporalStore = useTemporalStore();
 
@@ -85,7 +117,6 @@ export const ImageCanvas: React.FC = () => {
       if (rendererRef.current) {
         rendererRef.current.setImage(img);
       }
-      // Auto-fit image to canvas
       zoomToFit(canvasSize.width, canvasSize.height);
     };
     img.src = imageSrc;
@@ -106,7 +137,8 @@ export const ImageCanvas: React.FC = () => {
         selectedId,
         dragState,
         showLabels,
-        showCircles
+        showShapes,
+        currentShapeType
       );
     };
 
@@ -120,7 +152,7 @@ export const ImageCanvas: React.FC = () => {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [viewport, follicles, selectedId, dragState, canvasSize, showLabels, showCircles]);
+  }, [viewport, follicles, selectedId, dragState, canvasSize, showLabels, showShapes, currentShapeType]);
 
   // Get image coordinates from mouse event
   const getImagePoint = useCallback((e: React.MouseEvent): Point => {
@@ -131,13 +163,18 @@ export const ImageCanvas: React.FC = () => {
     return screenToImage(e.clientX, e.clientY, viewport, rect);
   }, [viewport]);
 
-  // Find follicle at a point (for selection)
-  const findFollicleAtPoint = useCallback((point: Point): Follicle | null => {
-    // Check in reverse order (top-most first)
+  // Find annotation at a point
+  const findAnnotationAtPoint = useCallback((point: Point): Follicle | null => {
     for (let i = follicles.length - 1; i >= 0; i--) {
       const f = follicles[i];
-      if (isPointInCircle(point, f.center, f.radius)) {
-        return f;
+      if (isCircle(f)) {
+        if (isPointInCircle(point, f.center, f.radius)) {
+          return f;
+        }
+      } else if (isRectangle(f)) {
+        if (isPointInRectangle(point, f.x, f.y, f.width, f.height)) {
+          return f;
+        }
       }
     }
     return null;
@@ -147,7 +184,7 @@ export const ImageCanvas: React.FC = () => {
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const point = getImagePoint(e);
 
-    // Middle mouse button (wheel click) always triggers pan
+    // Middle mouse button always triggers pan
     if (e.button === 1 || mode === 'pan') {
       e.preventDefault();
       setDragState({
@@ -161,24 +198,55 @@ export const ImageCanvas: React.FC = () => {
     }
 
     if (mode === 'select') {
-      // Check if clicking on resize handle of selected follicle
       const selected = follicles.find(f => f.id === selectedId);
+
       if (selected) {
-        const handlePoint = { x: selected.center.x + selected.radius, y: selected.center.y };
-        const handleDistance = distance(point, handlePoint);
-        if (handleDistance <= 10 / viewport.scale) {
+        // Check for resize handles
+        if (isCircle(selected)) {
+          const handlePoint = { x: selected.center.x + selected.radius, y: selected.center.y };
+          if (distance(point, handlePoint) <= 10 / viewport.scale) {
+            setDragState({
+              isDragging: true,
+              startPoint: selected.center,
+              currentPoint: point,
+              dragType: 'resize',
+              targetId: selected.id,
+            });
+            return;
+          }
+        } else if (isRectangle(selected)) {
+          const handle = getRectangleResizeHandle(
+            point,
+            selected.x,
+            selected.y,
+            selected.width,
+            selected.height,
+            10 / viewport.scale
+          );
+          if (handle) {
+            setDragState({
+              isDragging: true,
+              startPoint: point,
+              currentPoint: point,
+              dragType: 'resize',
+              targetId: selected.id,
+              resizeHandle: handle,
+            });
+            return;
+          }
+        }
+
+        // Check if clicking inside selected annotation (for move)
+        if (isCircle(selected) && isPointInCircle(point, selected.center, selected.radius)) {
           setDragState({
             isDragging: true,
-            startPoint: selected.center,
+            startPoint: point,
             currentPoint: point,
-            dragType: 'resize',
+            dragType: 'move',
             targetId: selected.id,
           });
           return;
-        }
-
-        // Check if clicking inside selected follicle (for move)
-        if (isPointInCircle(point, selected.center, selected.radius)) {
+        } else if (isRectangle(selected) && isPointInRectangle(point, selected.x, selected.y, selected.width, selected.height)) {
           setDragState({
             isDragging: true,
             startPoint: point,
@@ -190,8 +258,8 @@ export const ImageCanvas: React.FC = () => {
         }
       }
 
-      // Check if clicking inside any follicle
-      const clicked = findFollicleAtPoint(point);
+      // Check if clicking inside any annotation
+      const clicked = findAnnotationAtPoint(point);
       if (clicked) {
         selectFollicle(clicked.id);
         setDragState({
@@ -217,7 +285,7 @@ export const ImageCanvas: React.FC = () => {
         targetId: null,
       });
     }
-  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findFollicleAtPoint]);
+  }, [mode, selectedId, follicles, viewport.scale, getImagePoint, selectFollicle, findAnnotationAtPoint]);
 
   // Mouse move handler
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -243,28 +311,67 @@ export const ImageCanvas: React.FC = () => {
     if (!dragState.isDragging) return;
 
     if (dragState.dragType === 'create' && dragState.startPoint && dragState.currentPoint) {
-      const radius = distance(dragState.startPoint, dragState.currentPoint);
-      if (radius > 5) {
-        addFollicle(dragState.startPoint, radius);
+      if (currentShapeType === 'circle') {
+        const radius = distance(dragState.startPoint, dragState.currentPoint);
+        if (radius > 5) {
+          addCircle(dragState.startPoint, radius);
+        }
+      } else {
+        const x = Math.min(dragState.startPoint.x, dragState.currentPoint.x);
+        const y = Math.min(dragState.startPoint.y, dragState.currentPoint.y);
+        const width = Math.abs(dragState.currentPoint.x - dragState.startPoint.x);
+        const height = Math.abs(dragState.currentPoint.y - dragState.startPoint.y);
+        if (width > 10 && height > 10) {
+          addRectangle(x, y, width, height);
+        }
       }
     }
 
     if (dragState.dragType === 'move' && dragState.targetId && dragState.currentPoint && dragState.startPoint) {
-      const target = follicles.find(f => f.id === dragState.targetId);
-      if (target) {
-        const deltaX = dragState.currentPoint.x - dragState.startPoint.x;
-        const deltaY = dragState.currentPoint.y - dragState.startPoint.y;
-        const newCenter = {
-          x: target.center.x + deltaX,
-          y: target.center.y + deltaY,
-        };
-        moveFollicle(dragState.targetId, newCenter);
-      }
+      const deltaX = dragState.currentPoint.x - dragState.startPoint.x;
+      const deltaY = dragState.currentPoint.y - dragState.startPoint.y;
+      moveAnnotation(dragState.targetId, deltaX, deltaY);
     }
 
     if (dragState.dragType === 'resize' && dragState.targetId && dragState.startPoint && dragState.currentPoint) {
-      const newRadius = distance(dragState.startPoint, dragState.currentPoint);
-      resizeFollicle(dragState.targetId, newRadius);
+      const target = follicles.find(f => f.id === dragState.targetId);
+      if (target) {
+        if (isCircle(target)) {
+          const newRadius = distance(dragState.startPoint, dragState.currentPoint);
+          resizeCircle(dragState.targetId, newRadius);
+        } else if (isRectangle(target) && dragState.resizeHandle) {
+          // Calculate new rectangle bounds based on which handle was dragged
+          let newX = target.x;
+          let newY = target.y;
+          let newWidth = target.width;
+          let newHeight = target.height;
+
+          switch (dragState.resizeHandle) {
+            case 'nw':
+              newX = dragState.currentPoint.x;
+              newY = dragState.currentPoint.y;
+              newWidth = target.x + target.width - dragState.currentPoint.x;
+              newHeight = target.y + target.height - dragState.currentPoint.y;
+              break;
+            case 'ne':
+              newY = dragState.currentPoint.y;
+              newWidth = dragState.currentPoint.x - target.x;
+              newHeight = target.y + target.height - dragState.currentPoint.y;
+              break;
+            case 'sw':
+              newX = dragState.currentPoint.x;
+              newWidth = target.x + target.width - dragState.currentPoint.x;
+              newHeight = dragState.currentPoint.y - target.y;
+              break;
+            case 'se':
+              newWidth = dragState.currentPoint.x - target.x;
+              newHeight = dragState.currentPoint.y - target.y;
+              break;
+          }
+
+          resizeRectangle(dragState.targetId, newX, newY, newWidth, newHeight);
+        }
+      }
     }
 
     setDragState({
@@ -273,8 +380,9 @@ export const ImageCanvas: React.FC = () => {
       currentPoint: null,
       dragType: null,
       targetId: null,
+      resizeHandle: undefined,
     });
-  }, [dragState, addFollicle, moveFollicle, resizeFollicle, follicles]);
+  }, [dragState, currentShapeType, addCircle, addRectangle, moveAnnotation, resizeCircle, resizeRectangle, follicles]);
 
   // Wheel zoom handler
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -294,13 +402,11 @@ export const ImageCanvas: React.FC = () => {
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Delete selected follicle
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         e.preventDefault();
         deleteFollicle(selectedId);
       }
 
-      // Undo/Redo
       if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -310,7 +416,6 @@ export const ImageCanvas: React.FC = () => {
         }
       }
 
-      // Mode shortcuts
       if (e.key === 'c' || e.key === 'C') {
         useCanvasStore.getState().setMode('create');
       }
@@ -321,19 +426,24 @@ export const ImageCanvas: React.FC = () => {
         useCanvasStore.getState().setMode('pan');
       }
 
-      // Escape to deselect
       if (e.key === 'Escape') {
         selectFollicle(null);
       }
 
-      // Toggle labels
       if (e.key === 'l' || e.key === 'L') {
         useCanvasStore.getState().toggleLabels();
       }
 
-      // Toggle circles
       if (e.key === 'o' || e.key === 'O') {
-        useCanvasStore.getState().toggleCircles();
+        useCanvasStore.getState().toggleShapes();
+      }
+
+      // Shape type shortcuts
+      if (e.key === '1') {
+        useCanvasStore.getState().setShapeType('circle');
+      }
+      if (e.key === '2') {
+        useCanvasStore.getState().setShapeType('rectangle');
       }
     };
 

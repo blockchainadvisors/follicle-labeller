@@ -1,4 +1,4 @@
-import { Follicle, Viewport, DragState } from '../../types';
+import { Follicle, Viewport, DragState, ShapeType, isCircle, isRectangle, CircleAnnotation, RectangleAnnotation } from '../../types';
 
 export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D;
@@ -25,7 +25,8 @@ export class CanvasRenderer {
     selectedId: string | null,
     dragState: DragState,
     showLabels: boolean = true,
-    showCircles: boolean = true
+    showShapes: boolean = true,
+    currentShapeType: ShapeType = 'circle'
   ): void {
     this.clear(canvasWidth, canvasHeight);
 
@@ -38,30 +39,33 @@ export class CanvasRenderer {
       this.ctx.drawImage(this.image, 0, 0);
     }
 
-    // Draw all follicles
+    // Draw all annotations
     for (const follicle of follicles) {
-      this.drawFollicle(follicle, follicle.id === selectedId, viewport.scale, showLabels, showCircles);
+      if (isCircle(follicle)) {
+        this.drawCircle(follicle, follicle.id === selectedId, viewport.scale, showLabels, showShapes);
+      } else if (isRectangle(follicle)) {
+        this.drawRectangle(follicle, follicle.id === selectedId, viewport.scale, showLabels, showShapes);
+      }
     }
 
-    // Draw drag preview for new follicle
+    // Draw drag preview for new shape
     if (dragState.isDragging && dragState.dragType === 'create' && dragState.startPoint && dragState.currentPoint) {
-      this.drawDragPreview(dragState, viewport.scale);
+      this.drawDragPreview(dragState, viewport.scale, currentShapeType);
     }
 
     this.ctx.restore();
   }
 
-  private drawFollicle(
-    follicle: Follicle,
+  private drawCircle(
+    circle: CircleAnnotation,
     isSelected: boolean,
     scale: number,
     showLabels: boolean,
-    showCircles: boolean
+    showShapes: boolean
   ): void {
-    const { center, radius, color, label } = follicle;
+    const { center, radius, color, label } = circle;
 
-    // Draw circle (if circles are enabled)
-    if (showCircles) {
+    if (showShapes) {
       // Fill with semi-transparent color
       this.ctx.beginPath();
       this.ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
@@ -93,79 +97,152 @@ export class CanvasRenderer {
       }
     }
 
-    // Draw label above the circle (only if both circles AND labels are enabled)
-    if (showCircles && showLabels) {
-      const fontSize = Math.max(12, 14 / scale);
-      this.ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`;
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'bottom';
-
-      // Draw label background
-      const textMetrics = this.ctx.measureText(label);
-      const textHeight = fontSize;
-      const padding = 4 / scale;
-      const textY = center.y - radius - 8 / scale;
-
-      this.ctx.fillStyle = this.hexToRgba(color, 0.8);
-      this.ctx.fillRect(
-        center.x - textMetrics.width / 2 - padding,
-        textY - textHeight - padding,
-        textMetrics.width + padding * 2,
-        textHeight + padding * 2
-      );
-
-      // Draw label text
-      this.ctx.fillStyle = '#ffffff';
-      this.ctx.fillText(label, center.x, textY);
+    // Draw label
+    if (showShapes && showLabels) {
+      this.drawLabel(label, center.x, center.y - radius - 8 / scale, color, scale);
     }
   }
 
-  private drawDragPreview(dragState: DragState, scale: number): void {
+  private drawRectangle(
+    rect: RectangleAnnotation,
+    isSelected: boolean,
+    scale: number,
+    showLabels: boolean,
+    showShapes: boolean
+  ): void {
+    const { x, y, width, height, color, label } = rect;
+
+    if (showShapes) {
+      // Fill with semi-transparent color
+      this.ctx.fillStyle = this.hexToRgba(color, 0.25);
+      this.ctx.fillRect(x, y, width, height);
+
+      // Stroke
+      this.ctx.strokeStyle = color;
+      this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
+      this.ctx.strokeRect(x, y, width, height);
+
+      // Selection indicator - corner handles
+      if (isSelected) {
+        const handleRadius = 6 / scale;
+        const corners = [
+          { x: x, y: y },                    // top-left
+          { x: x + width, y: y },            // top-right
+          { x: x, y: y + height },           // bottom-left
+          { x: x + width, y: y + height },   // bottom-right
+        ];
+
+        for (const corner of corners) {
+          this.ctx.beginPath();
+          this.ctx.arc(corner.x, corner.y, handleRadius, 0, Math.PI * 2);
+          this.ctx.fillStyle = '#ffffff';
+          this.ctx.fill();
+          this.ctx.strokeStyle = color;
+          this.ctx.lineWidth = 2 / scale;
+          this.ctx.stroke();
+        }
+
+        // Draw center point
+        this.ctx.beginPath();
+        this.ctx.arc(x + width / 2, y + height / 2, 4 / scale, 0, Math.PI * 2);
+        this.ctx.fillStyle = color;
+        this.ctx.fill();
+      }
+    }
+
+    // Draw label above the rectangle
+    if (showShapes && showLabels) {
+      this.drawLabel(label, x + width / 2, y - 8 / scale, color, scale);
+    }
+  }
+
+  private drawLabel(label: string, x: number, y: number, color: string, scale: number): void {
+    const fontSize = Math.max(12, 14 / scale);
+    this.ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`;
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'bottom';
+
+    // Draw label background
+    const textMetrics = this.ctx.measureText(label);
+    const textHeight = fontSize;
+    const padding = 4 / scale;
+
+    this.ctx.fillStyle = this.hexToRgba(color, 0.8);
+    this.ctx.fillRect(
+      x - textMetrics.width / 2 - padding,
+      y - textHeight - padding,
+      textMetrics.width + padding * 2,
+      textHeight + padding * 2
+    );
+
+    // Draw label text
+    this.ctx.fillStyle = '#ffffff';
+    this.ctx.fillText(label, x, y);
+  }
+
+  private drawDragPreview(dragState: DragState, scale: number, shapeType: ShapeType): void {
     if (!dragState.startPoint || !dragState.currentPoint) return;
 
-    const radius = Math.sqrt(
-      Math.pow(dragState.currentPoint.x - dragState.startPoint.x, 2) +
-      Math.pow(dragState.currentPoint.y - dragState.startPoint.y, 2)
-    );
-
-    // Draw dashed circle
-    this.ctx.beginPath();
-    this.ctx.arc(
-      dragState.startPoint.x,
-      dragState.startPoint.y,
-      radius,
-      0,
-      Math.PI * 2
-    );
     this.ctx.strokeStyle = '#ffffff';
     this.ctx.lineWidth = 2 / scale;
     this.ctx.setLineDash([5 / scale, 5 / scale]);
-    this.ctx.stroke();
-    this.ctx.setLineDash([]);
 
-    // Draw center point
-    this.ctx.beginPath();
-    this.ctx.arc(dragState.startPoint.x, dragState.startPoint.y, 4 / scale, 0, Math.PI * 2);
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.fill();
+    if (shapeType === 'circle') {
+      const radius = Math.sqrt(
+        Math.pow(dragState.currentPoint.x - dragState.startPoint.x, 2) +
+        Math.pow(dragState.currentPoint.y - dragState.startPoint.y, 2)
+      );
 
-    // Draw radius line
-    this.ctx.beginPath();
-    this.ctx.moveTo(dragState.startPoint.x, dragState.startPoint.y);
-    this.ctx.lineTo(dragState.currentPoint.x, dragState.currentPoint.y);
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-    this.ctx.lineWidth = 1 / scale;
-    this.ctx.stroke();
+      // Draw dashed circle
+      this.ctx.beginPath();
+      this.ctx.arc(dragState.startPoint.x, dragState.startPoint.y, radius, 0, Math.PI * 2);
+      this.ctx.stroke();
+      this.ctx.setLineDash([]);
 
-    // Draw radius text
-    const fontSize = 12 / scale;
-    this.ctx.font = `${fontSize}px system-ui, sans-serif`;
-    this.ctx.fillStyle = '#ffffff';
-    this.ctx.textAlign = 'center';
-    const midX = (dragState.startPoint.x + dragState.currentPoint.x) / 2;
-    const midY = (dragState.startPoint.y + dragState.currentPoint.y) / 2;
-    this.ctx.fillText(`r: ${Math.round(radius)}px`, midX, midY - 10 / scale);
+      // Draw center point
+      this.ctx.beginPath();
+      this.ctx.arc(dragState.startPoint.x, dragState.startPoint.y, 4 / scale, 0, Math.PI * 2);
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.fill();
+
+      // Draw radius line
+      this.ctx.beginPath();
+      this.ctx.moveTo(dragState.startPoint.x, dragState.startPoint.y);
+      this.ctx.lineTo(dragState.currentPoint.x, dragState.currentPoint.y);
+      this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      this.ctx.lineWidth = 1 / scale;
+      this.ctx.stroke();
+
+      // Draw radius text
+      const fontSize = 12 / scale;
+      this.ctx.font = `${fontSize}px system-ui, sans-serif`;
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.textAlign = 'center';
+      const midX = (dragState.startPoint.x + dragState.currentPoint.x) / 2;
+      const midY = (dragState.startPoint.y + dragState.currentPoint.y) / 2;
+      this.ctx.fillText(`r: ${Math.round(radius)}px`, midX, midY - 10 / scale);
+    } else {
+      // Rectangle preview
+      const x = Math.min(dragState.startPoint.x, dragState.currentPoint.x);
+      const y = Math.min(dragState.startPoint.y, dragState.currentPoint.y);
+      const width = Math.abs(dragState.currentPoint.x - dragState.startPoint.x);
+      const height = Math.abs(dragState.currentPoint.y - dragState.startPoint.y);
+
+      // Draw dashed rectangle
+      this.ctx.strokeRect(x, y, width, height);
+      this.ctx.setLineDash([]);
+
+      // Draw dimension text
+      const fontSize = 12 / scale;
+      this.ctx.font = `${fontSize}px system-ui, sans-serif`;
+      this.ctx.fillStyle = '#ffffff';
+      this.ctx.textAlign = 'center';
+      this.ctx.fillText(
+        `${Math.round(width)} x ${Math.round(height)}`,
+        x + width / 2,
+        y + height / 2
+      );
+    }
   }
 
   private hexToRgba(hex: string, alpha: number): string {

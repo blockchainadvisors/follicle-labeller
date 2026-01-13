@@ -17,8 +17,10 @@ export const Toolbar: React.FC = () => {
   const imageHeight = useCanvasStore(state => state.imageHeight);
   const showLabels = useCanvasStore(state => state.showLabels);
   const toggleLabels = useCanvasStore(state => state.toggleLabels);
-  const showCircles = useCanvasStore(state => state.showCircles);
-  const toggleCircles = useCanvasStore(state => state.toggleCircles);
+  const showShapes = useCanvasStore(state => state.showShapes);
+  const toggleShapes = useCanvasStore(state => state.toggleShapes);
+  const currentShapeType = useCanvasStore(state => state.currentShapeType);
+  const setShapeType = useCanvasStore(state => state.setShapeType);
 
   const follicles = useFollicleStore(state => state.follicles);
   const importFollicles = useFollicleStore(state => state.importFollicles);
@@ -146,6 +148,26 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
+      {/* Shape type selection */}
+      <div className="toolbar-group">
+        <button
+          className={currentShapeType === 'circle' ? 'active' : ''}
+          onClick={() => setShapeType('circle')}
+          title="Circle Shape (1)"
+        >
+          Circle
+        </button>
+        <button
+          className={currentShapeType === 'rectangle' ? 'active' : ''}
+          onClick={() => setShapeType('rectangle')}
+          title="Rectangle Shape (2)"
+        >
+          Rectangle
+        </button>
+      </div>
+
+      <div className="toolbar-divider" />
+
       {/* Zoom controls */}
       <div className="toolbar-group">
         <button onClick={() => zoom(-0.2)} title="Zoom Out">
@@ -177,16 +199,16 @@ export const Toolbar: React.FC = () => {
       {/* View options */}
       <div className="toolbar-group">
         <button
-          className={showCircles ? 'active' : ''}
-          onClick={toggleCircles}
-          title="Toggle Circles (O)"
+          className={showShapes ? 'active' : ''}
+          onClick={toggleShapes}
+          title="Toggle Shapes (O)"
         >
-          Circles
+          Shapes
         </button>
         <button
           className={showLabels ? 'active' : ''}
           onClick={toggleLabels}
-          disabled={!showCircles}
+          disabled={!showShapes}
           title="Toggle Labels (L)"
         >
           Labels
@@ -214,7 +236,7 @@ export const Toolbar: React.FC = () => {
           <>
             <span className="file-name">{fileName}</span>
             <span className="image-size">{imageWidth} x {imageHeight}</span>
-            <span className="follicle-count">{follicles.length} follicles</span>
+            <span className="follicle-count">{follicles.length} annotations</span>
           </>
         ) : (
           <span className="no-image">No image loaded</span>

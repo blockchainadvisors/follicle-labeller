@@ -4,16 +4,45 @@ export interface Point {
   y: number;
 }
 
-// Follicle annotation type
-export interface Follicle {
+// Shape types
+export type ShapeType = 'circle' | 'rectangle';
+
+// Base annotation properties shared by all shapes
+interface BaseAnnotation {
   id: string;
-  center: Point;        // Image coordinates (not screen)
-  radius: number;       // In image pixels
   label: string;
   notes: string;
-  color: string;        // Hex color for visualization
-  createdAt: number;    // Timestamp
+  color: string;
+  createdAt: number;
   updatedAt: number;
+}
+
+// Circle annotation
+export interface CircleAnnotation extends BaseAnnotation {
+  shape: 'circle';
+  center: Point;
+  radius: number;
+}
+
+// Rectangle annotation
+export interface RectangleAnnotation extends BaseAnnotation {
+  shape: 'rectangle';
+  x: number;           // Top-left x
+  y: number;           // Top-left y
+  width: number;
+  height: number;
+}
+
+// Union type for all annotations (keeping Follicle name for compatibility)
+export type Follicle = CircleAnnotation | RectangleAnnotation;
+
+// Type guards
+export function isCircle(f: Follicle): f is CircleAnnotation {
+  return f.shape === 'circle';
+}
+
+export function isRectangle(f: Follicle): f is RectangleAnnotation {
+  return f.shape === 'rectangle';
 }
 
 // Viewport state for canvas
@@ -33,9 +62,27 @@ export interface DragState {
   currentPoint: Point | null;
   dragType: 'create' | 'move' | 'resize' | 'pan' | null;
   targetId: string | null;
+  resizeHandle?: string;  // For rectangles: 'nw', 'ne', 'sw', 'se'
 }
 
 // JSON export schema
+export interface AnnotationExport {
+  id: string;
+  shape: ShapeType;
+  label: string;
+  notes: string;
+  color: string;
+  // Circle properties
+  centerX?: number;
+  centerY?: number;
+  radius?: number;
+  // Rectangle properties
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
 export interface FollicleExportV1 {
   version: '1.0';
   image: {
@@ -46,17 +93,9 @@ export interface FollicleExportV1 {
   metadata: {
     exportedAt: string;
     applicationVersion: string;
-    follicleCount: number;
+    annotationCount: number;
   };
-  follicles: Array<{
-    id: string;
-    x: number;
-    y: number;
-    radius: number;
-    label: string;
-    notes: string;
-    color: string;
-  }>;
+  annotations: AnnotationExport[];
 }
 
 // Electron API type declaration
