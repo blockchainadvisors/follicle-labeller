@@ -10,12 +10,12 @@ A desktop application for medical image annotation, specifically designed to lab
 
 ## Download
 
-Download the latest version for your platform from the [**Releases page**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest):
+Download the latest version for your platform:
 
-| Platform | File |
-|----------|------|
-| Windows | `follicle-labeller-X.X.X-windows-setup.exe` |
-| macOS | `follicle-labeller-X.X.X-macos.dmg` |
+| Platform | Download |
+|----------|----------|
+| **Windows** | [**Download Installer**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest/download/follicle-labeller-windows-latest.exe) |
+| **macOS** | [**Download DMG**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest/download/follicle-labeller-macos-latest.dmg) |
 
 See [all releases](https://github.com/blockchainadvisors/follicle-labeller/releases) for previous versions.
 

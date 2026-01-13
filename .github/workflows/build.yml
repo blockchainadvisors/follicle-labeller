@@ -100,6 +100,14 @@ jobs:
           name: macos-build
           path: release
 
+      - name: Create static-named copies for latest downloads
+        run: |
+          cd release
+          # Create static-named copies for direct download links
+          for f in *-windows-setup.exe; do [ -f "$f" ] && cp "$f" "follicle-labeller-windows-latest.exe"; done
+          for f in *-macos.dmg; do [ -f "$f" ] && cp "$f" "follicle-labeller-macos-latest.dmg"; done
+          ls -la
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
