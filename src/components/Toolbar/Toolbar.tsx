@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import {
   Pencil,
   MousePointer2,
@@ -14,11 +14,15 @@ import {
   EyeOff,
   Tag,
   ImagePlus,
+  Download,
+  BoxSelect,
+  Lasso,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
+import { extractAllFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
 import { ProjectImage } from '../../types';
 
 // Reusable icon button component
@@ -63,6 +67,8 @@ export const Toolbar: React.FC = () => {
   const toggleShapes = useCanvasStore(state => state.toggleShapes);
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const setShapeType = useCanvasStore(state => state.setShapeType);
+  const selectionToolType = useCanvasStore(state => state.selectionToolType);
+  const setSelectionToolType = useCanvasStore(state => state.setSelectionToolType);
   const showHelp = useCanvasStore(state => state.showHelp);
   const toggleHelp = useCanvasStore(state => state.toggleHelp);
 
@@ -76,6 +82,9 @@ export const Toolbar: React.FC = () => {
   const resetZoom = useProjectStore(state => state.resetZoom);
   const currentProjectPath = useProjectStore(state => state.currentProjectPath);
   const setCurrentProjectPath = useProjectStore(state => state.setCurrentProjectPath);
+  const isDirty = useProjectStore(state => state.isDirty);
+  const setDirty = useProjectStore(state => state.setDirty);
+  const markClean = useProjectStore(state => state.markClean);
 
   // Get active image info
   const activeImage = activeImageId ? images.get(activeImageId) : null;
@@ -98,6 +107,15 @@ export const Toolbar: React.FC = () => {
     const hasProject = images.size > 0;
     window.electronAPI.setProjectState(hasProject);
   }, [images.size]);
+
+  // Track follicle changes to mark project as dirty
+  const prevFolliclesRef = useRef(follicles);
+  useEffect(() => {
+    if (prevFolliclesRef.current !== follicles && images.size > 0) {
+      setDirty(true);
+    }
+    prevFolliclesRef.current = follicles;
+  }, [follicles, images.size, setDirty]);
 
   // Handler functions
   const handleOpenImage = useCallback(async () => {
@@ -130,8 +148,8 @@ export const Toolbar: React.FC = () => {
     }
   }, [addImage, imageOrder.length]);
 
-  const handleSave = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -160,15 +178,18 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
 
-  const handleSaveAs = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSaveAs = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -186,44 +207,78 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+
+  // Check for unsaved changes and prompt user
+  // Returns true if safe to proceed, false if user cancelled
+  const checkUnsavedChanges = useCallback(async (): Promise<boolean> => {
+    if (!isDirty) return true;
+
+    const response = await window.electronAPI.showUnsavedChangesDialog();
+
+    if (response === 'save') {
+      const saved = await handleSave();
+      return saved;
+    } else if (response === 'discard') {
+      return true;
+    } else {
+      // Cancel
+      return false;
+    }
+  }, [isDirty, handleSave]);
+
+  // Load project from parsed result (shared logic)
+  const loadProjectFromResult = useCallback(async (result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>) => {
+    if (!result) return;
+
+    // Clear existing project
+    clearProject();
+    clearAll();
+
+    const { loadedImages, loadedFollicles } = await parseImportV2(result);
+
+    // Add all loaded images
+    for (const image of loadedImages) {
+      addImage(image);
+    }
+
+    // Import all annotations
+    importFollicles(loadedFollicles);
+
+    // Set the current project path
+    setCurrentProjectPath(result.filePath);
+  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
 
   const handleLoad = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     try {
       const result = await window.electronAPI.loadProjectV2();
-      if (!result) return;
-
-      // Clear existing project
-      clearProject();
-      clearAll();
-
-      const { loadedImages, loadedFollicles } = await parseImportV2(result);
-
-      // Add all loaded images
-      for (const image of loadedImages) {
-        addImage(image);
-      }
-
-      // Import all annotations
-      importFollicles(loadedFollicles);
-
-      // Set the current project path
-      setCurrentProjectPath(result.filePath);
+      await loadProjectFromResult(result);
     } catch (error) {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
+  }, [loadProjectFromResult, checkUnsavedChanges]);
 
-  const handleCloseProject = useCallback(() => {
+  const handleCloseProject = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     clearProject();
     clearAll();
-  }, [clearProject, clearAll]);
+  }, [clearProject, clearAll, checkUnsavedChanges]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -235,6 +290,25 @@ export const Toolbar: React.FC = () => {
 
   const handleZoomIn = useCallback(() => zoom(0.2), [zoom]);
   const handleZoomOut = useCallback(() => zoom(-0.2), [zoom]);
+
+  // Download extracted follicle images
+  const handleDownloadFollicles = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      const zipBlob = await extractAllFolliclesToZip(images, follicles);
+
+      // Generate filename based on project or first image
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : activeImage?.fileName.replace(/\.[^/.]+$/, '') ?? 'follicles';
+
+      downloadBlob(zipBlob, `${baseName}_follicles.zip`);
+    } catch (error) {
+      console.error('Failed to extract follicles:', error);
+      alert('Failed to extract follicle images. Please ensure there are annotations to extract.');
+    }
+  }, [images, follicles, currentProjectPath, activeImage]);
 
   // Register menu event listeners
   useEffect(() => {
@@ -272,6 +346,78 @@ export const Toolbar: React.FC = () => {
     resetZoom,
     toggleHelp,
   ]);
+
+  // Handle file open from file association (double-click .fol file)
+  useEffect(() => {
+    const loadFromPath = async (filePath: string) => {
+      try {
+        const result = await window.electronAPI.loadProjectFromPath(filePath);
+        await loadProjectFromResult(result);
+      } catch (error) {
+        console.error('Failed to load project from file association:', error);
+        alert('Failed to load project file. Please check the file format.');
+      }
+    };
+
+    // Check for file to open on startup
+    window.electronAPI.getFileToOpen().then((filePath) => {
+      if (filePath) {
+        loadFromPath(filePath);
+      }
+    });
+
+    // Listen for file open while app is running
+    const cleanup = window.electronAPI.onFileOpen((filePath) => {
+      loadFromPath(filePath);
+    });
+
+    return cleanup;
+  }, [loadProjectFromResult]);
+
+  // Handle app close - check for unsaved changes
+  useEffect(() => {
+    const handleCheckUnsavedChanges = async () => {
+      const canClose = await checkUnsavedChanges();
+      window.electronAPI.confirmClose(canClose);
+    };
+
+    const cleanup = window.electronAPI.onCheckUnsavedChanges(handleCheckUnsavedChanges);
+    return cleanup;
+  }, [checkUnsavedChanges]);
+
+  // Handle system suspend (sleep/hibernate) - auto-save to prevent data loss
+  useEffect(() => {
+    const handleSystemSuspend = async () => {
+      // Only auto-save if there's a project with unsaved changes AND an existing save path
+      // (we can't show a dialog during suspend - no time for user interaction)
+      if (isDirty && currentProjectPath && images.size > 0) {
+        console.log('System suspending - auto-saving project to:', currentProjectPath);
+        try {
+          const { manifest, annotations, imageList } = generateExportV2(
+            Array.from(images.values()),
+            follicles
+          );
+
+          const result = await window.electronAPI.saveProjectV2ToPath(
+            currentProjectPath,
+            imageList,
+            JSON.stringify(manifest, null, 2),
+            JSON.stringify(annotations, null, 2)
+          );
+
+          if (result.success) {
+            markClean();
+            console.log('Auto-save before suspend completed successfully');
+          }
+        } catch (error) {
+          console.error('Auto-save before suspend failed:', error);
+        }
+      }
+    };
+
+    const cleanup = window.electronAPI.onSystemSuspend(handleSystemSuspend);
+    return cleanup;
+  }, [isDirty, currentProjectPath, images, follicles, markClean]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 
@@ -315,6 +461,29 @@ export const Toolbar: React.FC = () => {
       </div>
 
       <div className="toolbar-divider" />
+
+      {/* Selection tools (visible only in select mode) */}
+      {mode === 'select' && (
+        <>
+          <div className="toolbar-group" role="group" aria-label="Selection tools">
+            <IconButton
+              icon={<BoxSelect size={18} />}
+              tooltip="Marquee Select"
+              shortcut="M"
+              onClick={() => setSelectionToolType('marquee')}
+              active={selectionToolType === 'marquee'}
+            />
+            <IconButton
+              icon={<Lasso size={18} />}
+              tooltip="Lasso Select"
+              shortcut="F"
+              onClick={() => setSelectionToolType('lasso')}
+              active={selectionToolType === 'lasso'}
+            />
+          </div>
+          <div className="toolbar-divider" />
+        </>
+      )}
 
       {/* Shape tools */}
       <div className="toolbar-group" role="group" aria-label="Shape types">
@@ -384,6 +553,18 @@ export const Toolbar: React.FC = () => {
           onClick={toggleLabels}
           disabled={!showShapes}
           active={showLabels}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* Export follicle images */}
+      <div className="toolbar-group" role="group" aria-label="Export">
+        <IconButton
+          icon={<Download size={18} />}
+          tooltip="Download Follicle Images"
+          onClick={handleDownloadFollicles}
+          disabled={!imageLoaded || follicles.length === 0}
         />
       </div>
 

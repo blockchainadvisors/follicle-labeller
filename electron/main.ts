@@ -1,9 +1,16 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions, powerMonitor } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import JSZip from 'jszip';
+import { initUpdater, checkForUpdates } from './updater';
 
 let mainWindow: BrowserWindow | null = null;
+
+// File to open when launched via file association
+let fileToOpen: string | null = null;
+
+// Track if we're force closing (bypass unsaved changes check)
+let forceClose = false;
 
 function createWindow(): void {
   // Determine icon path based on platform
@@ -37,10 +44,30 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Handle window close - check for unsaved changes
+  mainWindow.on('close', (event) => {
+    if (forceClose) {
+      forceClose = false;
+      return; // Allow close
+    }
+
+    // Prevent close and ask renderer about unsaved changes
+    event.preventDefault();
+    mainWindow?.webContents.send('app:checkUnsavedChanges');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+// IPC handler for renderer to confirm close after checking unsaved changes
+ipcMain.on('app:confirmClose', (_, canClose: boolean) => {
+  if (canClose && mainWindow) {
+    forceClose = true;
+    mainWindow.close();
+  }
+});
 
 // IPC Handlers
 
@@ -330,6 +357,95 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
   }
 });
 
+// Load project from specific file path (for file association)
+ipcMain.handle('file:loadProject', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
+
+    // Check if this is V2 (has manifest.json)
+    const hasManifest = 'manifest.json' in zip.files;
+
+    if (hasManifest) {
+      // V2 format
+      const manifest = await zip.files['manifest.json'].async('string');
+      const annotations = await zip.files['annotations.json'].async('string');
+
+      // Load all images from images/ folder
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
+      const imagesFolder = zip.folder('images');
+
+      if (imagesFolder) {
+        for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
+          if (file.dir) continue;
+
+          const archiveFileName = relativePath.replace('images/', '');
+          if (!archiveFileName) continue;
+
+          const dashIndex = archiveFileName.indexOf('-');
+          if (dashIndex === -1) continue;
+
+          const id = archiveFileName.substring(0, dashIndex);
+          const fileName = archiveFileName.substring(dashIndex + 1);
+
+          const imageBuffer = await file.async('nodebuffer');
+          const imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+
+          images.push({ id, fileName, data: imageData });
+        }
+      }
+
+      return {
+        version: '2.0' as const,
+        filePath,
+        manifest,
+        images,
+        annotations,
+      };
+    } else {
+      // V1 format
+      let imageFileName = '';
+      let imageData: ArrayBuffer | null = null;
+      let jsonData = '';
+
+      for (const fileName of Object.keys(zip.files)) {
+        if (fileName === 'annotations.json') {
+          jsonData = await zip.files[fileName].async('string');
+        } else if (!zip.files[fileName].dir) {
+          imageFileName = fileName;
+          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+        }
+      }
+
+      if (!imageData || !jsonData) {
+        throw new Error('Invalid .fol file: missing image or annotations');
+      }
+
+      return {
+        version: '1.0' as const,
+        filePath,
+        imageFileName,
+        imageData,
+        jsonData,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to load project from path:', error);
+    return null;
+  }
+});
+
 // Menu item references for dynamic enable/disable
 let saveMenuItem: Electron.MenuItem | null = null;
 let saveAsMenuItem: Electron.MenuItem | null = null;
@@ -465,13 +581,18 @@ function createMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Check for Updates...',
+          click: () => checkForUpdates(),
+        },
+        { type: 'separator' },
+        {
           label: 'About Follicle Labeller',
           click: () => {
             if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
                 title: 'About Follicle Labeller',
-                message: 'Follicle Labeller v1.0.0',
+                message: `Follicle Labeller v${app.getVersion()}`,
                 detail: 'Medical image annotation tool for follicle labeling.',
               });
             }
@@ -490,10 +611,86 @@ function createMenu(): void {
   closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
+// Show unsaved changes dialog
+// Returns: 'save' | 'discard' | 'cancel'
+ipcMain.handle('dialog:unsavedChanges', async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return 'discard';
+
+  const result = await dialog.showMessageBox(window, {
+    type: 'warning',
+    title: 'Unsaved Changes',
+    message: 'You have unsaved changes. Do you want to save before closing?',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+
+  switch (result.response) {
+    case 0: return 'save';
+    case 1: return 'discard';
+    default: return 'cancel';
+  }
+});
+
+// Handle file open from command line (Windows/Linux)
+function getFileFromArgs(args: string[]): string | null {
+  // Skip the first arg (executable path) and look for .fol files
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg && arg.endsWith('.fol') && fs.existsSync(arg)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+// macOS: Handle file open before app is ready
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (filePath.endsWith('.fol')) {
+    if (mainWindow) {
+      // App is already running, send to renderer
+      mainWindow.webContents.send('file:open', filePath);
+    } else {
+      // App is starting, store for later
+      fileToOpen = filePath;
+    }
+  }
+});
+
+// IPC handler for renderer to request file to open on startup
+ipcMain.handle('app:getFileToOpen', () => {
+  const file = fileToOpen;
+  fileToOpen = null; // Clear after returning
+  return file;
+});
+
 // App lifecycle
 app.whenReady().then(() => {
+  // Check for file in command line args (Windows/Linux)
+  if (process.platform !== 'darwin') {
+    fileToOpen = getFileFromArgs(process.argv);
+  }
+
   createWindow();
   createMenu();
+
+  // Initialize auto-updater (only in production)
+  if (app.isPackaged && mainWindow) {
+    initUpdater(mainWindow);
+  }
+
+  // Listen for system suspend (sleep/hibernate) to auto-save before sleep
+  powerMonitor.on('suspend', () => {
+    console.log('System suspending - triggering auto-save');
+    mainWindow?.webContents.send('system:suspend');
+  });
+
+  // Log when system resumes (for debugging)
+  powerMonitor.on('resume', () => {
+    console.log('System resumed from sleep');
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -501,6 +698,8 @@ app.whenReady().then(() => {
     }
   });
 });
+
+// Allow multiple instances - each double-clicked file opens a new window
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

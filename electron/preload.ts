@@ -53,6 +53,53 @@ const electronAPI = {
   } | null> =>
     ipcRenderer.invoke('dialog:loadProjectV2'),
 
+  // Get file to open on startup (from file association)
+  getFileToOpen: (): Promise<string | null> =>
+    ipcRenderer.invoke('app:getFileToOpen'),
+
+  // Load project from specific file path (for file association)
+  loadProjectFromPath: (filePath: string): Promise<{
+    version: '1.0' | '2.0';
+    filePath: string;
+    imageFileName?: string;
+    imageData?: ArrayBuffer;
+    jsonData?: string;
+    manifest?: string;
+    images?: Array<{ id: string; fileName: string; data: ArrayBuffer }>;
+    annotations?: string;
+  } | null> =>
+    ipcRenderer.invoke('file:loadProject', filePath),
+
+  // Listen for file open events (when app is already running)
+  onFileOpen: (callback: (filePath: string) => void) => {
+    const handler = (_event: IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on('file:open', handler);
+    return () => ipcRenderer.removeListener('file:open', handler);
+  },
+
+  // Unsaved changes dialog - returns 'save' | 'discard' | 'cancel'
+  showUnsavedChangesDialog: (): Promise<'save' | 'discard' | 'cancel'> =>
+    ipcRenderer.invoke('dialog:unsavedChanges'),
+
+  // Listen for unsaved changes check request from main
+  onCheckUnsavedChanges: (callback: () => void) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('app:checkUnsavedChanges', handler);
+    return () => ipcRenderer.removeListener('app:checkUnsavedChanges', handler);
+  },
+
+  // Confirm close to main process
+  confirmClose: (canClose: boolean): void => {
+    ipcRenderer.send('app:confirmClose', canClose);
+  },
+
+  // Update download progress listener (for optional custom UI)
+  onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => {
+    const handler = (_event: IpcRendererEvent, progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => callback(progress);
+    ipcRenderer.on('update:downloadProgress', handler);
+    return () => ipcRenderer.removeListener('update:downloadProgress', handler);
+  },
+
   // Menu event listeners (return cleanup function)
   onMenuOpenImage: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
@@ -123,6 +170,13 @@ const electronAPI = {
     const handler = (_event: IpcRendererEvent) => callback();
     ipcRenderer.on('menu:showHelp', handler);
     return () => ipcRenderer.removeListener('menu:showHelp', handler);
+  },
+
+  // System power events - triggered before sleep/hibernate
+  onSystemSuspend: (callback: MenuCallback) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('system:suspend', handler);
+    return () => ipcRenderer.removeListener('system:suspend', handler);
   },
 };
 

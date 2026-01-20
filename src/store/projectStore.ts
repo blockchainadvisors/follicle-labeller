@@ -7,6 +7,7 @@ interface ProjectState {
   imageOrder: ImageId[];  // Order for explorer display
   activeImageId: ImageId | null;
   currentProjectPath: string | null;  // Path to the currently loaded/saved project file
+  isDirty: boolean;  // Track unsaved changes
 
   // Actions
   addImage: (image: ProjectImage) => void;
@@ -15,6 +16,8 @@ interface ProjectState {
   setImageViewport: (imageId: ImageId, viewport: Partial<Viewport>) => void;
   reorderImages: (newOrder: ImageId[]) => void;
   setCurrentProjectPath: (path: string | null) => void;
+  setDirty: (dirty: boolean) => void;
+  markClean: () => void;
   clearProject: () => void;
 
   // Viewport actions for active image
@@ -36,6 +39,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   imageOrder: [],
   activeImageId: null,
   currentProjectPath: null,
+  isDirty: false,
 
   addImage: (image) => {
     set(state => {
@@ -50,6 +54,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         images: newImages,
         imageOrder: newOrder,
         activeImageId: newActiveId,
+        isDirty: true,
       };
     });
   },
@@ -87,6 +92,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         images: newImages,
         imageOrder: newOrder,
         activeImageId: newActiveId,
+        isDirty: true,
       };
     });
   },
@@ -127,6 +133,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ currentProjectPath: path });
   },
 
+  setDirty: (dirty) => {
+    set({ isDirty: dirty });
+  },
+
+  markClean: () => {
+    set({ isDirty: false });
+  },
+
   clearProject: () => {
     // Close all bitmaps and revoke URLs
     const state = get();
@@ -144,6 +158,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       imageOrder: [],
       activeImageId: null,
       currentProjectPath: null,
+      isDirty: false,
     });
   },
 

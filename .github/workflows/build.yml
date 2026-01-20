@@ -82,6 +82,8 @@ jobs:
           path: |
             release/*.exe
             release/*.msi
+            release/*.yml
+            release/*.yaml
           if-no-files-found: ignore
 
       - name: Upload macOS artifacts
@@ -92,6 +94,8 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/*.yml
+            release/*.yaml
           if-no-files-found: ignore
 
   release:

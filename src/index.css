@@ -423,6 +423,30 @@ body {
   color: var(--text-primary);
 }
 
+/* Multi-selection view */
+.property-panel.multi-selection {
+  display: block;
+}
+
+.selection-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.selection-breakdown span {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.color-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;

@@ -10,6 +10,20 @@
     "dist/**/*",
     "dist-electron/**/*"
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "blockchainadvisors",
+    "repo": "follicle-labeller"
+  },
+  "fileAssociations": [
+    {
+      "ext": "fol",
+      "name": "Follicle Labeller Project",
+      "description": "Follicle Labeller Project File",
+      "mimeType": "application/x-follicle-labeller",
+      "role": "Editor"
+    }
+  ],
   "win": {
     "target": ["nsis"],
     "icon": "public/icon.ico"

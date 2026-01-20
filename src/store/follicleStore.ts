@@ -5,7 +5,7 @@ import { generateId } from '../utils/id-generator';
 
 interface FollicleState {
   follicles: Follicle[];
-  selectedId: string | null;
+  selectedIds: Set<string>;
 
   // Actions (with imageId for multi-image support)
   addCircle: (imageId: ImageId, center: Point, radius: number) => string;
@@ -13,8 +13,19 @@ interface FollicleState {
   addLinear: (imageId: ImageId, startPoint: Point, endPoint: Point, halfWidth: number) => string;
   updateFollicle: (id: string, updates: Partial<Follicle>) => void;
   deleteFollicle: (id: string) => void;
-  selectFollicle: (id: string | null) => void;
+
+  // Selection actions
+  selectFollicle: (id: string | null) => void;  // Clear and select single (backward compat)
+  addToSelection: (id: string) => void;         // Add to current selection
+  removeFromSelection: (id: string) => void;    // Remove from selection
+  toggleSelection: (id: string) => void;        // Toggle for Ctrl+click
+  selectMultiple: (ids: string[]) => void;      // Select multiple at once (for marquee/lasso)
+  clearSelection: () => void;                   // Deselect all
+  selectAll: (imageId: ImageId) => void;        // Select all on current image
+
   moveAnnotation: (id: string, deltaX: number, deltaY: number) => void;
+  moveSelected: (deltaX: number, deltaY: number) => void;  // Move all selected
+  deleteSelected: () => void;                   // Delete all selected
   resizeCircle: (id: string, newRadius: number) => void;
   resizeRectangle: (id: string, x: number, y: number, width: number, height: number) => void;
   resizeLinear: (id: string, startPoint: Point, endPoint: Point, halfWidth: number) => void;
@@ -27,7 +38,8 @@ interface FollicleState {
   deleteFolliclesForImage: (imageId: ImageId) => void;
 
   // Selectors
-  getSelected: () => Follicle | null;
+  getSelected: () => Follicle | null;           // Returns first selected (backward compat)
+  getSelectedFollicles: () => Follicle[];       // Returns all selected
   getFolliclesForImage: (imageId: ImageId) => Follicle[];
 }
 
@@ -44,7 +56,7 @@ export const useFollicleStore = create<FollicleState>()(
   temporal(
     (set, get) => ({
       follicles: [],
-      selectedId: null,
+      selectedIds: new Set<string>(),
 
       addCircle: (imageId, center, radius) => {
         const id = generateId();
@@ -63,7 +75,7 @@ export const useFollicleStore = create<FollicleState>()(
 
         set(state => ({
           follicles: [...state.follicles, newCircle],
-          selectedId: id,
+          selectedIds: new Set([id]),
         }));
 
         return id;
@@ -88,7 +100,7 @@ export const useFollicleStore = create<FollicleState>()(
 
         set(state => ({
           follicles: [...state.follicles, newRect],
-          selectedId: id,
+          selectedIds: new Set([id]),
         }));
 
         return id;
@@ -112,7 +124,7 @@ export const useFollicleStore = create<FollicleState>()(
 
         set(state => ({
           follicles: [...state.follicles, newLinear],
-          selectedId: id,
+          selectedIds: new Set([id]),
         }));
 
         return id;
@@ -129,14 +141,62 @@ export const useFollicleStore = create<FollicleState>()(
       },
 
       deleteFollicle: (id) => {
-        set(state => ({
-          follicles: state.follicles.filter(f => f.id !== id),
-          selectedId: state.selectedId === id ? null : state.selectedId,
-        }));
+        set(state => {
+          const newSelectedIds = new Set(state.selectedIds);
+          newSelectedIds.delete(id);
+          return {
+            follicles: state.follicles.filter(f => f.id !== id),
+            selectedIds: newSelectedIds,
+          };
+        });
       },
 
+      // Selection actions
       selectFollicle: (id) => {
-        set({ selectedId: id });
+        set({ selectedIds: id ? new Set([id]) : new Set() });
+      },
+
+      addToSelection: (id) => {
+        set(state => {
+          const newSelectedIds = new Set(state.selectedIds);
+          newSelectedIds.add(id);
+          return { selectedIds: newSelectedIds };
+        });
+      },
+
+      removeFromSelection: (id) => {
+        set(state => {
+          const newSelectedIds = new Set(state.selectedIds);
+          newSelectedIds.delete(id);
+          return { selectedIds: newSelectedIds };
+        });
+      },
+
+      toggleSelection: (id) => {
+        set(state => {
+          const newSelectedIds = new Set(state.selectedIds);
+          if (newSelectedIds.has(id)) {
+            newSelectedIds.delete(id);
+          } else {
+            newSelectedIds.add(id);
+          }
+          return { selectedIds: newSelectedIds };
+        });
+      },
+
+      selectMultiple: (ids) => {
+        set({ selectedIds: new Set(ids) });
+      },
+
+      clearSelection: () => {
+        set({ selectedIds: new Set() });
+      },
+
+      selectAll: (imageId) => {
+        const ids = get().follicles
+          .filter(f => f.imageId === imageId)
+          .map(f => f.id);
+        set({ selectedIds: new Set(ids) });
       },
 
       moveAnnotation: (id, deltaX, deltaY) => {
@@ -169,6 +229,46 @@ export const useFollicleStore = create<FollicleState>()(
         }
       },
 
+      moveSelected: (deltaX, deltaY) => {
+        const { selectedIds, follicles, updateFollicle } = get();
+        for (const id of selectedIds) {
+          const follicle = follicles.find(f => f.id === id);
+          if (!follicle) continue;
+
+          if (isCircle(follicle)) {
+            updateFollicle(id, {
+              center: {
+                x: follicle.center.x + deltaX,
+                y: follicle.center.y + deltaY,
+              },
+            } as Partial<CircleAnnotation>);
+          } else if (isRectangle(follicle)) {
+            updateFollicle(id, {
+              x: follicle.x + deltaX,
+              y: follicle.y + deltaY,
+            } as Partial<RectangleAnnotation>);
+          } else if (isLinear(follicle)) {
+            updateFollicle(id, {
+              startPoint: {
+                x: follicle.startPoint.x + deltaX,
+                y: follicle.startPoint.y + deltaY,
+              },
+              endPoint: {
+                x: follicle.endPoint.x + deltaX,
+                y: follicle.endPoint.y + deltaY,
+              },
+            } as Partial<LinearAnnotation>);
+          }
+        }
+      },
+
+      deleteSelected: () => {
+        set(state => ({
+          follicles: state.follicles.filter(f => !state.selectedIds.has(f.id)),
+          selectedIds: new Set(),
+        }));
+      },
+
       resizeCircle: (id, newRadius) => {
         get().updateFollicle(id, { radius: Math.max(newRadius, 1) } as Partial<CircleAnnotation>);
       },
@@ -199,29 +299,42 @@ export const useFollicleStore = create<FollicleState>()(
       },
 
       clearAll: () => {
-        set({ follicles: [], selectedId: null });
+        set({ follicles: [], selectedIds: new Set() });
       },
 
       importFollicles: (follicles) => {
         colorIndex = follicles.length;
-        set({ follicles, selectedId: null });
+        set({ follicles, selectedIds: new Set() });
       },
 
       deleteFolliclesForImage: (imageId) => {
         set(state => {
           const remainingFollicles = state.follicles.filter(f => f.imageId !== imageId);
-          // Deselect if selected annotation was on removed image
-          const selectedStillExists = remainingFollicles.some(f => f.id === state.selectedId);
+          // Remove any selected IDs that were on the removed image
+          const removedIds = state.follicles
+            .filter(f => f.imageId === imageId)
+            .map(f => f.id);
+          const newSelectedIds = new Set(state.selectedIds);
+          for (const id of removedIds) {
+            newSelectedIds.delete(id);
+          }
           return {
             follicles: remainingFollicles,
-            selectedId: selectedStillExists ? state.selectedId : null,
+            selectedIds: newSelectedIds,
           };
         });
       },
 
       getSelected: () => {
-        const { follicles, selectedId } = get();
-        return follicles.find(f => f.id === selectedId) || null;
+        const { follicles, selectedIds } = get();
+        // Return first selected for backward compatibility
+        const firstId = selectedIds.values().next().value;
+        return follicles.find(f => f.id === firstId) || null;
+      },
+
+      getSelectedFollicles: () => {
+        const { follicles, selectedIds } = get();
+        return follicles.filter(f => selectedIds.has(f.id));
       },
 
       getFolliclesForImage: (imageId) => {

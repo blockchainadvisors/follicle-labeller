@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { InteractionMode, ShapeType } from '../types';
+import { InteractionMode, ShapeType, SelectionToolType } from '../types';
 
 // Canvas store now only manages UI state
 // Image/viewport state has moved to projectStore for multi-image support
@@ -7,6 +7,9 @@ interface CanvasState {
   // Interaction mode
   mode: InteractionMode;
   currentShapeType: ShapeType;
+
+  // Selection tool type (click, marquee, lasso)
+  selectionToolType: SelectionToolType;
 
   // Display options
   showLabels: boolean;
@@ -18,6 +21,7 @@ interface CanvasState {
   // Actions
   setMode: (mode: InteractionMode) => void;
   setShapeType: (shapeType: ShapeType) => void;
+  setSelectionToolType: (type: SelectionToolType) => void;
   toggleLabels: () => void;
   toggleShapes: () => void;
   toggleHelp: () => void;
@@ -26,6 +30,7 @@ interface CanvasState {
 export const useCanvasStore = create<CanvasState>((set) => ({
   mode: 'create',
   currentShapeType: 'circle',
+  selectionToolType: 'marquee',
   showLabels: true,
   showShapes: true,
   showHelp: false,
@@ -36,6 +41,10 @@ export const useCanvasStore = create<CanvasState>((set) => ({
 
   setShapeType: (shapeType) => {
     set({ currentShapeType: shapeType });
+  },
+
+  setSelectionToolType: (type) => {
+    set({ selectionToolType: type });
   },
 
   toggleLabels: () => {

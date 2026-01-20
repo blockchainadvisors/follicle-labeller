@@ -195,28 +195,12 @@ The packaged application will be available in the `release` directory.
 
 ## File Format
 
-### .fol Archive Structure
-The `.fol` file is a ZIP archive containing:
-- `image.<ext>` - The original image file
-- `annotations.json` - Serialized annotation data
+The `.fol` file is a ZIP archive (V2.0) containing:
+- `manifest.json` - Project metadata and image list
+- `annotations.json` - All shape annotations
+- `images/` - Folder with image files
 
-### Annotation JSON Schema
-```json
-{
-  "id": "uuid",
-  "type": "circle" | "rectangle" | "linear",
-  "label": "string",
-  "notes": "string",
-  "color": "#hexcolor",
-  "x": "number (center x)",
-  "y": "number (center y)",
-  "radius": "number (circle only)",
-  "width": "number (rectangle/linear)",
-  "height": "number (rectangle only)",
-  "halfWidth": "number (linear only)",
-  "angle": "number (linear only, radians)"
-}
-```
+For complete schema documentation, see **[FOL File Format Specification](docs/FOL-FILE-FORMAT.md)**.
 
 ## License
 
