@@ -35,8 +35,7 @@
     "artifactName": "${name}-${version}-windows-setup.${ext}"
   },
   "mac": {
-    "target": ["dmg"],
-    "icon": "public/icon.icns"
+    "target": ["dmg"]
   },
   "dmg": {
     "artifactName": "${name}-${version}-macos.${ext}"
