@@ -9,9 +9,45 @@ import {
   AnnotationsFileV2,
   AnnotationExportV2,
   isCircle,
-  isRectangle
+  isRectangle,
+  isLinear
 } from '../types';
 import { generateImageId } from '../store/projectStore';
+
+/**
+ * Enhanced annotation export with additional fields for ML training.
+ */
+export interface EnhancedAnnotationExport {
+  id: string;
+  imageId: string;
+  shape: 'circle' | 'rectangle' | 'linear';
+  label: string;
+  notes: string;
+  color: string;
+  // Bounding box (all shapes)
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  // Center point (normalized 0-1)
+  x_center: number;
+  y_center: number;
+  // Additional metrics
+  area: number;
+  aspectRatio: number;
+  confidence: number;  // 1.0 for manual annotations
+  // Original shape-specific data preserved
+  originalData: {
+    centerX?: number;
+    centerY?: number;
+    radius?: number;
+    startX?: number;
+    startY?: number;
+    endX?: number;
+    endY?: number;
+    halfWidth?: number;
+  };
+}
 
 /**
  * Generate export JSON from follicles (annotations) - V1 format (legacy)
@@ -327,4 +363,275 @@ export async function parseImportV2(result: {
 
     return { loadedImages, loadedFollicles };
   }
+}
+
+// ============================================
+// Enhanced Export Functions for ML Training
+// ============================================
+
+/**
+ * Get bounding box for any annotation type.
+ */
+function getAnnotationBounds(f: Follicle): { x: number; y: number; width: number; height: number } {
+  if (isCircle(f)) {
+    const diameter = f.radius * 2;
+    return {
+      x: f.center.x - f.radius,
+      y: f.center.y - f.radius,
+      width: diameter,
+      height: diameter,
+    };
+  } else if (isRectangle(f)) {
+    return {
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      height: f.height,
+    };
+  } else if (isLinear(f)) {
+    // Compute axis-aligned bounding box for rotated rectangle
+    const dx = f.endPoint.x - f.startPoint.x;
+    const dy = f.endPoint.y - f.startPoint.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+
+    // Normal vector perpendicular to the line
+    const nx = -dy / length;
+    const ny = dx / length;
+
+    // Four corners of the rotated rectangle
+    const corners = [
+      { x: f.startPoint.x + nx * f.halfWidth, y: f.startPoint.y + ny * f.halfWidth },
+      { x: f.startPoint.x - nx * f.halfWidth, y: f.startPoint.y - ny * f.halfWidth },
+      { x: f.endPoint.x + nx * f.halfWidth, y: f.endPoint.y + ny * f.halfWidth },
+      { x: f.endPoint.x - nx * f.halfWidth, y: f.endPoint.y - ny * f.halfWidth },
+    ];
+
+    const xs = corners.map(c => c.x);
+    const ys = corners.map(c => c.y);
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+  }
+
+  return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+/**
+ * Generate enhanced JSON export with additional ML training fields.
+ */
+export function generateEnhancedExport(
+  follicles: Follicle[],
+  imageWidth: number,
+  imageHeight: number
+): EnhancedAnnotationExport[] {
+  return follicles.map(f => {
+    const bounds = getAnnotationBounds(f);
+
+    // Normalized center (0-1)
+    const centerX = bounds.x + bounds.width / 2;
+    const centerY = bounds.y + bounds.height / 2;
+
+    // Approximate area (bounding box area for simplicity)
+    const area = bounds.width * bounds.height;
+
+    // Build original shape data
+    let originalData: EnhancedAnnotationExport['originalData'] = {};
+
+    if (isCircle(f)) {
+      originalData = {
+        centerX: f.center.x,
+        centerY: f.center.y,
+        radius: f.radius,
+      };
+    } else if (isRectangle(f)) {
+      // Rectangle data is already in bounds
+    } else if (isLinear(f)) {
+      originalData = {
+        startX: f.startPoint.x,
+        startY: f.startPoint.y,
+        endX: f.endPoint.x,
+        endY: f.endPoint.y,
+        halfWidth: f.halfWidth,
+      };
+    }
+
+    return {
+      id: f.id,
+      imageId: f.imageId,
+      shape: f.shape,
+      label: f.label,
+      notes: f.notes,
+      color: f.color,
+      x: Math.round(bounds.x * 100) / 100,
+      y: Math.round(bounds.y * 100) / 100,
+      width: Math.round(bounds.width * 100) / 100,
+      height: Math.round(bounds.height * 100) / 100,
+      x_center: Math.round((centerX / imageWidth) * 100000) / 100000,
+      y_center: Math.round((centerY / imageHeight) * 100000) / 100000,
+      area: Math.round(area),
+      aspectRatio: Math.round((bounds.width / bounds.height) * 100) / 100,
+      confidence: 1.0,  // Manual annotations have full confidence
+      originalData,
+    };
+  });
+}
+
+/**
+ * Export annotations in YOLO format.
+ *
+ * YOLO format: <class_id> <x_center> <y_center> <width> <height>
+ * All values normalized to 0-1 relative to image dimensions.
+ *
+ * @param follicles - Array of annotations
+ * @param imageWidth - Image width in pixels
+ * @param imageHeight - Image height in pixels
+ * @param classId - Class ID for all annotations (default: 0 for single-class)
+ * @returns String in YOLO format (one line per annotation)
+ */
+export function exportToYOLO(
+  follicles: Follicle[],
+  imageWidth: number,
+  imageHeight: number,
+  classId: number = 0
+): string {
+  const lines: string[] = [];
+
+  for (const f of follicles) {
+    const bounds = getAnnotationBounds(f);
+
+    // Normalized center
+    const x_center = (bounds.x + bounds.width / 2) / imageWidth;
+    const y_center = (bounds.y + bounds.height / 2) / imageHeight;
+
+    // Normalized dimensions
+    const width = bounds.width / imageWidth;
+    const height = bounds.height / imageHeight;
+
+    // Format: class x_center y_center width height (6 decimal places)
+    lines.push(
+      `${classId} ${x_center.toFixed(6)} ${y_center.toFixed(6)} ${width.toFixed(6)} ${height.toFixed(6)}`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Export all images and annotations in YOLO format for training.
+ * Returns a structure ready for creating a YOLO dataset.
+ *
+ * @param images - Array of project images
+ * @param follicles - Array of all annotations
+ * @returns Object with image files and corresponding label files
+ */
+export function exportYOLODataset(
+  images: ProjectImage[],
+  follicles: Follicle[]
+): {
+  files: Array<{
+    imageName: string;
+    labelName: string;
+    labelContent: string;
+    imageData: ArrayBuffer;
+  }>;
+  dataYaml: string;
+} {
+  const files: Array<{
+    imageName: string;
+    labelName: string;
+    labelContent: string;
+    imageData: ArrayBuffer;
+  }> = [];
+
+  for (const image of images) {
+    const imageFollicles = follicles.filter(f => f.imageId === image.id);
+
+    // Generate base name (without extension)
+    const baseName = image.fileName.replace(/\.[^.]+$/, '');
+    const ext = image.fileName.split('.').pop() || 'jpg';
+
+    const labelContent = exportToYOLO(imageFollicles, image.width, image.height);
+
+    files.push({
+      imageName: `${baseName}.${ext}`,
+      labelName: `${baseName}.txt`,
+      labelContent,
+      imageData: image.imageData,
+    });
+  }
+
+  // Generate data.yaml for YOLO training
+  const dataYaml = `# YOLO Dataset Configuration
+# Generated by Follicle Labeller
+
+path: .
+train: images
+val: images
+
+# Classes
+nc: 1
+names:
+  0: follicle
+`;
+
+  return { files, dataYaml };
+}
+
+/**
+ * Export annotations as CSV for analysis.
+ */
+export function exportToCSV(
+  follicles: Follicle[],
+  imageWidth: number,
+  imageHeight: number
+): string {
+  const headers = [
+    'id',
+    'imageId',
+    'shape',
+    'label',
+    'x',
+    'y',
+    'width',
+    'height',
+    'x_center_norm',
+    'y_center_norm',
+    'area',
+    'aspect_ratio',
+  ];
+
+  const rows: string[] = [headers.join(',')];
+
+  for (const f of follicles) {
+    const bounds = getAnnotationBounds(f);
+    const centerX = bounds.x + bounds.width / 2;
+    const centerY = bounds.y + bounds.height / 2;
+    const area = bounds.width * bounds.height;
+
+    rows.push([
+      f.id,
+      f.imageId,
+      f.shape,
+      `"${f.label.replace(/"/g, '""')}"`,  // Escape quotes
+      bounds.x.toFixed(2),
+      bounds.y.toFixed(2),
+      bounds.width.toFixed(2),
+      bounds.height.toFixed(2),
+      (centerX / imageWidth).toFixed(6),
+      (centerY / imageHeight).toFixed(6),
+      Math.round(area).toString(),
+      (bounds.width / bounds.height).toFixed(2),
+    ].join(','));
+  }
+
+  return rows.join('\n');
 }

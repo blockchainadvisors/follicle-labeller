@@ -186,6 +186,29 @@ const electronAPI = {
     ipcRenderer.on('system:suspend', handler);
     return () => ipcRenderer.removeListener('system:suspend', handler);
   },
+
+  // SAM 2 Server API
+  sam: {
+    // Start the SAM server with optional model size
+    startServer: (modelSize?: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('sam:startServer', modelSize),
+
+    // Stop the SAM server
+    stopServer: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sam:stopServer'),
+
+    // Check if SAM server is available
+    isAvailable: (): Promise<boolean> =>
+      ipcRenderer.invoke('sam:isAvailable'),
+
+    // Check if Python is installed
+    checkPython: (): Promise<{ available: boolean; version?: string; error?: string }> =>
+      ipcRenderer.invoke('sam:checkPython'),
+
+    // Get SAM server info
+    getServerInfo: (): Promise<{ port: number; running: boolean; scriptPath: string }> =>
+      ipcRenderer.invoke('sam:getServerInfo'),
+  },
 };
 
 // Expose the API to the renderer process

@@ -2,6 +2,11 @@
   "name": "follicle-labeller",
   "version": "1.2.1",
   "description": "Medical image follicle annotation tool",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blockchainadvisors/follicle-labeller.git"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",

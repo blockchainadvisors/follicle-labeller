@@ -4,6 +4,75 @@ export interface Point {
   y: number;
 }
 
+// BLOB Detection types
+export interface BlobDetectionOptions {
+  minWidth: number;       // Minimum blob width (default: 10)
+  maxWidth: number;       // Maximum blob width (default: 200)
+  minHeight: number;      // Minimum blob height (default: 10)
+  maxHeight: number;      // Maximum blob height (default: 200)
+  threshold?: number;     // Manual threshold (auto if not set - uses Otsu's method)
+  darkBlobs: boolean;     // true = detect dark blobs on light bg
+  useGPU: boolean;        // Enable WebGL acceleration
+  workerCount?: number;   // Number of Web Workers (default: navigator.hardwareConcurrency)
+  // SAHI-style tiling options
+  tileSize?: number;      // Fixed tile size in pixels (default: 512, 0 = auto based on workerCount)
+  tileOverlap?: number;   // Overlap ratio between tiles (default: 0.2 = 20%)
+  // CLAHE preprocessing options
+  useCLAHE?: boolean;     // Enable CLAHE preprocessing (default: false)
+  claheClipLimit?: number; // CLAHE clip limit (default: 2.0)
+  claheTileSize?: number; // CLAHE tile grid size (default: 8)
+  // Soft-NMS options for merging overlapping detections
+  useSoftNMS?: boolean;   // Use Soft-NMS instead of Union-Find (default: true)
+  softNMSSigma?: number;  // Soft-NMS Gaussian decay sigma (default: 0.5)
+  softNMSThreshold?: number; // Soft-NMS minimum score threshold (default: 0.1)
+}
+
+export interface DetectedBlob {
+  x: number;              // Top-left X (image coords)
+  y: number;              // Top-left Y (image coords)
+  width: number;          // Bounding box width
+  height: number;         // Bounding box height
+  area: number;           // Blob area in pixels
+  aspectRatio: number;    // width/height ratio
+  confidence: number;     // Detection confidence score (0-1)
+}
+
+// Message types for Web Worker communication
+export interface BlobWorkerMessage {
+  imageData: ImageData;
+  tileX: number;
+  tileY: number;
+  tileWidth: number;
+  tileHeight: number;
+  options: BlobDetectionOptions;
+}
+
+export interface BlobWorkerResult {
+  blobs: DetectedBlob[];
+  tileX: number;
+  tileY: number;
+}
+
+// Learned detection parameters from example annotations
+export interface LearnedDetectionParams {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  minAspectRatio: number;
+  maxAspectRatio: number;
+  meanIntensity?: number;
+  exampleCount: number;
+}
+
+// Effective size range after applying tolerance
+export interface EffectiveSizeRange {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+}
+
 // Image identifier type
 export type ImageId = string;
 
@@ -258,6 +327,14 @@ declare global {
       onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => () => void;
       // System power events - triggered before sleep/hibernate
       onSystemSuspend: (callback: () => void) => () => void;
+      // SAM 2 Server API
+      sam: {
+        startServer: (modelSize?: string) => Promise<{ success: boolean; error?: string }>;
+        stopServer: () => Promise<{ success: boolean }>;
+        isAvailable: () => Promise<boolean>;
+        checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
+      };
     };
   }
 }

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ImageId, ProjectImage, Viewport, Point } from '../types';
+import { useCanvasStore } from './canvasStore';
 
 interface ProjectState {
   // Multi-image state
@@ -31,7 +32,7 @@ interface ProjectState {
   getImageCount: () => number;
 }
 
-const ZOOM_MIN = 0.1;
+const ZOOM_MIN = 0.01;
 const ZOOM_MAX = 10;
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -99,6 +100,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setActiveImage: (imageId) => {
     set({ activeImageId: imageId });
+    // Reset to select mode when switching images
+    useCanvasStore.getState().setMode('select');
   },
 
   setImageViewport: (imageId, viewport) => {
