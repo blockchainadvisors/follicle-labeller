@@ -51,6 +51,16 @@ jobs:
           rm -rf release dist dist-electron
         shell: bash
 
+      - name: Pre-download Electron and fix icon conflict
+        if: matrix.platform == 'mac'
+        run: |
+          # Download electron first
+          npx electron --version
+          # Find and remove the existing icon.icns from cached Electron to allow hard-linking
+          find ~/.cache/electron -name "icon.icns" -delete 2>/dev/null || true
+          find ~/Library/Caches/electron -name "icon.icns" -delete 2>/dev/null || true
+        shell: bash
+
       - name: Build application
         run: npm run electron:build:${{ matrix.platform }}
         env:
