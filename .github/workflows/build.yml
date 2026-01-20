@@ -51,15 +51,22 @@ jobs:
           rm -rf release dist dist-electron
         shell: bash
 
-      - name: Pre-download Electron and fix icon conflict
+      - name: Generate macOS icns
         if: matrix.platform == 'mac'
         run: |
-          # Download electron first
-          npx electron --version
-          # Find and remove the existing icon.icns from cached Electron to allow hard-linking
-          find ~/.cache/electron -name "icon.icns" -delete 2>/dev/null || true
-          find ~/Library/Caches/electron -name "icon.icns" -delete 2>/dev/null || true
-        shell: bash
+          mkdir -p public/icon.iconset
+          cp public/icon-16.png public/icon.iconset/icon_16x16.png
+          cp public/icon-32.png public/icon.iconset/icon_16x16@2x.png
+          cp public/icon-32.png public/icon.iconset/icon_32x32.png
+          cp public/icon-64.png public/icon.iconset/icon_32x32@2x.png
+          cp public/icon-128.png public/icon.iconset/icon_128x128.png
+          cp public/icon-256.png public/icon.iconset/icon_128x128@2x.png
+          cp public/icon-256.png public/icon.iconset/icon_256x256.png
+          cp public/icon-512.png public/icon.iconset/icon_256x256@2x.png
+          cp public/icon-512.png public/icon.iconset/icon_512x512.png
+          cp public/icon-1024.png public/icon.iconset/icon_512x512@2x.png
+          iconutil -c icns public/icon.iconset -o public/icon.icns
+          rm -rf public/icon.iconset
 
       - name: Build application
         run: npm run electron:build:${{ matrix.platform }}
