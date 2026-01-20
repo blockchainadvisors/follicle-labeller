@@ -22,7 +22,7 @@ import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
-import { extractAllFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
+import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
 import { ProjectImage } from '../../types';
 
 // Reusable icon button component
@@ -92,6 +92,7 @@ export const Toolbar: React.FC = () => {
   const viewport = activeImage?.viewport ?? { offsetX: 0, offsetY: 0, scale: 1 };
 
   const follicles = useFollicleStore(state => state.follicles);
+  const selectedIds = useFollicleStore(state => state.selectedIds);
   const importFollicles = useFollicleStore(state => state.importFollicles);
   const clearAll = useFollicleStore(state => state.clearAll);
 
@@ -296,19 +297,54 @@ export const Toolbar: React.FC = () => {
     if (images.size === 0 || follicles.length === 0) return;
 
     try {
-      const zipBlob = await extractAllFolliclesToZip(images, follicles);
+      // Calculate counts for dialog
+      const selectedCount = selectedIds.size;
+      const currentImageCount = activeImageId
+        ? follicles.filter(f => f.imageId === activeImageId).length
+        : 0;
+      const totalCount = follicles.length;
 
-      // Generate filename based on project or first image
+      // Generate base filename
       const baseName = currentProjectPath
         ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
         : activeImage?.fileName.replace(/\.[^/.]+$/, '') ?? 'follicles';
 
-      downloadBlob(zipBlob, `${baseName}_follicles.zip`);
+      let zipBlob: Blob;
+      let suffix: string;
+
+      // If there's a selection, show options dialog
+      if (selectedCount > 0) {
+        const choice = await window.electronAPI.showDownloadOptionsDialog(
+          selectedCount,
+          currentImageCount,
+          totalCount
+        );
+
+        if (choice === 'cancel') return;
+
+        if (choice === 'selected') {
+          zipBlob = await extractSelectedFolliclesToZip(images, follicles, selectedIds);
+          suffix = '_selected';
+        } else if (choice === 'currentImage' && activeImage) {
+          zipBlob = await extractImageFolliclesToZip(activeImage, follicles);
+          suffix = `_${activeImage.fileName.replace(/\.[^/.]+$/, '')}`;
+        } else {
+          // 'all'
+          zipBlob = await extractAllFolliclesToZip(images, follicles);
+          suffix = '_all';
+        }
+      } else {
+        // No selection - download all
+        zipBlob = await extractAllFolliclesToZip(images, follicles);
+        suffix = '_follicles';
+      }
+
+      downloadBlob(zipBlob, `${baseName}${suffix}.zip`);
     } catch (error) {
       console.error('Failed to extract follicles:', error);
       alert('Failed to extract follicle images. Please ensure there are annotations to extract.');
     }
-  }, [images, follicles, currentProjectPath, activeImage]);
+  }, [images, follicles, selectedIds, activeImageId, activeImage, currentProjectPath]);
 
   // Register menu event listeners
   useEffect(() => {

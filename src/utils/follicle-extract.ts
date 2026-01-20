@@ -82,7 +82,8 @@ export function getFollicleBoundingBox(follicle: Follicle): BoundingBox {
 
 /**
  * Extract a region from an image based on a bounding box.
- * Returns a Blob containing the extracted image as PNG.
+ * Returns a Blob containing the extracted image as PNG (lossless).
+ * Optimized to preserve maximum fidelity - no interpolation or smoothing.
  */
 export async function extractImageRegion(
   image: ProjectImage,
@@ -99,19 +100,26 @@ export async function extractImageRegion(
   canvas.width = width;
   canvas.height = height;
 
-  const ctx = canvas.getContext('2d');
+  // Get context with settings optimized for pixel-perfect extraction
+  const ctx = canvas.getContext('2d', {
+    alpha: true,
+    willReadFrequently: false,
+  });
   if (!ctx) {
     throw new Error('Failed to get canvas 2D context');
   }
 
-  // Draw the region from the source image
+  // Disable all image smoothing/interpolation for pixel-perfect extraction
+  ctx.imageSmoothingEnabled = false;
+
+  // Draw the region from the source image (1:1 pixel mapping, no scaling)
   ctx.drawImage(
     image.imageBitmap,
     x, y, width, height,  // Source rectangle
-    0, 0, width, height   // Destination rectangle
+    0, 0, width, height   // Destination rectangle (same size = no interpolation)
   );
 
-  // Convert to blob
+  // Convert to PNG blob (lossless format)
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
@@ -121,7 +129,7 @@ export async function extractImageRegion(
           reject(new Error('Failed to create image blob'));
         }
       },
-      'image/png'
+      'image/png'  // PNG is lossless - no quality loss
     );
   });
 }
@@ -166,6 +174,119 @@ export async function extractFolliclesToZip(
   }
 
   // Generate the ZIP file
+  return zip.generateAsync({ type: 'blob' });
+}
+
+/**
+ * Extract specific follicles (by ID) from their images and package into a ZIP file.
+ * Used for downloading only selected follicles.
+ */
+export async function extractSelectedFolliclesToZip(
+  images: Map<string, ProjectImage>,
+  follicles: Follicle[],
+  selectedIds: Set<string>
+): Promise<Blob> {
+  const zip = new JSZip();
+  let totalExtracted = 0;
+
+  // Filter to only selected follicles
+  const selectedFollicles = follicles.filter(f => selectedIds.has(f.id));
+
+  if (selectedFollicles.length === 0) {
+    throw new Error('No selected follicles to extract');
+  }
+
+  // Group selected follicles by image
+  const folliclesByImage = new Map<string, Follicle[]>();
+  for (const follicle of selectedFollicles) {
+    const existing = folliclesByImage.get(follicle.imageId) || [];
+    existing.push(follicle);
+    folliclesByImage.set(follicle.imageId, existing);
+  }
+
+  // If only one image, don't create subfolders
+  const singleImage = folliclesByImage.size === 1;
+
+  for (const [imageId, imageFollicles] of folliclesByImage) {
+    const image = images.get(imageId);
+    if (!image) continue;
+
+    // Create folder for this image (unless single image)
+    let targetFolder: JSZip = zip;
+    if (!singleImage) {
+      const folderName = image.fileName
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .substring(0, 50);
+      targetFolder = zip.folder(folderName) || zip;
+    }
+
+    // Extract each follicle
+    for (let i = 0; i < imageFollicles.length; i++) {
+      const follicle = imageFollicles[i];
+      const boundingBox = getFollicleBoundingBox(follicle);
+
+      try {
+        const blob = await extractImageRegion(image, boundingBox);
+
+        const sanitizedLabel = follicle.label
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .substring(0, 50);
+
+        const filename = `${String(i + 1).padStart(3, '0')}_${sanitizedLabel}.png`;
+
+        targetFolder.file(filename, blob);
+        totalExtracted++;
+      } catch (error) {
+        console.error(`Failed to extract follicle ${follicle.id}:`, error);
+      }
+    }
+  }
+
+  if (totalExtracted === 0) {
+    throw new Error('No follicles could be extracted');
+  }
+
+  return zip.generateAsync({ type: 'blob' });
+}
+
+/**
+ * Extract follicles from a single image and package them into a ZIP file.
+ * Used for downloading only current image follicles.
+ */
+export async function extractImageFolliclesToZip(
+  image: ProjectImage,
+  follicles: Follicle[]
+): Promise<Blob> {
+  const zip = new JSZip();
+
+  // Filter follicles for this image
+  const imageFollicles = follicles.filter(f => f.imageId === image.id);
+
+  if (imageFollicles.length === 0) {
+    throw new Error('No follicles to extract for this image');
+  }
+
+  // Extract each follicle (no subfolders for single image)
+  for (let i = 0; i < imageFollicles.length; i++) {
+    const follicle = imageFollicles[i];
+    const boundingBox = getFollicleBoundingBox(follicle);
+
+    try {
+      const blob = await extractImageRegion(image, boundingBox);
+
+      const sanitizedLabel = follicle.label
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .substring(0, 50);
+
+      const filename = `${String(i + 1).padStart(3, '0')}_${sanitizedLabel}.png`;
+
+      zip.file(filename, blob);
+    } catch (error) {
+      console.error(`Failed to extract follicle ${follicle.id}:`, error);
+    }
+  }
+
   return zip.generateAsync({ type: 'blob' });
 }
 

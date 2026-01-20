@@ -81,6 +81,14 @@ const electronAPI = {
   showUnsavedChangesDialog: (): Promise<'save' | 'discard' | 'cancel'> =>
     ipcRenderer.invoke('dialog:unsavedChanges'),
 
+  // Download options dialog - returns 'all' | 'currentImage' | 'selected' | 'cancel'
+  showDownloadOptionsDialog: (
+    selectedCount: number,
+    currentImageCount: number,
+    totalCount: number
+  ): Promise<'all' | 'currentImage' | 'selected' | 'cancel'> =>
+    ipcRenderer.invoke('dialog:downloadOptions', selectedCount, currentImageCount, totalCount),
+
   // Listen for unsaved changes check request from main
   onCheckUnsavedChanges: (callback: () => void) => {
     const handler = (_event: IpcRendererEvent) => callback();
