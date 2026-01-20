@@ -85,17 +85,30 @@ export interface ProjectImage {
 // Interaction modes
 export type InteractionMode = 'select' | 'create' | 'pan';
 
+// Selection tool types for multi-selection
+export type SelectionToolType = 'click' | 'marquee' | 'lasso';
+
+// Selection bounds for marquee selection
+export interface SelectionBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
 // Drag state during interactions
 export interface DragState {
   isDragging: boolean;
   startPoint: Point | null;
   currentPoint: Point | null;
-  dragType: 'create' | 'move' | 'resize' | 'pan' | null;
+  dragType: 'create' | 'move' | 'resize' | 'pan' | 'marquee' | 'lasso' | null;
   targetId: string | null;
   resizeHandle?: string;  // For rectangles: 'nw', 'ne', 'sw', 'se'; for linear: 'start', 'end', 'width'
   // Multi-phase creation for linear shapes
   createPhase?: 'line' | 'width';  // 'line' = defining centerline, 'width' = defining half-width
   lineEndPoint?: Point;  // Stored end point after first phase of linear creation
+  // Multi-selection lasso path tracking
+  lassoPoints?: Point[];
 }
 
 // JSON export schema
@@ -237,6 +250,8 @@ declare global {
       onFileOpen: (callback: (filePath: string) => void) => () => void;
       // Update progress listener (for optional custom UI)
       onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => () => void;
+      // System power events - triggered before sleep/hibernate
+      onSystemSuspend: (callback: () => void) => () => void;
     };
   }
 }

@@ -63,7 +63,7 @@ export class CanvasRenderer {
     canvasHeight: number,
     viewport: Viewport,
     follicles: Follicle[],
-    selectedId: string | null,
+    selectedIds: Set<string>,
     dragState: DragState,
     showLabels: boolean = true,
     showShapes: boolean = true,
@@ -80,14 +80,18 @@ export class CanvasRenderer {
       this.ctx.drawImage(this.image, 0, 0);
     }
 
+    // Determine if multi-selection (more than one selected)
+    const isMultiSelect = selectedIds.size > 1;
+
     // Draw all annotations
     for (const follicle of follicles) {
+      const isSelected = selectedIds.has(follicle.id);
       if (isCircle(follicle)) {
-        this.drawCircle(follicle, follicle.id === selectedId, viewport.scale, showLabels, showShapes);
+        this.drawCircle(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
       } else if (isRectangle(follicle)) {
-        this.drawRectangle(follicle, follicle.id === selectedId, viewport.scale, showLabels, showShapes);
+        this.drawRectangle(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
       } else if (isLinear(follicle)) {
-        this.drawLinear(follicle, follicle.id === selectedId, viewport.scale, showLabels, showShapes);
+        this.drawLinear(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
       }
     }
 
@@ -98,12 +102,21 @@ export class CanvasRenderer {
       this.drawDragPreview(dragState, viewport.scale, currentShapeType);
     }
 
+    // Draw selection preview (marquee or lasso)
+    if (dragState.dragType === 'marquee' && dragState.startPoint && dragState.currentPoint) {
+      this.drawMarqueePreview(dragState.startPoint, dragState.currentPoint, viewport.scale);
+    }
+    if (dragState.dragType === 'lasso' && dragState.lassoPoints && dragState.lassoPoints.length > 1) {
+      this.drawLassoPreview(dragState.lassoPoints, viewport.scale);
+    }
+
     this.ctx.restore();
   }
 
   private drawCircle(
     circle: CircleAnnotation,
     isSelected: boolean,
+    isMultiSelect: boolean,
     scale: number,
     showLabels: boolean,
     showShapes: boolean
@@ -111,19 +124,29 @@ export class CanvasRenderer {
     const { center, radius, color, label } = circle;
 
     if (showShapes) {
-      // Fill with semi-transparent color
+      // Fill with semi-transparent color (slightly more opaque when selected)
       this.ctx.beginPath();
       this.ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
-      this.ctx.fillStyle = this.hexToRgba(color, 0.25);
+      this.ctx.fillStyle = this.hexToRgba(color, isSelected ? 0.35 : 0.25);
       this.ctx.fill();
 
-      // Stroke
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
-      this.ctx.stroke();
+      // Stroke - different style based on selection state
+      if (isSelected && isMultiSelect) {
+        // Multi-selected: dashed blue border, no resize handles
+        this.ctx.strokeStyle = '#4A90D9';
+        this.ctx.lineWidth = 3 / scale;
+        this.ctx.setLineDash([6 / scale, 4 / scale]);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+      } else {
+        // Single selected or not selected: solid border
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
+        this.ctx.stroke();
+      }
 
-      // Selection indicator
-      if (isSelected) {
+      // Selection indicator (only for single selection)
+      if (isSelected && !isMultiSelect) {
         // Draw resize handle at right edge
         const handleRadius = 6 / scale;
         this.ctx.beginPath();
@@ -151,6 +174,7 @@ export class CanvasRenderer {
   private drawRectangle(
     rect: RectangleAnnotation,
     isSelected: boolean,
+    isMultiSelect: boolean,
     scale: number,
     showLabels: boolean,
     showShapes: boolean
@@ -158,17 +182,27 @@ export class CanvasRenderer {
     const { x, y, width, height, color, label } = rect;
 
     if (showShapes) {
-      // Fill with semi-transparent color
-      this.ctx.fillStyle = this.hexToRgba(color, 0.25);
+      // Fill with semi-transparent color (slightly more opaque when selected)
+      this.ctx.fillStyle = this.hexToRgba(color, isSelected ? 0.35 : 0.25);
       this.ctx.fillRect(x, y, width, height);
 
-      // Stroke
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
-      this.ctx.strokeRect(x, y, width, height);
+      // Stroke - different style based on selection state
+      if (isSelected && isMultiSelect) {
+        // Multi-selected: dashed blue border, no resize handles
+        this.ctx.strokeStyle = '#4A90D9';
+        this.ctx.lineWidth = 3 / scale;
+        this.ctx.setLineDash([6 / scale, 4 / scale]);
+        this.ctx.strokeRect(x, y, width, height);
+        this.ctx.setLineDash([]);
+      } else {
+        // Single selected or not selected: solid border
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
+        this.ctx.strokeRect(x, y, width, height);
+      }
 
-      // Selection indicator - corner handles
-      if (isSelected) {
+      // Selection indicator - corner handles (only for single selection)
+      if (isSelected && !isMultiSelect) {
         const handleRadius = 6 / scale;
         const corners = [
           { x: x, y: y },                    // top-left
@@ -204,6 +238,7 @@ export class CanvasRenderer {
   private drawLinear(
     linear: LinearAnnotation,
     isSelected: boolean,
+    isMultiSelect: boolean,
     scale: number,
     showLabels: boolean,
     showShapes: boolean
@@ -220,15 +255,27 @@ export class CanvasRenderer {
       this.ctx.lineTo(corners[3].x, corners[3].y);
       this.ctx.closePath();
 
-      this.ctx.fillStyle = this.hexToRgba(color, 0.25);
+      // Fill with semi-transparent color (slightly more opaque when selected)
+      this.ctx.fillStyle = this.hexToRgba(color, isSelected ? 0.35 : 0.25);
       this.ctx.fill();
 
-      this.ctx.strokeStyle = color;
-      this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
-      this.ctx.stroke();
+      // Stroke - different style based on selection state
+      if (isSelected && isMultiSelect) {
+        // Multi-selected: dashed blue border, no resize handles
+        this.ctx.strokeStyle = '#4A90D9';
+        this.ctx.lineWidth = 3 / scale;
+        this.ctx.setLineDash([6 / scale, 4 / scale]);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+      } else {
+        // Single selected or not selected: solid border
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
+        this.ctx.stroke();
+      }
 
-      // Draw centerline (dashed) when selected
-      if (isSelected) {
+      // Draw centerline (dashed) and handles when single-selected only
+      if (isSelected && !isMultiSelect) {
         this.ctx.beginPath();
         this.ctx.setLineDash([4 / scale, 4 / scale]);
         this.ctx.moveTo(startPoint.x, startPoint.y);
@@ -491,5 +538,48 @@ export class CanvasRenderer {
     const g = parseInt(hex.slice(3, 5), 16);
     const b = parseInt(hex.slice(5, 7), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private drawMarqueePreview(start: Point, current: Point, scale: number): void {
+    const x = Math.min(start.x, current.x);
+    const y = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
+
+    // Fill with light blue semi-transparent
+    this.ctx.fillStyle = 'rgba(74, 144, 217, 0.15)';
+    this.ctx.fillRect(x, y, width, height);
+
+    // Stroke with dashed blue border
+    this.ctx.strokeStyle = '#4A90D9';
+    this.ctx.lineWidth = 1.5 / scale;
+    this.ctx.setLineDash([6 / scale, 4 / scale]);
+    this.ctx.strokeRect(x, y, width, height);
+    this.ctx.setLineDash([]);
+  }
+
+  private drawLassoPreview(points: Point[], scale: number): void {
+    if (points.length < 2) return;
+
+    // Draw the lasso path
+    this.ctx.beginPath();
+    this.ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) {
+      this.ctx.lineTo(points[i].x, points[i].y);
+    }
+    // Close the path back to the start
+    this.ctx.lineTo(points[0].x, points[0].y);
+    this.ctx.closePath();
+
+    // Fill with light blue semi-transparent
+    this.ctx.fillStyle = 'rgba(74, 144, 217, 0.15)';
+    this.ctx.fill();
+
+    // Stroke with dashed blue border
+    this.ctx.strokeStyle = '#4A90D9';
+    this.ctx.lineWidth = 1.5 / scale;
+    this.ctx.setLineDash([6 / scale, 4 / scale]);
+    this.ctx.stroke();
+    this.ctx.setLineDash([]);
   }
 }
