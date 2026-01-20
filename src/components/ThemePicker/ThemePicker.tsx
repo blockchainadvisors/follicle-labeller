@@ -13,7 +13,6 @@ export const ThemePicker: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const mode = useThemeStore(state => state.mode);
   const accent = useThemeStore(state => state.accent);
   const background = useThemeStore(state => state.background);
   const setAccent = useThemeStore(state => state.setAccent);
