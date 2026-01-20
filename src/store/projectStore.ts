@@ -31,7 +31,7 @@ interface ProjectState {
   getImageCount: () => number;
 }
 
-const ZOOM_MIN = 0.1;
+const ZOOM_MIN = 0.01;
 const ZOOM_MAX = 10;
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
