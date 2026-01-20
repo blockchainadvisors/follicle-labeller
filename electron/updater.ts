@@ -11,6 +11,7 @@ autoUpdater.autoInstallOnAppQuit = false;
 let mainWindow: BrowserWindow | null = null;
 let isCheckingForUpdate = false;
 let updateAvailable = false;
+let isSilentCheck = false;  // For startup check - don't show "no updates" message
 
 export function initUpdater(window: BrowserWindow): void {
   mainWindow = window;
@@ -19,6 +20,7 @@ export function initUpdater(window: BrowserWindow): void {
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     isCheckingForUpdate = false;
     updateAvailable = true;
+    isSilentCheck = false;  // Always show update available dialog
 
     if (!mainWindow) return;
 
@@ -42,6 +44,12 @@ export function initUpdater(window: BrowserWindow): void {
   autoUpdater.on('update-not-available', () => {
     isCheckingForUpdate = false;
     updateAvailable = false;
+
+    // Skip dialog for silent startup check
+    if (isSilentCheck) {
+      isSilentCheck = false;
+      return;
+    }
 
     if (!mainWindow) return;
 
@@ -105,6 +113,12 @@ export function initUpdater(window: BrowserWindow): void {
 
     console.error('Update error:', error);
 
+    // Skip dialog for silent startup check
+    if (isSilentCheck) {
+      isSilentCheck = false;
+      return;
+    }
+
     if (!mainWindow) return;
 
     dialog.showMessageBox(mainWindow, {
@@ -120,6 +134,11 @@ export function initUpdater(window: BrowserWindow): void {
   autoUpdater.on('checking-for-update', () => {
     isCheckingForUpdate = true;
   });
+
+  // Check for updates on startup (silent - only notify if update available)
+  setTimeout(() => {
+    checkForUpdatesOnStartup();
+  }, 3000);  // Wait 3 seconds for app to fully load
 }
 
 export function checkForUpdates(): void {
@@ -128,8 +147,23 @@ export function checkForUpdates(): void {
     return;
   }
 
+  isSilentCheck = false;  // Manual check - show all dialogs
   autoUpdater.checkForUpdates().catch((error) => {
     console.error('Failed to check for updates:', error);
+  });
+}
+
+// Silent check on startup - only shows dialog if update is available
+function checkForUpdatesOnStartup(): void {
+  if (isCheckingForUpdate) {
+    return;
+  }
+
+  console.log('Checking for updates on startup...');
+  isSilentCheck = true;  // Don't show "no updates" or error dialogs
+  autoUpdater.checkForUpdates().catch((error) => {
+    console.error('Failed to check for updates on startup:', error);
+    isSilentCheck = false;
   });
 }
 
