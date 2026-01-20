@@ -46,6 +46,11 @@ jobs:
         env:
           ELECTRON_CACHE: ${{ runner.os == 'Windows' && '~/AppData/Local/electron/Cache' || '~/.cache/electron' }}
 
+      - name: Clean build directories
+        run: |
+          rm -rf release dist dist-electron
+        shell: bash
+
       - name: Build application
         run: npm run electron:build:${{ matrix.platform }}
         env:
