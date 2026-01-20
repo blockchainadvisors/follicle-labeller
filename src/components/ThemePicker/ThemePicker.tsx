@@ -1,6 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sun, Moon, Palette } from 'lucide-react';
-import { useThemeStore, accentColorOptions, AccentColor } from '../../store/themeStore';
+import {
+  useThemeStore,
+  accentColorOptions,
+  darkBackgroundOptions,
+  lightBackgroundOptions,
+  AccentColor,
+  BackgroundTheme
+} from '../../store/themeStore';
 
 export const ThemePicker: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -8,8 +15,9 @@ export const ThemePicker: React.FC = () => {
 
   const mode = useThemeStore(state => state.mode);
   const accent = useThemeStore(state => state.accent);
-  const toggleMode = useThemeStore(state => state.toggleMode);
+  const background = useThemeStore(state => state.background);
   const setAccent = useThemeStore(state => state.setAccent);
+  const setBackground = useThemeStore(state => state.setBackground);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -51,26 +59,44 @@ export const ThemePicker: React.FC = () => {
 
       {isOpen && (
         <div className="theme-dropdown">
-          {/* Mode toggle */}
+          {/* Dark background themes */}
           <div className="theme-section">
-            <span className="theme-section-label">Mode</span>
-            <button
-              className="theme-mode-toggle"
-              onClick={toggleMode}
-              aria-label={`Switch to ${mode === 'dark' ? 'light' : 'dark'} mode`}
-            >
-              {mode === 'dark' ? (
-                <>
-                  <Moon size={16} />
-                  <span>Dark</span>
-                </>
-              ) : (
-                <>
-                  <Sun size={16} />
-                  <span>Light</span>
-                </>
-              )}
-            </button>
+            <span className="theme-section-label">
+              <Moon size={12} /> Dark Themes
+            </span>
+            <div className="background-color-grid">
+              {darkBackgroundOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`background-color-btn ${background === option.value ? 'active' : ''}`}
+                  style={{ backgroundColor: option.color }}
+                  onClick={() => setBackground(option.value as BackgroundTheme)}
+                  title={option.label}
+                  aria-label={`${option.label} background theme`}
+                  aria-pressed={background === option.value}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Light background themes */}
+          <div className="theme-section">
+            <span className="theme-section-label">
+              <Sun size={12} /> Light Themes
+            </span>
+            <div className="background-color-grid">
+              {lightBackgroundOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`background-color-btn light ${background === option.value ? 'active' : ''}`}
+                  style={{ backgroundColor: option.color }}
+                  onClick={() => setBackground(option.value as BackgroundTheme)}
+                  title={option.label}
+                  aria-label={`${option.label} background theme`}
+                  aria-pressed={background === option.value}
+                />
+              ))}
+            </div>
           </div>
 
           {/* Accent color picker */}

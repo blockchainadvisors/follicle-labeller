@@ -54,7 +54,9 @@ export class CanvasRenderer {
   }
 
   clear(width: number, height: number): void {
-    this.ctx.fillStyle = '#1a1a2e';
+    // Read canvas background color from CSS variable (set by theme)
+    const bgCanvas = getComputedStyle(document.documentElement).getPropertyValue('--bg-canvas').trim() || '#1a1a2e';
+    this.ctx.fillStyle = bgCanvas;
     this.ctx.fillRect(0, 0, width, height);
   }
 

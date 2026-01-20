@@ -6,6 +6,7 @@
 }
 
 :root {
+  --bg-canvas: #0d0d1a;
   --bg-primary: #1a1a2e;
   --bg-secondary: #16213e;
   --bg-tertiary: #0f3460;
@@ -193,7 +194,7 @@ body {
 .canvas-container {
   flex: 1;
   overflow: hidden;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-canvas);
   position: relative;
 }
 
@@ -454,7 +455,7 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-primary);
+  background: var(--bg-canvas);
 }
 
 ::-webkit-scrollbar-thumb {
@@ -842,16 +843,6 @@ body {
   margin-bottom: 0;
 }
 
-.theme-section-label {
-  display: block;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 8px;
-}
-
 .theme-mode-toggle {
   display: flex;
   align-items: center;
@@ -898,4 +889,55 @@ body {
 .accent-color-btn.active {
   border-color: var(--text-primary);
   box-shadow: 0 0 0 2px var(--bg-secondary);
+}
+
+/* Background color grid */
+.background-color-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.background-color-btn {
+  width: 28px;
+  height: 28px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.background-color-btn:hover {
+  transform: scale(1.1);
+}
+
+.background-color-btn.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-secondary);
+}
+
+/* Light background buttons need darker border to be visible */
+.background-color-btn.light {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.background-color-btn.light.active {
+  border-color: var(--accent);
+}
+
+/* Theme section label with icon */
+.theme-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.theme-section-label svg {
+  opacity: 0.7;
 }

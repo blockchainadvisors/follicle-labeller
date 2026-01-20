@@ -3,6 +3,7 @@ import { ImagePlus } from 'lucide-react';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
+import { useThemeStore } from '../../store/themeStore';
 import { CanvasRenderer } from './CanvasRenderer';
 import { DragState, Point, Follicle, LinearAnnotation, ProjectImage, isCircle, isRectangle, isLinear } from '../../types';
 import {
@@ -188,6 +189,9 @@ export const ImageCanvas: React.FC = () => {
   const showLabels = useCanvasStore(state => state.showLabels);
   const showShapes = useCanvasStore(state => state.showShapes);
 
+  // Subscribe to theme changes to trigger canvas re-render
+  const themeBackground = useThemeStore(state => state.background);
+
   const temporalStore = useTemporalStore();
 
   // Resize canvas to fit container - use ResizeObserver to detect layout changes
@@ -274,7 +278,7 @@ export const ImageCanvas: React.FC = () => {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [viewport, follicles, selectedIds, dragState, canvasSize, showLabels, showShapes, currentShapeType]);
+  }, [viewport, follicles, selectedIds, dragState, canvasSize, showLabels, showShapes, currentShapeType, themeBackground]);
 
   // Get image coordinates from mouse event
   const getImagePoint = useCallback((e: React.MouseEvent): Point => {
