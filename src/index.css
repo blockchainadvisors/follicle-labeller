@@ -1062,3 +1062,93 @@ body {
 .animate-spin {
   animation: spin 1s linear infinite;
 }
+
+/* Theme Picker */
+.theme-picker {
+  position: relative;
+}
+
+.theme-picker .theme-toggle-btn {
+  /* Inherits icon-button styles from toolbar */
+}
+
+.theme-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 200px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  animation: dropdownFadeIn 0.15s ease;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.theme-section {
+  margin-bottom: 12px;
+}
+
+.theme-section:last-child {
+  margin-bottom: 0;
+}
+
+.theme-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.background-color-grid,
+.accent-color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+
+.background-color-btn,
+.accent-color-btn {
+  width: 24px;
+  height: 24px;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.background-color-btn:hover,
+.accent-color-btn:hover {
+  transform: scale(1.1);
+}
+
+.background-color-btn.active,
+.accent-color-btn.active {
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--bg-secondary);
+}
+
+.background-color-btn.light {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+.background-color-btn.light.active {
+  border-color: var(--bg-primary);
+}

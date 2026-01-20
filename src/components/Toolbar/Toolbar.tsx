@@ -831,7 +831,9 @@ export const Toolbar: React.FC = () => {
       <div className="toolbar-divider" />
 
       {/* Theme Picker */}
-      <ThemePicker />
+      <div className="toolbar-group" role="group" aria-label="Theme">
+        <ThemePicker />
+      </div>
 
       {/* Status display */}
       <div className="toolbar-spacer" />
