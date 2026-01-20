@@ -9,11 +9,12 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/generate-icons.js",
+    "version:sync": "node scripts/sync-version.js",
     "electron:dev": "vite",
-    "electron:build": "npm run build && electron-builder",
-    "electron:build:win": "npm run build && electron-builder --win",
-    "electron:build:mac": "npm run build && electron-builder --mac",
-    "electron:build:all": "npm run build && electron-builder --win --mac"
+    "electron:build": "npm run version:sync && npm run build && electron-builder",
+    "electron:build:win": "npm run version:sync && npm run build && electron-builder --win",
+    "electron:build:mac": "npm run version:sync && npm run build && electron-builder --mac",
+    "electron:build:all": "npm run version:sync && npm run build && electron-builder --win --mac"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
