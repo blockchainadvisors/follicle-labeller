@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions, powerMonitor } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import JSZip from 'jszip';
@@ -680,6 +680,17 @@ app.whenReady().then(() => {
   if (app.isPackaged && mainWindow) {
     initUpdater(mainWindow);
   }
+
+  // Listen for system suspend (sleep/hibernate) to auto-save before sleep
+  powerMonitor.on('suspend', () => {
+    console.log('System suspending - triggering auto-save');
+    mainWindow?.webContents.send('system:suspend');
+  });
+
+  // Log when system resumes (for debugging)
+  powerMonitor.on('resume', () => {
+    console.log('System resumed from sleep');
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

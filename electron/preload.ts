@@ -171,6 +171,13 @@ const electronAPI = {
     ipcRenderer.on('menu:showHelp', handler);
     return () => ipcRenderer.removeListener('menu:showHelp', handler);
   },
+
+  // System power events - triggered before sleep/hibernate
+  onSystemSuspend: (callback: MenuCallback) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('system:suspend', handler);
+    return () => ipcRenderer.removeListener('system:suspend', handler);
+  },
 };
 
 // Expose the API to the renderer process
