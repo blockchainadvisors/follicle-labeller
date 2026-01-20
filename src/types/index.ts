@@ -235,6 +235,12 @@ declare global {
       showUnsavedChangesDialog: () => Promise<'save' | 'discard' | 'cancel'>;
       onCheckUnsavedChanges: (callback: () => void) => () => void;
       confirmClose: (canClose: boolean) => void;
+      // Download options dialog
+      showDownloadOptionsDialog: (
+        selectedCount: number,
+        currentImageCount: number,
+        totalCount: number
+      ) => Promise<'all' | 'currentImage' | 'selected' | 'cancel'>;
       // File association handlers
       getFileToOpen: () => Promise<string | null>;
       loadProjectFromPath: (filePath: string) => Promise<{
