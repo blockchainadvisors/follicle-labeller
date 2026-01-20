@@ -1002,9 +1002,11 @@ export const ImageCanvas: React.FC = () => {
         style={{ cursor: hasImage ? getCursor() : 'pointer' }}
       />
       {!hasImage && (
-        <div className="canvas-empty-state" onClick={handleOpenImage}>
-          <ImagePlus size={64} strokeWidth={1.5} />
-          <p>Click to open an image</p>
+        <div className="canvas-empty-state">
+          <div className="canvas-empty-state-clickable" onClick={handleOpenImage}>
+            <ImagePlus size={64} strokeWidth={1.5} />
+            <p>Click to open an image</p>
+          </div>
           <span>or use File → Open Image (Ctrl+O)</span>
         </div>
       )}

@@ -17,7 +17,7 @@ export interface ThemeColors {
 }
 
 export type ThemeMode = 'dark' | 'light';
-export type AccentColor = 'teal' | 'blue' | 'purple' | 'orange' | 'pink' | 'red' | 'green' | 'yellow' | 'cyan' | 'indigo' | 'rose' | 'amber' | 'lime' | 'emerald' | 'sky' | 'violet' | 'fuchsia';
+export type AccentColor = 'teal' | 'blue' | 'purple' | 'orange' | 'pink' | 'red' | 'green' | 'yellow' | 'cyan' | 'indigo' | 'rose' | 'amber' | 'lime' | 'emerald' | 'sky' | 'violet' | 'fuchsia' | 'coral' | 'crimson' | 'sapphire' | 'forest' | 'plum' | 'gold';
 export type BackgroundTheme = 'midnight' | 'charcoal' | 'forest' | 'ocean' | 'slate' | 'clean' | 'warm' | 'cool';
 
 // Accent color definitions
@@ -39,6 +39,13 @@ const accentColors: Record<AccentColor, { accent: string; accentHover: string }>
   sky: { accent: '#0EA5E9', accentHover: '#0284C7' },
   violet: { accent: '#A855F7', accentHover: '#9333EA' },
   fuchsia: { accent: '#D946EF', accentHover: '#C026D3' },
+  // Darker colors that work well on light themes
+  coral: { accent: '#E85D4C', accentHover: '#D14836' },
+  crimson: { accent: '#DC143C', accentHover: '#B91030' },
+  sapphire: { accent: '#0F52BA', accentHover: '#0A3D8F' },
+  forest: { accent: '#228B22', accentHover: '#1A6B1A' },
+  plum: { accent: '#8E4585', accentHover: '#6E3467' },
+  gold: { accent: '#B8860B', accentHover: '#996F09' },
 };
 
 // Background theme definitions
@@ -292,18 +299,24 @@ export const accentColorOptions: { value: AccentColor; label: string; color: str
   { value: 'cyan', label: 'Cyan', color: accentColors.cyan.accent },
   { value: 'sky', label: 'Sky', color: accentColors.sky.accent },
   { value: 'blue', label: 'Blue', color: accentColors.blue.accent },
+  { value: 'sapphire', label: 'Sapphire', color: accentColors.sapphire.accent },
   { value: 'indigo', label: 'Indigo', color: accentColors.indigo.accent },
   { value: 'violet', label: 'Violet', color: accentColors.violet.accent },
   { value: 'purple', label: 'Purple', color: accentColors.purple.accent },
+  { value: 'plum', label: 'Plum', color: accentColors.plum.accent },
   { value: 'fuchsia', label: 'Fuchsia', color: accentColors.fuchsia.accent },
   { value: 'pink', label: 'Pink', color: accentColors.pink.accent },
   { value: 'rose', label: 'Rose', color: accentColors.rose.accent },
+  { value: 'crimson', label: 'Crimson', color: accentColors.crimson.accent },
   { value: 'red', label: 'Red', color: accentColors.red.accent },
+  { value: 'coral', label: 'Coral', color: accentColors.coral.accent },
   { value: 'orange', label: 'Orange', color: accentColors.orange.accent },
   { value: 'amber', label: 'Amber', color: accentColors.amber.accent },
+  { value: 'gold', label: 'Gold', color: accentColors.gold.accent },
   { value: 'yellow', label: 'Yellow', color: accentColors.yellow.accent },
   { value: 'lime', label: 'Lime', color: accentColors.lime.accent },
   { value: 'green', label: 'Green', color: accentColors.green.accent },
+  { value: 'forest', label: 'Forest', color: accentColors.forest.accent },
   { value: 'emerald', label: 'Emerald', color: accentColors.emerald.accent },
 ];
 

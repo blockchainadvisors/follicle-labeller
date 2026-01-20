@@ -20,6 +20,8 @@ import {
   Sparkles,
   Loader2,
   GraduationCap,
+  FolderOpen,
+  Save,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
@@ -650,13 +652,26 @@ export const Toolbar: React.FC = () => {
 
   return (
     <div className="toolbar">
-      {/* Add Image */}
-      <div className="toolbar-group" role="group" aria-label="Add image">
+      {/* File Operations */}
+      <div className="toolbar-group" role="group" aria-label="File operations">
         <IconButton
           icon={<ImagePlus size={18} />}
           tooltip="Add Image"
           shortcut="Ctrl+O"
           onClick={handleOpenImage}
+        />
+        <IconButton
+          icon={<FolderOpen size={18} />}
+          tooltip="Open Project"
+          shortcut="Ctrl+Shift+O"
+          onClick={handleLoad}
+        />
+        <IconButton
+          icon={<Save size={18} />}
+          tooltip="Save Project"
+          shortcut="Ctrl+S"
+          onClick={handleSave}
+          disabled={!isDirty || images.size === 0}
         />
       </div>
 
