@@ -5,6 +5,7 @@ import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useThemeStore } from '../../store/themeStore';
 import { CanvasRenderer } from './CanvasRenderer';
+import { HeatmapOverlay } from '../HeatmapOverlay/HeatmapOverlay';
 import { DragState, Point, Follicle, LinearAnnotation, RectangleAnnotation, ProjectImage, isCircle, isRectangle, isLinear } from '../../types';
 import {
   screenToImage,
@@ -1001,6 +1002,12 @@ export const ImageCanvas: React.FC = () => {
         onContextMenu={(e) => e.preventDefault()}
         style={{ cursor: hasImage ? getCursor() : 'pointer' }}
       />
+      {hasImage && (
+        <HeatmapOverlay
+          canvasWidth={canvasSize.width}
+          canvasHeight={canvasSize.height}
+        />
+      )}
       {!hasImage && (
         <div className="canvas-empty-state">
           <div className="canvas-empty-state-clickable" onClick={handleOpenImage}>

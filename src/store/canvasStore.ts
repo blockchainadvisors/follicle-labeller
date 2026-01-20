@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { InteractionMode, ShapeType, SelectionToolType } from '../types';
+import type { ColormapType, HeatmapOptions } from '../services/heatmapGenerator';
 
 // Canvas store now only manages UI state
 // Image/viewport state has moved to projectStore for multi-image support
@@ -18,6 +19,13 @@ interface CanvasState {
   // Help panel
   showHelp: boolean;
 
+  // Heatmap display options
+  showHeatmap: boolean;
+  heatmapOptions: HeatmapOptions;
+
+  // Statistics panel
+  showStatistics: boolean;
+
   // Actions
   setMode: (mode: InteractionMode) => void;
   setShapeType: (shapeType: ShapeType) => void;
@@ -25,6 +33,9 @@ interface CanvasState {
   toggleLabels: () => void;
   toggleShapes: () => void;
   toggleHelp: () => void;
+  toggleHeatmap: () => void;
+  setHeatmapOptions: (options: Partial<HeatmapOptions>) => void;
+  toggleStatistics: () => void;
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
@@ -34,6 +45,15 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   showLabels: true,
   showShapes: true,
   showHelp: false,
+  showHeatmap: false,
+  heatmapOptions: {
+    sigma: 30,
+    colormap: 'jet' as ColormapType,
+    alpha: 0.5,
+    maxValue: 0,
+    intensityScale: 1.0,
+  },
+  showStatistics: false,
 
   setMode: (mode) => {
     set({ mode });
@@ -57,5 +77,19 @@ export const useCanvasStore = create<CanvasState>((set) => ({
 
   toggleHelp: () => {
     set(state => ({ showHelp: !state.showHelp }));
+  },
+
+  toggleHeatmap: () => {
+    set(state => ({ showHeatmap: !state.showHeatmap }));
+  },
+
+  setHeatmapOptions: (options) => {
+    set(state => ({
+      heatmapOptions: { ...state.heatmapOptions, ...options },
+    }));
+  },
+
+  toggleStatistics: () => {
+    set(state => ({ showStatistics: !state.showStatistics }));
   },
 }));

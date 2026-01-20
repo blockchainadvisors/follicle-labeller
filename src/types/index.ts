@@ -14,6 +14,17 @@ export interface BlobDetectionOptions {
   darkBlobs: boolean;     // true = detect dark blobs on light bg
   useGPU: boolean;        // Enable WebGL acceleration
   workerCount?: number;   // Number of Web Workers (default: navigator.hardwareConcurrency)
+  // SAHI-style tiling options
+  tileSize?: number;      // Fixed tile size in pixels (default: 512, 0 = auto based on workerCount)
+  tileOverlap?: number;   // Overlap ratio between tiles (default: 0.2 = 20%)
+  // CLAHE preprocessing options
+  useCLAHE?: boolean;     // Enable CLAHE preprocessing (default: false)
+  claheClipLimit?: number; // CLAHE clip limit (default: 2.0)
+  claheTileSize?: number; // CLAHE tile grid size (default: 8)
+  // Soft-NMS options for merging overlapping detections
+  useSoftNMS?: boolean;   // Use Soft-NMS instead of Union-Find (default: true)
+  softNMSSigma?: number;  // Soft-NMS Gaussian decay sigma (default: 0.5)
+  softNMSThreshold?: number; // Soft-NMS minimum score threshold (default: 0.1)
 }
 
 export interface DetectedBlob {
@@ -23,6 +34,7 @@ export interface DetectedBlob {
   height: number;         // Bounding box height
   area: number;           // Blob area in pixels
   aspectRatio: number;    // width/height ratio
+  confidence: number;     // Detection confidence score (0-1)
 }
 
 // Message types for Web Worker communication
@@ -315,6 +327,14 @@ declare global {
       onUpdateDownloadProgress: (callback: (progress: { percent: number; transferred: number; total: number; bytesPerSecond: number }) => void) => () => void;
       // System power events - triggered before sleep/hibernate
       onSystemSuspend: (callback: () => void) => () => void;
+      // SAM 2 Server API
+      sam: {
+        startServer: (modelSize?: string) => Promise<{ success: boolean; error?: string }>;
+        stopServer: () => Promise<{ success: boolean }>;
+        isAvailable: () => Promise<boolean>;
+        checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
+      };
     };
   }
 }

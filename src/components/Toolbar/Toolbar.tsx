@@ -14,7 +14,6 @@ import {
   EyeOff,
   Tag,
   ImagePlus,
-  Download,
   BoxSelect,
   Lasso,
   Sparkles,
@@ -22,15 +21,20 @@ import {
   GraduationCap,
   FolderOpen,
   Save,
+  Flame,
+  BarChart3,
+  Settings,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
-import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
+import { generateExportV2, parseImportV2, exportYOLODataset, exportToCSV } from '../../utils/export-utils';
 import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
 import { detectBlobs } from '../../services/blobDetector';
 import { learnFromExamples, applyTolerance } from '../../services/parameterLearner';
 import { LearnedDetectionDialog } from '../LearnedDetectionDialog/LearnedDetectionDialog';
+import { DetectionSettingsDialog, DetectionSettings, DEFAULT_DETECTION_SETTINGS, settingsToOptions } from '../DetectionSettingsDialog/DetectionSettingsDialog';
+import { ExportMenu, ExportType } from '../ExportMenu/ExportMenu';
 import { ThemePicker } from '../ThemePicker/ThemePicker';
 import { ProjectImage, RectangleAnnotation, LearnedDetectionParams } from '../../types';
 import { generateId } from '../../utils/id-generator';
@@ -81,6 +85,10 @@ export const Toolbar: React.FC = () => {
   const setSelectionToolType = useCanvasStore(state => state.setSelectionToolType);
   const showHelp = useCanvasStore(state => state.showHelp);
   const toggleHelp = useCanvasStore(state => state.toggleHelp);
+  const showHeatmap = useCanvasStore(state => state.showHeatmap);
+  const toggleHeatmap = useCanvasStore(state => state.toggleHeatmap);
+  const showStatistics = useCanvasStore(state => state.showStatistics);
+  const toggleStatistics = useCanvasStore(state => state.toggleStatistics);
 
   // Project store for multi-image support
   const images = useProjectStore(state => state.images);
@@ -114,6 +122,10 @@ export const Toolbar: React.FC = () => {
   // State for learned detection dialog
   const [learnedParams, setLearnedParams] = useState<LearnedDetectionParams | null>(null);
   const [showLearnDialog, setShowLearnDialog] = useState(false);
+
+  // State for detection settings dialog
+  const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>(DEFAULT_DETECTION_SETTINGS);
+  const [showDetectionSettings, setShowDetectionSettings] = useState(false);
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -363,6 +375,101 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, selectedIds, activeImageId, activeImage, currentProjectPath]);
 
+  // Export to YOLO dataset format
+  const handleExportYOLO = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      const { files, dataYaml } = exportYOLODataset(
+        Array.from(images.values()),
+        follicles
+      );
+
+      // Create a ZIP file with YOLO dataset structure
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+
+      // Add data.yaml
+      zip.file('data.yaml', dataYaml);
+
+      // Add images and labels folders
+      const imagesFolder = zip.folder('images');
+      const labelsFolder = zip.folder('labels');
+
+      for (const file of files) {
+        imagesFolder?.file(file.imageName, file.imageData);
+        labelsFolder?.file(file.labelName, file.labelContent);
+      }
+
+      // Generate and download ZIP
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : 'yolo_dataset';
+      downloadBlob(zipBlob, `${baseName}_yolo.zip`);
+
+      console.log(`Exported YOLO dataset with ${files.length} images`);
+    } catch (error) {
+      console.error('Failed to export YOLO dataset:', error);
+      alert('Failed to export YOLO dataset. Please try again.');
+    }
+  }, [images, follicles, currentProjectPath]);
+
+  // Export to CSV format
+  const handleExportCSV = useCallback(() => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      // Combine CSV for all images (using first image dimensions as reference,
+      // normalized coordinates will still be correct per-annotation)
+      const allImages = Array.from(images.values());
+      let csvContent = '';
+      let isFirst = true;
+
+      for (const image of allImages) {
+        const imageFollicles = follicles.filter(f => f.imageId === image.id);
+        if (imageFollicles.length === 0) continue;
+
+        const csv = exportToCSV(imageFollicles, image.width, image.height);
+        if (isFirst) {
+          csvContent = csv;
+          isFirst = false;
+        } else {
+          // Skip header row for subsequent images
+          const lines = csv.split('\n');
+          csvContent += '\n' + lines.slice(1).join('\n');
+        }
+      }
+
+      // Create and download blob
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : 'annotations';
+      downloadBlob(blob, `${baseName}_annotations.csv`);
+
+      console.log(`Exported ${follicles.length} annotations to CSV`);
+    } catch (error) {
+      console.error('Failed to export CSV:', error);
+      alert('Failed to export CSV. Please try again.');
+    }
+  }, [images, follicles, currentProjectPath]);
+
+  // Handle export menu selection
+  const handleExport = useCallback((type: ExportType) => {
+    switch (type) {
+      case 'images':
+        handleDownloadFollicles();
+        break;
+      case 'yolo':
+        handleExportYOLO();
+        break;
+      case 'csv':
+        handleExportCSV();
+        break;
+    }
+  }, [handleDownloadFollicles, handleExportYOLO, handleExportCSV]);
+
   // Colors for auto-detected annotations (cycles through)
   const ANNOTATION_COLORS = [
     '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
@@ -377,16 +484,9 @@ export const Toolbar: React.FC = () => {
     setIsDetecting(true);
 
     try {
-      // Run detection with parallel processing
-      const blobs = await detectBlobs(activeImage.imageBitmap, {
-        minWidth: 10,
-        maxWidth: 200,
-        minHeight: 10,
-        maxHeight: 200,
-        darkBlobs: true,
-        useGPU: true,
-        workerCount: navigator.hardwareConcurrency || 4,
-      });
+      // Run detection with user-configured settings
+      const options = settingsToOptions(detectionSettings);
+      const blobs = await detectBlobs(activeImage.imageBitmap, options);
 
       if (blobs.length === 0) {
         console.log('No follicles detected');
@@ -424,7 +524,7 @@ export const Toolbar: React.FC = () => {
     } finally {
       setIsDetecting(false);
     }
-  }, [activeImage, activeImageId, isDetecting, follicles, importFollicles]);
+  }, [activeImage, activeImageId, isDetecting, follicles, importFollicles, detectionSettings]);
 
   // Learn from selected annotations
   const handleLearnFromSelection = useCallback(() => {
@@ -770,6 +870,12 @@ export const Toolbar: React.FC = () => {
           onClick={handleLearnFromSelection}
           disabled={!imageLoaded || selectedIds.size === 0 || isDetecting}
         />
+        <IconButton
+          icon={<Settings size={18} />}
+          tooltip="Detection Settings"
+          onClick={() => setShowDetectionSettings(true)}
+          disabled={!imageLoaded}
+        />
       </div>
 
       <div className="toolbar-divider" />
@@ -816,17 +922,32 @@ export const Toolbar: React.FC = () => {
           disabled={!showShapes}
           active={showLabels}
         />
+        <IconButton
+          icon={<Flame size={18} />}
+          tooltip="Toggle Heatmap"
+          shortcut="H"
+          onClick={toggleHeatmap}
+          disabled={!imageLoaded}
+          active={showHeatmap}
+        />
+        <IconButton
+          icon={<BarChart3 size={18} />}
+          tooltip="Toggle Statistics Panel"
+          shortcut="S"
+          onClick={toggleStatistics}
+          disabled={!imageLoaded}
+          active={showStatistics}
+        />
       </div>
 
       <div className="toolbar-divider" />
 
-      {/* Export follicle images */}
+      {/* Export options */}
       <div className="toolbar-group" role="group" aria-label="Export">
-        <IconButton
-          icon={<Download size={18} />}
-          tooltip="Download Follicle Images"
-          onClick={handleDownloadFollicles}
+        <ExportMenu
+          onExport={handleExport}
           disabled={!imageLoaded || follicles.length === 0}
+          hasSelection={selectedIds.size > 0}
         />
       </div>
 
@@ -873,6 +994,18 @@ export const Toolbar: React.FC = () => {
           params={learnedParams}
           onRun={handleRunLearnedDetection}
           onCancel={handleCancelLearnDialog}
+        />
+      )}
+
+      {/* Detection Settings Dialog */}
+      {showDetectionSettings && (
+        <DetectionSettingsDialog
+          settings={detectionSettings}
+          onSave={(settings) => {
+            setDetectionSettings(settings);
+            setShowDetectionSettings(false);
+          }}
+          onCancel={() => setShowDetectionSettings(false)}
         />
       )}
     </div>

@@ -257,6 +257,48 @@ function extractComponentStats(
 }
 
 /**
+ * Calculate confidence score for a blob based on size fit, aspect ratio, and density.
+ * Higher scores indicate more likely follicle detections.
+ */
+function calculateConfidence(
+  width: number,
+  height: number,
+  area: number,
+  aspectRatio: number,
+  options: BlobDetectionOptions
+): number {
+  const { minWidth, maxWidth, minHeight, maxHeight } = options;
+
+  // Size fit score (0-1): How well the blob fits in the size range
+  const widthRange = maxWidth - minWidth;
+  const heightRange = maxHeight - minHeight;
+  const widthMid = minWidth + widthRange / 2;
+  const heightMid = minHeight + heightRange / 2;
+
+  // Distance from center of range, normalized to 0-1
+  const widthDeviation = Math.abs(width - widthMid) / (widthRange / 2);
+  const heightDeviation = Math.abs(height - heightMid) / (heightRange / 2);
+
+  const widthScore = Math.max(0, 1 - Math.min(1, widthDeviation));
+  const heightScore = Math.max(0, 1 - Math.min(1, heightDeviation));
+  const sizeScore = (widthScore + heightScore) / 2;
+
+  // Aspect ratio score (0-1): How close to ideal aspect ratio (1.0 for circular)
+  const idealAspectRatio = 1.0;
+  const aspectRatioDeviation = Math.abs(aspectRatio - idealAspectRatio);
+  const aspectScore = Math.max(0, 1 - aspectRatioDeviation);
+
+  // Area density score (0-1): Ratio of actual area to bounding box area
+  const boundingArea = width * height;
+  const densityScore = area / boundingArea;
+
+  // Weighted combination: size 50%, density 30%, aspect ratio 20%
+  const confidence = 0.5 * sizeScore + 0.3 * densityScore + 0.2 * aspectScore;
+
+  return Math.max(0, Math.min(1, confidence));
+}
+
+/**
  * Convert component stats to DetectedBlob objects.
  */
 function statsToBlobs(
@@ -279,6 +321,14 @@ function statsToBlobs(
       height >= options.minHeight &&
       height <= options.maxHeight
     ) {
+      const confidence = calculateConfidence(
+        width,
+        height,
+        s.pixelCount,
+        aspectRatio,
+        options
+      );
+
       blobs.push({
         x: s.minX + offsetX,
         y: s.minY + offsetY,
@@ -286,6 +336,7 @@ function statsToBlobs(
         height,
         area: s.pixelCount,
         aspectRatio,
+        confidence,
       });
     }
   }

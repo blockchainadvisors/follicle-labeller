@@ -5,6 +5,8 @@
 
 import type { BlobDetectionOptions, DetectedBlob, BlobWorkerMessage, BlobWorkerResult } from '../types';
 import { getGPUProcessor } from './gpuProcessor';
+import { softNMS, type SoftNMSOptions } from './softNms';
+import { applyCLAHEToImageData } from './claheProcessor';
 
 // Import worker as URL for Vite
 import BlobDetectorWorker from './blobDetector.worker.ts?worker';
@@ -17,10 +19,21 @@ export const DEFAULT_DETECTION_OPTIONS: BlobDetectionOptions = {
   maxWidth: 200,
   minHeight: 10,
   maxHeight: 200,
-  threshold: undefined, // Auto (Otsu's method)
-  darkBlobs: true,      // Follicles are typically dark
-  useGPU: true,         // Use WebGL if available
+  threshold: undefined,   // Auto (Otsu's method)
+  darkBlobs: true,        // Follicles are typically dark
+  useGPU: true,           // Use WebGL if available
   workerCount: undefined, // Auto (navigator.hardwareConcurrency)
+  // SAHI-style tiling (disabled by default for backward compatibility)
+  tileSize: 0,            // 0 = auto based on workerCount (legacy behavior)
+  tileOverlap: 0.2,       // 20% overlap when using fixed tile size
+  // CLAHE preprocessing
+  useCLAHE: false,        // Disabled by default
+  claheClipLimit: 2.0,
+  claheTileSize: 8,
+  // Soft-NMS
+  useSoftNMS: true,       // Use Soft-NMS for better overlap handling
+  softNMSSigma: 0.5,
+  softNMSThreshold: 0.1,
 };
 
 /**
@@ -138,6 +151,7 @@ function blobsOverlap(a: DetectedBlob, b: DetectedBlob, tolerance: number = 2): 
 
 /**
  * Merge overlapping blobs into a single blob.
+ * Confidence is computed as weighted average based on area.
  */
 function mergeBlobs(blobs: DetectedBlob[]): DetectedBlob {
   const minX = Math.min(...blobs.map(b => b.x));
@@ -149,6 +163,12 @@ function mergeBlobs(blobs: DetectedBlob[]): DetectedBlob {
   const height = maxY - minY;
   const totalArea = blobs.reduce((sum, b) => sum + b.area, 0);
 
+  // Weighted average confidence based on area
+  const weightedConfidence = blobs.reduce(
+    (sum, b) => sum + b.confidence * b.area,
+    0
+  ) / totalArea;
+
   return {
     x: minX,
     y: minY,
@@ -156,14 +176,15 @@ function mergeBlobs(blobs: DetectedBlob[]): DetectedBlob {
     height,
     area: totalArea,
     aspectRatio: width / height,
+    confidence: weightedConfidence,
   };
 }
 
 /**
- * Merge blobs from multiple tiles, handling blobs that span tile boundaries.
- * Uses Union-Find for efficient merging.
+ * Merge blobs from multiple tiles using Union-Find for touching blobs.
+ * Used as first pass before Soft-NMS to merge blobs that are clearly the same object.
  */
-function mergeTileResults(
+function mergeTouchingBlobs(
   allBlobs: DetectedBlob[],
   options: BlobDetectionOptions
 ): DetectedBlob[] {
@@ -187,10 +208,10 @@ function mergeTileResults(
     }
   }
 
-  // Check all pairs for overlap
+  // Check all pairs for overlap (touching within 2px tolerance)
   for (let i = 0; i < allBlobs.length; i++) {
     for (let j = i + 1; j < allBlobs.length; j++) {
-      if (blobsOverlap(allBlobs[i], allBlobs[j])) {
+      if (blobsOverlap(allBlobs[i], allBlobs[j], 2)) {
         union(i, j);
       }
     }
@@ -222,8 +243,35 @@ function mergeTileResults(
     }
   }
 
-  // Sort by area (largest first)
-  mergedBlobs.sort((a, b) => b.area - a.area);
+  return mergedBlobs;
+}
+
+/**
+ * Merge blobs from multiple tiles, handling blobs that span tile boundaries.
+ * Uses Union-Find for touching blobs, then optionally Soft-NMS for overlapping detections.
+ */
+function mergeTileResults(
+  allBlobs: DetectedBlob[],
+  options: BlobDetectionOptions
+): DetectedBlob[] {
+  if (allBlobs.length === 0) return [];
+
+  // First pass: merge touching blobs using Union-Find
+  let mergedBlobs = mergeTouchingBlobs(allBlobs, options);
+
+  // Second pass: apply Soft-NMS to handle overlapping detections
+  if (options.useSoftNMS !== false) {
+    const softNMSOptions: SoftNMSOptions = {
+      sigma: options.softNMSSigma ?? 0.5,
+      scoreThreshold: options.softNMSThreshold ?? 0.1,
+      iouThreshold: 0.3,
+      method: 'gaussian',
+    };
+    mergedBlobs = softNMS(mergedBlobs, softNMSOptions);
+  } else {
+    // Sort by area (largest first) if not using Soft-NMS
+    mergedBlobs.sort((a, b) => b.area - a.area);
+  }
 
   return mergedBlobs;
 }
@@ -249,7 +297,15 @@ export async function detectBlobs(
   const height = imageBitmap.height;
 
   // Get full image data
-  const imageData = getImageData(imageBitmap);
+  let imageData = getImageData(imageBitmap);
+
+  // Apply CLAHE preprocessing if enabled
+  if (opts.useCLAHE) {
+    imageData = applyCLAHEToImageData(imageData, {
+      clipLimit: opts.claheClipLimit ?? 2.0,
+      tileGridSize: opts.claheTileSize ?? 8,
+    });
+  }
 
   // Compute global threshold if not provided
   let globalThreshold = opts.threshold;
@@ -286,32 +342,52 @@ export async function detectBlobs(
   // Determine worker count
   const workerCount = opts.workerCount ?? (navigator.hardwareConcurrency || 4);
 
-  // Calculate tile grid
-  // Use more tiles for larger images to maximize parallelism
-  const tilesPerRow = Math.ceil(Math.sqrt(workerCount));
-  const tilesPerCol = Math.ceil(workerCount / tilesPerRow);
+  // Generate tile coordinates
+  const tiles: Array<{ x: number; y: number; w: number; h: number }> = [];
 
-  const tileWidth = Math.ceil(width / tilesPerRow);
-  const tileHeight = Math.ceil(height / tilesPerCol);
+  // SAHI-style tiling with fixed tile size and overlap
+  if (opts.tileSize && opts.tileSize > 0) {
+    const tileSize = opts.tileSize;
+    const overlap = opts.tileOverlap ?? 0.2;
+    const overlapPx = Math.floor(tileSize * overlap);
+    const stride = tileSize - overlapPx;
+
+    // Generate tiles with overlap
+    for (let y = 0; y < height; y += stride) {
+      for (let x = 0; x < width; x += stride) {
+        const tw = Math.min(tileSize, width - x);
+        const th = Math.min(tileSize, height - y);
+
+        if (tw > 0 && th > 0) {
+          tiles.push({ x, y, w: tw, h: th });
+        }
+      }
+    }
+  } else {
+    // Legacy: worker-count-based tiling (no overlap)
+    const tilesPerRow = Math.ceil(Math.sqrt(workerCount));
+    const tilesPerCol = Math.ceil(workerCount / tilesPerRow);
+
+    const tileWidth = Math.ceil(width / tilesPerRow);
+    const tileHeight = Math.ceil(height / tilesPerCol);
+
+    for (let row = 0; row < tilesPerCol; row++) {
+      for (let col = 0; col < tilesPerRow; col++) {
+        const tileX = col * tileWidth;
+        const tileY = row * tileHeight;
+        const tw = Math.min(tileWidth, width - tileX);
+        const th = Math.min(tileHeight, height - tileY);
+
+        if (tw > 0 && th > 0) {
+          tiles.push({ x: tileX, y: tileY, w: tw, h: th });
+        }
+      }
+    }
+  }
 
   // Create worker pool and process tiles
   const workers: Worker[] = [];
   const promises: Promise<BlobWorkerResult>[] = [];
-
-  // Generate tile coordinates
-  const tiles: Array<{ x: number; y: number; w: number; h: number }> = [];
-  for (let row = 0; row < tilesPerCol; row++) {
-    for (let col = 0; col < tilesPerRow; col++) {
-      const tileX = col * tileWidth;
-      const tileY = row * tileHeight;
-      const tw = Math.min(tileWidth, width - tileX);
-      const th = Math.min(tileHeight, height - tileY);
-
-      if (tw > 0 && th > 0) {
-        tiles.push({ x: tileX, y: tileY, w: tw, h: th });
-      }
-    }
-  }
 
   // Process tiles with worker pool
   const actualWorkerCount = Math.min(workerCount, tiles.length);
@@ -489,11 +565,12 @@ export function detectBlobsSync(
     }
   }
 
-  // Convert to blobs
+  // Convert to blobs with confidence scores
   const blobs: DetectedBlob[] = [];
   for (const s of stats.values()) {
     const blobWidth = s.maxX - s.minX + 1;
     const blobHeight = s.maxY - s.minY + 1;
+    const aspectRatio = blobWidth / blobHeight;
 
     if (
       blobWidth >= opts.minWidth &&
@@ -501,19 +578,80 @@ export function detectBlobsSync(
       blobHeight >= opts.minHeight &&
       blobHeight <= opts.maxHeight
     ) {
+      // Calculate confidence score
+      const confidence = calculateSyncConfidence(
+        blobWidth,
+        blobHeight,
+        s.area,
+        aspectRatio,
+        opts
+      );
+
       blobs.push({
         x: s.minX,
         y: s.minY,
         width: blobWidth,
         height: blobHeight,
         area: s.area,
-        aspectRatio: blobWidth / blobHeight,
+        aspectRatio,
+        confidence,
       });
     }
   }
 
-  // Sort by area
+  // Apply Soft-NMS if enabled
+  if (opts.useSoftNMS !== false) {
+    const softNMSOptions: SoftNMSOptions = {
+      sigma: opts.softNMSSigma ?? 0.5,
+      scoreThreshold: opts.softNMSThreshold ?? 0.1,
+      iouThreshold: 0.3,
+      method: 'gaussian',
+    };
+    return softNMS(blobs, softNMSOptions);
+  }
+
+  // Sort by area if not using Soft-NMS
   blobs.sort((a, b) => b.area - a.area);
 
   return blobs;
+}
+
+/**
+ * Calculate confidence score for sync detection.
+ */
+function calculateSyncConfidence(
+  width: number,
+  height: number,
+  area: number,
+  aspectRatio: number,
+  options: BlobDetectionOptions
+): number {
+  const { minWidth, maxWidth, minHeight, maxHeight } = options;
+
+  // Size fit score (0-1)
+  const widthRange = maxWidth - minWidth;
+  const heightRange = maxHeight - minHeight;
+  const widthMid = minWidth + widthRange / 2;
+  const heightMid = minHeight + heightRange / 2;
+
+  const widthDeviation = Math.abs(width - widthMid) / (widthRange / 2);
+  const heightDeviation = Math.abs(height - heightMid) / (heightRange / 2);
+
+  const widthScore = Math.max(0, 1 - Math.min(1, widthDeviation));
+  const heightScore = Math.max(0, 1 - Math.min(1, heightDeviation));
+  const sizeScore = (widthScore + heightScore) / 2;
+
+  // Aspect ratio score (0-1)
+  const idealAspectRatio = 1.0;
+  const aspectRatioDeviation = Math.abs(aspectRatio - idealAspectRatio);
+  const aspectScore = Math.max(0, 1 - aspectRatioDeviation);
+
+  // Area density score (0-1)
+  const boundingArea = width * height;
+  const densityScore = area / boundingArea;
+
+  // Weighted combination
+  const confidence = 0.5 * sizeScore + 0.3 * densityScore + 0.2 * aspectScore;
+
+  return Math.max(0, Math.min(1, confidence));
 }
