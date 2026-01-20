@@ -24,6 +24,7 @@ import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
 import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
 import { ProjectImage } from '../../types';
+import { ThemePicker } from '../ThemePicker/ThemePicker';
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -615,6 +616,13 @@ export const Toolbar: React.FC = () => {
           onClick={toggleHelp}
           active={showHelp}
         />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* Theme */}
+      <div className="toolbar-group" role="group" aria-label="Theme">
+        <ThemePicker />
       </div>
 
       {/* Status display */}
