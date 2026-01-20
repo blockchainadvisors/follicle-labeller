@@ -34,3 +34,6 @@ add_jszip.bat
 jszip_out.txt
 jszip_err.txt
 nul
+
+# claude
+.claude

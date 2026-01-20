@@ -234,7 +234,7 @@ function loadSavedTheme(): { background: BackgroundTheme; accent: AccentColor } 
   } catch {
     // Ignore parse errors
   }
-  return { background: 'midnight', accent: 'teal' }; // Default
+  return { background: 'clean', accent: 'sapphire' }; // Default
 }
 
 // Save theme to localStorage

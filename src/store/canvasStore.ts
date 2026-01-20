@@ -28,7 +28,7 @@ interface CanvasState {
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
-  mode: 'create',
+  mode: 'select',
   currentShapeType: 'circle',
   selectionToolType: 'marquee',
   showLabels: true,
