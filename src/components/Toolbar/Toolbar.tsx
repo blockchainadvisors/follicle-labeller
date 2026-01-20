@@ -29,6 +29,7 @@ import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFo
 import { detectBlobs } from '../../services/blobDetector';
 import { learnFromExamples, applyTolerance } from '../../services/parameterLearner';
 import { LearnedDetectionDialog } from '../LearnedDetectionDialog/LearnedDetectionDialog';
+import { ThemePicker } from '../ThemePicker/ThemePicker';
 import { ProjectImage, RectangleAnnotation, LearnedDetectionParams } from '../../types';
 import { generateId } from '../../utils/id-generator';
 
@@ -826,6 +827,11 @@ export const Toolbar: React.FC = () => {
           active={showHelp}
         />
       </div>
+
+      <div className="toolbar-divider" />
+
+      {/* Theme Picker */}
+      <ThemePicker />
 
       {/* Status display */}
       <div className="toolbar-spacer" />
