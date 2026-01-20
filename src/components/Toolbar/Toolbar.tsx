@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import {
   Pencil,
   MousePointer2,
@@ -17,13 +17,20 @@ import {
   Download,
   BoxSelect,
   Lasso,
+  Sparkles,
+  Loader2,
+  GraduationCap,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
 import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
-import { ProjectImage } from '../../types';
+import { detectBlobs } from '../../services/blobDetector';
+import { learnFromExamples, applyTolerance } from '../../services/parameterLearner';
+import { LearnedDetectionDialog } from '../LearnedDetectionDialog/LearnedDetectionDialog';
+import { ProjectImage, RectangleAnnotation, LearnedDetectionParams } from '../../types';
+import { generateId } from '../../utils/id-generator';
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -97,6 +104,13 @@ export const Toolbar: React.FC = () => {
   const clearAll = useFollicleStore(state => state.clearAll);
 
   const temporalStore = useTemporalStore();
+
+  // State for auto-detection loading
+  const [isDetecting, setIsDetecting] = useState(false);
+
+  // State for learned detection dialog
+  const [learnedParams, setLearnedParams] = useState<LearnedDetectionParams | null>(null);
+  const [showLearnDialog, setShowLearnDialog] = useState(false);
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -346,6 +360,182 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, selectedIds, activeImageId, activeImage, currentProjectPath]);
 
+  // Colors for auto-detected annotations (cycles through)
+  const ANNOTATION_COLORS = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+    '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
+    '#74B9FF', '#A29BFE', '#FD79A8', '#00CEC9',
+  ];
+
+  // Auto-detect follicles using BLOB detection
+  const handleAutoDetect = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    setIsDetecting(true);
+
+    try {
+      // Run detection with parallel processing
+      const blobs = await detectBlobs(activeImage.imageBitmap, {
+        minWidth: 10,
+        maxWidth: 200,
+        minHeight: 10,
+        maxHeight: 200,
+        darkBlobs: true,
+        useGPU: true,
+        workerCount: navigator.hardwareConcurrency || 4,
+      });
+
+      if (blobs.length === 0) {
+        console.log('No follicles detected');
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert detected blobs to RECTANGLE annotations
+      const existingCount = follicles.filter(f => f.imageId === activeImageId).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = blobs.map((blob, i) => ({
+        id: generateId(),
+        imageId: activeImageId,
+        shape: 'rectangle' as const,
+        x: blob.x,
+        y: blob.y,
+        width: blob.width,
+        height: blob.height,
+        label: `Auto ${existingCount + i + 1}`,
+        notes: `Detected (area: ${blob.area}px, ratio: ${blob.aspectRatio.toFixed(2)})`,
+        color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      // Import all at once (supports undo as single action)
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Detected ${blobs.length} follicles`);
+    } catch (error) {
+      console.error('Failed to detect follicles:', error);
+      alert('Failed to detect follicles. Please try again.');
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [activeImage, activeImageId, isDetecting, follicles, importFollicles]);
+
+  // Learn from selected annotations
+  const handleLearnFromSelection = useCallback(() => {
+    if (selectedIds.size === 0 || !activeImageId) return;
+
+    // Get selected annotations for active image
+    const selectedAnnotations = follicles.filter(
+      f => f.imageId === activeImageId && selectedIds.has(f.id)
+    );
+
+    if (selectedAnnotations.length === 0) {
+      alert('Please select annotations on the active image first.');
+      return;
+    }
+
+    // Get image data for intensity analysis
+    let imageData: ImageData | undefined;
+    if (activeImage?.imageBitmap) {
+      const canvas = new OffscreenCanvas(
+        activeImage.imageBitmap.width,
+        activeImage.imageBitmap.height
+      );
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(activeImage.imageBitmap, 0, 0);
+        imageData = ctx.getImageData(
+          0, 0,
+          activeImage.imageBitmap.width,
+          activeImage.imageBitmap.height
+        );
+      }
+    }
+
+    // Learn parameters from examples
+    const params = learnFromExamples(selectedAnnotations, imageData);
+    setLearnedParams(params);
+    setShowLearnDialog(true);
+  }, [selectedIds, activeImageId, follicles, activeImage]);
+
+  // Run detection with learned parameters
+  const handleRunLearnedDetection = useCallback(async (tolerance: number, darkBlobs: boolean) => {
+    if (!learnedParams || !activeImage || !activeImageId) return;
+
+    setShowLearnDialog(false);
+    setIsDetecting(true);
+
+    try {
+      // Apply tolerance to get effective size range
+      const effectiveRange = applyTolerance(learnedParams, tolerance);
+
+      // Run detection with learned size range
+      const blobs = await detectBlobs(activeImage.imageBitmap, {
+        minWidth: effectiveRange.minWidth,
+        maxWidth: effectiveRange.maxWidth,
+        minHeight: effectiveRange.minHeight,
+        maxHeight: effectiveRange.maxHeight,
+        darkBlobs,
+        useGPU: true,
+        workerCount: navigator.hardwareConcurrency || 4,
+      });
+
+      if (blobs.length === 0) {
+        console.log('No follicles detected with learned parameters');
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert detected blobs to RECTANGLE annotations
+      const existingCount = follicles.filter(f => f.imageId === activeImageId).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = blobs.map((blob, i) => ({
+        id: generateId(),
+        imageId: activeImageId,
+        shape: 'rectangle' as const,
+        x: blob.x,
+        y: blob.y,
+        width: blob.width,
+        height: blob.height,
+        label: `Learned ${existingCount + i + 1}`,
+        notes: `Detected with learned params (area: ${blob.area}px, ratio: ${blob.aspectRatio.toFixed(2)})`,
+        color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      // Import all at once (supports undo as single action)
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Detected ${blobs.length} follicles with learned parameters`);
+    } catch (error) {
+      console.error('Failed to detect follicles with learned parameters:', error);
+      alert('Failed to detect follicles. Please try again.');
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [learnedParams, activeImage, activeImageId, follicles, importFollicles]);
+
+  // Close learned detection dialog
+  const handleCancelLearnDialog = useCallback(() => {
+    setShowLearnDialog(false);
+    setLearnedParams(null);
+  }, []);
+
+  // Listen for Learn from Selection keyboard shortcut (Shift+D) from ImageCanvas
+  useEffect(() => {
+    const handleLearnEvent = () => {
+      handleLearnFromSelection();
+    };
+    window.addEventListener('learnFromSelection', handleLearnEvent);
+    return () => window.removeEventListener('learnFromSelection', handleLearnEvent);
+  }, [handleLearnFromSelection]);
+
   // Register menu event listeners
   useEffect(() => {
     const cleanups = [
@@ -548,6 +738,26 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
+      {/* Auto Detect */}
+      <div className="toolbar-group" role="group" aria-label="Auto detect">
+        <IconButton
+          icon={isDetecting ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+          tooltip="Auto Detect Follicles"
+          shortcut="D"
+          onClick={handleAutoDetect}
+          disabled={!imageLoaded || isDetecting}
+        />
+        <IconButton
+          icon={<GraduationCap size={18} />}
+          tooltip="Learn from Selection"
+          shortcut="Shift+D"
+          onClick={handleLearnFromSelection}
+          disabled={!imageLoaded || selectedIds.size === 0 || isDetecting}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
       {/* Zoom controls */}
       <div className="toolbar-group" role="group" aria-label="Zoom controls">
         <IconButton
@@ -633,6 +843,15 @@ export const Toolbar: React.FC = () => {
           <span className="no-image">No image loaded</span>
         )}
       </div>
+
+      {/* Learned Detection Dialog */}
+      {showLearnDialog && learnedParams && (
+        <LearnedDetectionDialog
+          params={learnedParams}
+          onRun={handleRunLearnedDetection}
+          onCancel={handleCancelLearnDialog}
+        />
+      )}
     </div>
   );
 };

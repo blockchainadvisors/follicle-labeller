@@ -4,7 +4,7 @@ import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { CanvasRenderer } from './CanvasRenderer';
-import { DragState, Point, Follicle, LinearAnnotation, ProjectImage, isCircle, isRectangle, isLinear } from '../../types';
+import { DragState, Point, Follicle, LinearAnnotation, RectangleAnnotation, ProjectImage, isCircle, isRectangle, isLinear } from '../../types';
 import {
   screenToImage,
   distance,
@@ -16,6 +16,8 @@ import {
   getFolliclesInPolygon,
   simplifyPath,
 } from '../../utils/selection-geometry';
+import { detectBlobs } from '../../services/blobDetector';
+import { generateId } from '../../utils/id-generator';
 
 // Check if point is inside a rectangle
 function isPointInRectangle(point: Point, x: number, y: number, width: number, height: number): boolean {
@@ -162,6 +164,7 @@ export const ImageCanvas: React.FC = () => {
   const resizeCircle = useFollicleStore(state => state.resizeCircle);
   const resizeRectangle = useFollicleStore(state => state.resizeRectangle);
   const resizeLinear = useFollicleStore(state => state.resizeLinear);
+  const importFollicles = useFollicleStore(state => state.importFollicles);
 
   // Project store for multi-image support
   const images = useProjectStore(state => state.images);
@@ -761,6 +764,60 @@ export const ImageCanvas: React.FC = () => {
     }
   }, [addImage, imageOrder.length]);
 
+  // Colors for auto-detected annotations
+  const ANNOTATION_COLORS = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+    '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
+    '#74B9FF', '#A29BFE', '#FD79A8', '#00CEC9',
+  ];
+
+  // Auto-detect follicles using BLOB detection
+  const handleAutoDetect = useCallback(async () => {
+    if (!activeImage || !activeImageId) return;
+
+    try {
+      const blobs = await detectBlobs(activeImage.imageBitmap, {
+        minWidth: 10,
+        maxWidth: 200,
+        minHeight: 10,
+        maxHeight: 200,
+        darkBlobs: true,
+        useGPU: true,
+        workerCount: navigator.hardwareConcurrency || 4,
+      });
+
+      if (blobs.length === 0) {
+        console.log('No follicles detected');
+        return;
+      }
+
+      const existingCount = follicles.filter(f => f.imageId === activeImageId).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = blobs.map((blob, i) => ({
+        id: generateId(),
+        imageId: activeImageId,
+        shape: 'rectangle' as const,
+        x: blob.x,
+        y: blob.y,
+        width: blob.width,
+        height: blob.height,
+        label: `Auto ${existingCount + i + 1}`,
+        notes: `Detected (area: ${blob.area}px, ratio: ${blob.aspectRatio.toFixed(2)})`,
+        color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Detected ${blobs.length} follicles`);
+    } catch (error) {
+      console.error('Failed to detect follicles:', error);
+    }
+  }, [activeImage, activeImageId, follicles, importFollicles]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -847,6 +904,17 @@ export const ImageCanvas: React.FC = () => {
         useCanvasStore.getState().toggleHelp();
       }
 
+      // Auto-detect shortcut (D key) and Learn from Selection (Shift+D)
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // Dispatch custom event for Learn from Selection
+          window.dispatchEvent(new CustomEvent('learnFromSelection'));
+        } else {
+          handleAutoDetect();
+        }
+      }
+
       // Escape to deselect and cancel operations
       if (e.key === 'Escape') {
         clearSelection();
@@ -885,7 +953,7 @@ export const ImageCanvas: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, deleteSelected, clearSelection, selectAll, activeImageId, temporalStore]);
+  }, [selectedIds, deleteSelected, clearSelection, selectAll, activeImageId, temporalStore, handleAutoDetect]);
 
   // Get cursor based on mode and drag state
   const getCursor = (): string => {

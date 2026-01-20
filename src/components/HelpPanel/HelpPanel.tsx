@@ -164,6 +164,8 @@ export const HelpPanel: React.FC = () => {
             <tr><td>Linear shape</td><td><code>3</code></td></tr>
             <tr><td>Toggle shapes</td><td><code>O</code></td></tr>
             <tr><td>Toggle labels</td><td><code>L</code></td></tr>
+            <tr><td>Auto detect</td><td><code>D</code></td></tr>
+            <tr><td>Learn from selection</td><td><code>Shift+D</code></td></tr>
             <tr><td>Undo</td><td><code>Ctrl+Z</code></td></tr>
             <tr><td>Redo</td><td><code>Ctrl+Shift+Z</code></td></tr>
             <tr><td>Delete annotation</td><td><code>Delete</code> / <code>Backspace</code></td></tr>

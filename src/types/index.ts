@@ -4,6 +4,63 @@ export interface Point {
   y: number;
 }
 
+// BLOB Detection types
+export interface BlobDetectionOptions {
+  minWidth: number;       // Minimum blob width (default: 10)
+  maxWidth: number;       // Maximum blob width (default: 200)
+  minHeight: number;      // Minimum blob height (default: 10)
+  maxHeight: number;      // Maximum blob height (default: 200)
+  threshold?: number;     // Manual threshold (auto if not set - uses Otsu's method)
+  darkBlobs: boolean;     // true = detect dark blobs on light bg
+  useGPU: boolean;        // Enable WebGL acceleration
+  workerCount?: number;   // Number of Web Workers (default: navigator.hardwareConcurrency)
+}
+
+export interface DetectedBlob {
+  x: number;              // Top-left X (image coords)
+  y: number;              // Top-left Y (image coords)
+  width: number;          // Bounding box width
+  height: number;         // Bounding box height
+  area: number;           // Blob area in pixels
+  aspectRatio: number;    // width/height ratio
+}
+
+// Message types for Web Worker communication
+export interface BlobWorkerMessage {
+  imageData: ImageData;
+  tileX: number;
+  tileY: number;
+  tileWidth: number;
+  tileHeight: number;
+  options: BlobDetectionOptions;
+}
+
+export interface BlobWorkerResult {
+  blobs: DetectedBlob[];
+  tileX: number;
+  tileY: number;
+}
+
+// Learned detection parameters from example annotations
+export interface LearnedDetectionParams {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  minAspectRatio: number;
+  maxAspectRatio: number;
+  meanIntensity?: number;
+  exampleCount: number;
+}
+
+// Effective size range after applying tolerance
+export interface EffectiveSizeRange {
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+}
+
 // Image identifier type
 export type ImageId = string;
 
