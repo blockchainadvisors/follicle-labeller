@@ -611,6 +611,34 @@ function createMenu(): void {
   closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
+// Show download options dialog when there's an active selection
+// Returns: 'all' | 'currentImage' | 'selected' | 'cancel'
+ipcMain.handle('dialog:downloadOptions', async (_, selectedCount: number, currentImageCount: number, totalCount: number) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return 'cancel';
+
+  const result = await dialog.showMessageBox(window, {
+    type: 'question',
+    title: 'Download Follicle Images',
+    message: 'What would you like to download?',
+    buttons: [
+      `Selected Only (${selectedCount})`,
+      `Current Image (${currentImageCount})`,
+      `All Follicles (${totalCount})`,
+      'Cancel'
+    ],
+    defaultId: 0,
+    cancelId: 3,
+  });
+
+  switch (result.response) {
+    case 0: return 'selected';
+    case 1: return 'currentImage';
+    case 2: return 'all';
+    default: return 'cancel';
+  }
+});
+
 // Show unsaved changes dialog
 // Returns: 'save' | 'discard' | 'cancel'
 ipcMain.handle('dialog:unsavedChanges', async () => {
