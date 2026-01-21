@@ -12,13 +12,16 @@ interface HeatmapOverlayProps {
   canvasHeight: number;
 }
 
+// Maximum heatmap resolution to prevent memory/GPU issues
+const MAX_HEATMAP_SIZE = 800;
+
 /**
  * HeatmapOverlay renders a Gaussian density heatmap over the canvas
  * based on the current annotations.
  */
 export function HeatmapOverlay({ canvasWidth, canvasHeight }: HeatmapOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [imageBitmap, setImageBitmap] = useState<ImageBitmap | null>(null);
+  const [heatmapCanvas, setHeatmapCanvas] = useState<OffscreenCanvas | null>(null);
 
   const showHeatmap = useCanvasStore(state => state.showHeatmap);
   const heatmapOptions = useCanvasStore(state => state.heatmapOptions);
@@ -28,6 +31,10 @@ export function HeatmapOverlay({ canvasWidth, canvasHeight }: HeatmapOverlayProp
   const activeImage = useProjectStore(state =>
     state.activeImageId ? state.images.get(state.activeImageId) : null
   );
+
+  // Extract stable image dimensions (don't change on viewport updates)
+  const imageWidth = activeImage?.width ?? 0;
+  const imageHeight = activeImage?.height ?? 0;
 
   // Filter follicles for current image
   const currentFollicles = useMemo(() => {
@@ -40,33 +47,77 @@ export function HeatmapOverlay({ canvasWidth, canvasHeight }: HeatmapOverlayProp
     return getFollicleCenters(currentFollicles);
   }, [currentFollicles]);
 
-  // Generate heatmap when dependencies change
+  // Generate heatmap when dependencies change (NOT on viewport/zoom changes)
   useEffect(() => {
-    if (!showHeatmap || !activeImage || centers.length === 0) {
-      setImageBitmap(null);
+    if (!showHeatmap || imageWidth <= 0 || imageHeight <= 0) {
+      setHeatmapCanvas(null);
       return;
     }
 
-    const { width, height } = activeImage;
+    // If no annotations, just clear and return (no heatmap to show)
+    if (centers.length === 0) {
+      setHeatmapCanvas(null);
+      return;
+    }
 
-    // Generate heatmap on a separate task to not block UI
+    // Calculate scaled dimensions to prevent memory issues with large images
+    const scale = Math.min(1, MAX_HEATMAP_SIZE / Math.max(imageWidth, imageHeight));
+    const scaledWidth = Math.max(1, Math.round(imageWidth * scale));
+    const scaledHeight = Math.max(1, Math.round(imageHeight * scale));
+
+    // Scale centers to match the scaled heatmap
+    const scaledCenters = centers.map(c => ({
+      x: c.x * scale,
+      y: c.y * scale,
+    }));
+
+    // Scale sigma proportionally (minimum of 1 to avoid zero sigma)
+    const scaledOptions = {
+      ...heatmapOptions,
+      sigma: Math.max(1, heatmapOptions.sigma * scale),
+    };
+
+    // Track if this effect is still current
+    let isCancelled = false;
+
+    // Generate heatmap asynchronously using setTimeout to not block UI
     const generateAsync = async () => {
-      const imageData = generateHeatmap(centers, width, height, heatmapOptions);
-      const bitmap = await createImageBitmap(imageData);
-      setImageBitmap(bitmap);
+      try {
+        // Use setTimeout to yield to the main thread
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        if (isCancelled) return;
+
+        const imageData = generateHeatmap(scaledCenters, scaledWidth, scaledHeight, scaledOptions);
+
+        if (isCancelled) return;
+
+        // Use OffscreenCanvas instead of createImageBitmap to avoid GPU crashes
+        const offscreen = new OffscreenCanvas(scaledWidth, scaledHeight);
+        const ctx = offscreen.getContext('2d');
+        if (!ctx) {
+          console.error('Failed to get 2d context for heatmap');
+          return;
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        if (isCancelled) return;
+
+        setHeatmapCanvas(offscreen);
+      } catch (error) {
+        console.error('Failed to generate heatmap:', error);
+        setHeatmapCanvas(null);
+      }
     };
 
     generateAsync();
 
     return () => {
-      // Cleanup
-      if (imageBitmap) {
-        imageBitmap.close();
-      }
+      isCancelled = true;
     };
-  }, [showHeatmap, activeImage, centers, heatmapOptions]);
+  }, [showHeatmap, imageWidth, imageHeight, centers, heatmapOptions]);
 
-  // Render heatmap to canvas
+  // Render heatmap to canvas (runs on viewport changes for smooth zoom/pan)
   useEffect(() => {
     if (!canvasRef.current || !activeImage) return;
 
@@ -77,7 +128,7 @@ export function HeatmapOverlay({ canvasWidth, canvasHeight }: HeatmapOverlayProp
     // Clear canvas
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
-    if (!showHeatmap || !imageBitmap) return;
+    if (!showHeatmap || !heatmapCanvas) return;
 
     // Get viewport for transformation
     const { viewport } = activeImage;
@@ -90,12 +141,13 @@ export function HeatmapOverlay({ canvasWidth, canvasHeight }: HeatmapOverlayProp
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
-    // Draw heatmap
-    ctx.drawImage(imageBitmap, 0, 0);
+    // Draw heatmap scaled to original image dimensions
+    // (the offscreen canvas may be smaller due to MAX_HEATMAP_SIZE optimization)
+    ctx.drawImage(heatmapCanvas, 0, 0, imageWidth, imageHeight);
 
     // Restore context state
     ctx.restore();
-  }, [imageBitmap, activeImage, canvasWidth, canvasHeight, showHeatmap]);
+  }, [heatmapCanvas, activeImage, canvasWidth, canvasHeight, showHeatmap]);
 
   if (!showHeatmap) {
     return null;
