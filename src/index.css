@@ -907,21 +907,20 @@ body {
 }
 
 .dialog-close {
-  width: 28px;
-  height: 28px;
+  background: none;
   border: none;
-  border-radius: 4px;
-  background-color: transparent;
-  color: var(--text-secondary);
+  padding: 4px;
   cursor: pointer;
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 4px;
   transition: all 0.15s ease;
 }
 
 .dialog-close:hover {
-  background-color: var(--bg-tertiary);
+  background: var(--bg-hover);
   color: var(--text-primary);
 }
 

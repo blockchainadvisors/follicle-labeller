@@ -445,23 +445,60 @@ export const ImageCanvas: React.FC = () => {
 
       // Clicking on empty area - start marquee/lasso selection or clear
       if (selectionToolType === 'marquee') {
-        if (!isCtrlPressed) {
-          clearSelection();
+        // Check if we're in the middle of marquee selection (second click to finalize)
+        if (dragState.dragType === 'marquee' && dragState.startPoint) {
+          // Second click - finalize marquee selection
+          const bounds = createSelectionBounds(dragState.startPoint, point);
+          const foundFollicles = getFolliclesInBounds(follicles, bounds);
+          const foundIds = foundFollicles.map(f => f.id);
+          if (foundIds.length > 0) {
+            if (dragState.additive) {
+              // Additive mode: combine with existing selection
+              const combinedIds = [...selectedIds, ...foundIds];
+              selectMultiple(combinedIds);
+            } else {
+              selectMultiple(foundIds);
+            }
+          }
+          setDragState({
+            isDragging: false,
+            startPoint: null,
+            currentPoint: null,
+            dragType: null,
+            targetId: null,
+            additive: undefined,
+          });
+          return;
         }
+
+        // If items are selected and Ctrl is not pressed, just deselect (don't start new selection)
+        if (selectedIds.size > 0 && !isCtrlPressed) {
+          clearSelection();
+          return;
+        }
+
+        // Start marquee selection (click-to-click mode)
+        // Ctrl pressed = additive mode (keep existing selection)
         setDragState({
-          isDragging: true,
+          isDragging: false,  // Not dragging - click-to-click mode
           startPoint: point,
           currentPoint: point,
           dragType: 'marquee',
           targetId: null,
+          additive: isCtrlPressed,  // Track if this is additive selection
         });
         return;
       }
 
       if (selectionToolType === 'lasso') {
-        if (!isCtrlPressed) {
+        // If items are selected and Ctrl is not pressed, just deselect (don't start new selection)
+        if (selectedIds.size > 0 && !isCtrlPressed) {
           clearSelection();
+          return;
         }
+
+        // Start lasso selection
+        // Ctrl pressed = additive mode (keep existing selection)
         setDragState({
           isDragging: true,
           startPoint: point,
@@ -469,6 +506,7 @@ export const ImageCanvas: React.FC = () => {
           dragType: 'lasso',
           targetId: null,
           lassoPoints: [point],
+          additive: isCtrlPressed,  // Track if this is additive selection
         });
         return;
       }
@@ -586,6 +624,13 @@ export const ImageCanvas: React.FC = () => {
       return;
     }
 
+    // Handle marquee selection - track mouse in click-to-click mode
+    if (dragState.dragType === 'marquee' && dragState.startPoint) {
+      const point = getImagePoint(e);
+      setDragState(prev => ({ ...prev, currentPoint: point }));
+      return;
+    }
+
     if (!dragState.isDragging) return;
 
     if (dragState.dragType === 'pan') {
@@ -632,29 +677,18 @@ export const ImageCanvas: React.FC = () => {
       return;
     }
 
-    // For selection operations (marquee, lasso), keep the state active
+    // For marquee (click-to-click) and lasso selections, keep the state active
     // The selection will remain visible and can be completed when mouse returns
-    // or finalized on mouse up (even outside canvas via document listener)
+    // Marquee: finalized on second click (even outside canvas via document listener)
+    // Lasso: finalized on mouse up (even outside canvas via document listener)
   }, [dragState.dragType]);
 
   // Mouse up handler
   const handleMouseUp = useCallback(() => {
     if (!dragState.isDragging) return;
 
-    // Shape creation is now click-to-click, so don't finalize on mouse up
-    // Just handle move, resize, pan, marquee, and lasso operations
-
-    // Handle marquee selection
-    if (dragState.dragType === 'marquee' && dragState.startPoint && dragState.currentPoint) {
-      const bounds = createSelectionBounds(dragState.startPoint, dragState.currentPoint);
-      const foundFollicles = getFolliclesInBounds(follicles, bounds);
-      const foundIds = foundFollicles.map(f => f.id);
-      if (foundIds.length > 0) {
-        selectMultiple(foundIds);
-      } else {
-        clearSelection();
-      }
-    }
+    // Shape creation and marquee selection are click-to-click, so don't finalize on mouse up
+    // Just handle move, resize, pan, and lasso operations
 
     // Handle lasso selection
     if (dragState.dragType === 'lasso' && dragState.lassoPoints && dragState.lassoPoints.length >= 3) {
@@ -662,9 +696,13 @@ export const ImageCanvas: React.FC = () => {
       const foundFollicles = getFolliclesInPolygon(follicles, simplifiedPath);
       const foundIds = foundFollicles.map(f => f.id);
       if (foundIds.length > 0) {
-        selectMultiple(foundIds);
-      } else {
-        clearSelection();
+        if (dragState.additive) {
+          // Additive mode: combine with existing selection
+          const combinedIds = [...selectedIds, ...foundIds];
+          selectMultiple(combinedIds);
+        } else {
+          selectMultiple(foundIds);
+        }
       }
     }
 
@@ -761,9 +799,16 @@ export const ImageCanvas: React.FC = () => {
     if (!canvas) return;
 
     const handleDocumentMouseMove = (e: MouseEvent) => {
-      // Only handle marquee and lasso selections
-      if (!dragState.isDragging ||
-          (dragState.dragType !== 'marquee' && dragState.dragType !== 'lasso')) {
+      // Handle marquee in click-to-click mode (no isDragging required)
+      if (dragState.dragType === 'marquee' && dragState.startPoint) {
+        const rect = canvas.getBoundingClientRect();
+        const point = screenToImage(e.clientX, e.clientY, viewport, rect);
+        setDragState(prev => ({ ...prev, currentPoint: point }));
+        return;
+      }
+
+      // Handle lasso selections (drag mode)
+      if (!dragState.isDragging || dragState.dragType !== 'lasso') {
         return;
       }
 
@@ -771,21 +816,18 @@ export const ImageCanvas: React.FC = () => {
       const rect = canvas.getBoundingClientRect();
       const point = screenToImage(e.clientX, e.clientY, viewport, rect);
 
-      if (dragState.dragType === 'lasso' && dragState.lassoPoints) {
+      if (dragState.lassoPoints) {
         setDragState(prev => ({
           ...prev,
           currentPoint: point,
           lassoPoints: [...(prev.lassoPoints || []), point],
         }));
-      } else {
-        setDragState(prev => ({ ...prev, currentPoint: point }));
       }
     };
 
     const handleDocumentMouseUp = () => {
-      // Only handle if we're in a drag operation that should finalize on mouse up
+      // Only handle drag operations that should finalize on mouse up (not marquee - it's click-to-click)
       if (dragState.isDragging && (
-        dragState.dragType === 'marquee' ||
         dragState.dragType === 'lasso' ||
         dragState.dragType === 'move' ||
         dragState.dragType === 'resize'
@@ -794,17 +836,56 @@ export const ImageCanvas: React.FC = () => {
       }
     };
 
-    // Add listeners when dragging starts
-    if (dragState.isDragging) {
+    const handleDocumentClick = (e: MouseEvent) => {
+      // Handle marquee finalization when clicking outside canvas
+      if (dragState.dragType === 'marquee' && dragState.startPoint && dragState.currentPoint) {
+        // Check if click is outside the canvas
+        const rect = canvas.getBoundingClientRect();
+        const isOutside = e.clientX < rect.left || e.clientX > rect.right ||
+                          e.clientY < rect.top || e.clientY > rect.bottom;
+
+        if (isOutside) {
+          // Finalize marquee selection with current point
+          const bounds = createSelectionBounds(dragState.startPoint, dragState.currentPoint);
+          const foundFollicles = getFolliclesInBounds(follicles, bounds);
+          const foundIds = foundFollicles.map(f => f.id);
+          if (foundIds.length > 0) {
+            if (dragState.additive) {
+              // Additive mode: combine with existing selection
+              const combinedIds = [...selectedIds, ...foundIds];
+              selectMultiple(combinedIds);
+            } else {
+              selectMultiple(foundIds);
+            }
+          }
+          setDragState({
+            isDragging: false,
+            startPoint: null,
+            currentPoint: null,
+            dragType: null,
+            targetId: null,
+            additive: undefined,
+          });
+        }
+      }
+    };
+
+    // Add listeners when dragging or in marquee click-to-click mode
+    const needsDocumentListeners = dragState.isDragging ||
+      (dragState.dragType === 'marquee' && dragState.startPoint);
+
+    if (needsDocumentListeners) {
       document.addEventListener('mousemove', handleDocumentMouseMove);
       document.addEventListener('mouseup', handleDocumentMouseUp);
+      document.addEventListener('click', handleDocumentClick);
     }
 
     return () => {
       document.removeEventListener('mousemove', handleDocumentMouseMove);
       document.removeEventListener('mouseup', handleDocumentMouseUp);
+      document.removeEventListener('click', handleDocumentClick);
     };
-  }, [dragState.isDragging, dragState.dragType, dragState.lassoPoints, handleMouseUp, viewport]);
+  }, [dragState.isDragging, dragState.dragType, dragState.startPoint, dragState.currentPoint, dragState.lassoPoints, dragState.additive, handleMouseUp, viewport, follicles, selectedIds, selectMultiple]);
 
   // Wheel zoom handler - use native event listener to allow preventDefault
   useEffect(() => {

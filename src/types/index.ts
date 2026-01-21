@@ -178,6 +178,8 @@ export interface DragState {
   lineEndPoint?: Point;  // Stored end point after first phase of linear creation
   // Multi-selection lasso path tracking
   lassoPoints?: Point[];
+  // Additive selection mode (Ctrl held when starting selection)
+  additive?: boolean;
 }
 
 // JSON export schema
