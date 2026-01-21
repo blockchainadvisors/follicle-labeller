@@ -49,9 +49,9 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   heatmapOptions: {
     sigma: 30,
     colormap: 'jet' as ColormapType,
-    alpha: 0.5,
+    alpha: 0.7,
     maxValue: 0,
-    intensityScale: 1.0,
+    intensityScale: 1.5,
   },
   showStatistics: false,
 

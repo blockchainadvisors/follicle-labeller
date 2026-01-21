@@ -1,11 +1,13 @@
 /**
  * Icon Generator Script
- * Generates app icons for Windows, macOS, and Linux from SVG source
+ * Generates app icons for Windows, macOS, and Linux from PNG source
  *
  * Usage: node scripts/generate-icons.js
  *
  * Requirements:
  * - npm install sharp png-to-ico icns-lib
+ *
+ * Note: Uses icon.png (1024x1024) as the source for best quality
  */
 
 const fs = require('fs');
@@ -21,7 +23,7 @@ try {
   sharp = require('sharp');
 }
 
-const SVG_PATH = path.join(__dirname, '../public/icon.svg');
+const SOURCE_PNG = path.join(__dirname, '../public/icon.png');
 const OUTPUT_DIR = path.join(__dirname, '../public');
 
 // Icon sizes needed
@@ -33,27 +35,32 @@ const SIZES = {
 async function generateIcons() {
   console.log('Generating app icons...\n');
 
-  // Read SVG
-  const svgBuffer = fs.readFileSync(SVG_PATH);
+  // Check if source PNG exists
+  if (!fs.existsSync(SOURCE_PNG)) {
+    console.error(`Error: Source icon not found at ${SOURCE_PNG}`);
+    console.error('Please ensure icon.png (1024x1024 recommended) exists in public/');
+    process.exit(1);
+  }
 
-  // Generate PNG files at various sizes
+  // Read source PNG
+  const sourceBuffer = fs.readFileSync(SOURCE_PNG);
+  const metadata = await sharp(sourceBuffer).metadata();
+  console.log(`Source: icon.png (${metadata.width}x${metadata.height})\n`);
+
+  // Generate PNG files at various sizes (skip sizes larger than source)
   console.log('Generating PNG icons...');
   for (const size of SIZES.png) {
+    if (size > metadata.width) {
+      console.log(`  Skipped: icon-${size}.png (larger than source)`);
+      continue;
+    }
     const outputPath = path.join(OUTPUT_DIR, `icon-${size}.png`);
-    await sharp(svgBuffer)
-      .resize(size, size)
+    await sharp(sourceBuffer)
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toFile(outputPath);
     console.log(`  Created: icon-${size}.png`);
   }
-
-  // Generate main icon.png (512x512 for Linux)
-  const mainPngPath = path.join(OUTPUT_DIR, 'icon.png');
-  await sharp(svgBuffer)
-    .resize(512, 512)
-    .png()
-    .toFile(mainPngPath);
-  console.log('  Created: icon.png (512x512)');
 
   // Generate Windows ICO
   console.log('\nGenerating Windows ICO...');

@@ -137,6 +137,7 @@ export const ImageCanvas: React.FC = () => {
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const lastZoomedImageRef = useRef<string | null>(null);
 
   const [dragState, setDragState] = useState<DragState>({
     isDragging: false,
@@ -242,6 +243,7 @@ export const ImageCanvas: React.FC = () => {
       if (rendererRef.current) {
         rendererRef.current.setImage(null);
       }
+      lastZoomedImageRef.current = null;
       return;
     }
 
@@ -249,8 +251,13 @@ export const ImageCanvas: React.FC = () => {
     if (rendererRef.current) {
       rendererRef.current.setImage(imageBitmap);
     }
-    zoomToFit(canvasSize.width, canvasSize.height);
-  }, [imageBitmap, zoomToFit, canvasSize.width, canvasSize.height]);
+
+    // Only zoom to fit when switching to a different image, not on every re-render
+    if (activeImageId && lastZoomedImageRef.current !== activeImageId) {
+      lastZoomedImageRef.current = activeImageId;
+      zoomToFit(canvasSize.width, canvasSize.height);
+    }
+  }, [imageBitmap, activeImageId, zoomToFit, canvasSize.width, canvasSize.height]);
 
   // Render loop
   useEffect(() => {
@@ -725,19 +732,28 @@ export const ImageCanvas: React.FC = () => {
     });
   }, [dragState, moveAnnotation, moveSelected, resizeCircle, resizeRectangle, resizeLinear, follicles, selectMultiple, clearSelection]);
 
-  // Wheel zoom handler
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  // Wheel zoom handler - use native event listener to allow preventDefault
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const rect = canvas.getBoundingClientRect();
-    const centerPoint = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      const rect = canvas.getBoundingClientRect();
+      const centerPoint = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+      zoom(delta, centerPoint);
     };
-    zoom(delta, centerPoint);
+
+    // Add non-passive listener to allow preventDefault
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+    };
   }, [zoom]);
 
   // Open image dialog handler
@@ -997,7 +1013,6 @@ export const ImageCanvas: React.FC = () => {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        onWheel={handleWheel}
         onAuxClick={(e) => e.preventDefault()}
         onContextMenu={(e) => e.preventDefault()}
         style={{ cursor: hasImage ? getCursor() : 'pointer' }}

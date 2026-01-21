@@ -827,32 +827,35 @@ export const Toolbar: React.FC = () => {
         </>
       )}
 
-      {/* Shape tools */}
-      <div className="toolbar-group" role="group" aria-label="Shape types">
-        <IconButton
-          icon={<Circle size={18} />}
-          tooltip="Circle Shape"
-          shortcut="1"
-          onClick={() => setShapeType('circle')}
-          active={currentShapeType === 'circle'}
-        />
-        <IconButton
-          icon={<Square size={18} />}
-          tooltip="Rectangle Shape"
-          shortcut="2"
-          onClick={() => setShapeType('rectangle')}
-          active={currentShapeType === 'rectangle'}
-        />
-        <IconButton
-          icon={<Minus size={18} strokeWidth={3} />}
-          tooltip="Linear Shape"
-          shortcut="3"
-          onClick={() => setShapeType('linear')}
-          active={currentShapeType === 'linear'}
-        />
-      </div>
-
-      <div className="toolbar-divider" />
+      {/* Shape tools (visible only in create mode) */}
+      {mode === 'create' && (
+        <>
+          <div className="toolbar-group" role="group" aria-label="Shape types">
+            <IconButton
+              icon={<Circle size={18} />}
+              tooltip="Circle Shape"
+              shortcut="1"
+              onClick={() => setShapeType('circle')}
+              active={currentShapeType === 'circle'}
+            />
+            <IconButton
+              icon={<Square size={18} />}
+              tooltip="Rectangle Shape"
+              shortcut="2"
+              onClick={() => setShapeType('rectangle')}
+              active={currentShapeType === 'rectangle'}
+            />
+            <IconButton
+              icon={<Minus size={18} strokeWidth={3} />}
+              tooltip="Linear Shape"
+              shortcut="3"
+              onClick={() => setShapeType('linear')}
+              active={currentShapeType === 'linear'}
+            />
+          </div>
+          <div className="toolbar-divider" />
+        </>
+      )}
 
       {/* Auto Detect */}
       <div className="toolbar-group" role="group" aria-label="Auto detect">
