@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { X } from 'lucide-react';
+import { X, Lightbulb, ChevronDown, ChevronUp } from 'lucide-react';
 import type { LearnedDetectionParams } from '../../types';
 import { applyTolerance, formatSizeRange, formatAspectRatio } from '../../services/parameterLearner';
 
@@ -16,6 +16,7 @@ export const LearnedDetectionDialog: React.FC<LearnedDetectionDialogProps> = ({
 }) => {
   const [tolerance, setTolerance] = useState(0.2); // 20% default
   const [darkBlobs, setDarkBlobs] = useState(true);
+  const [showTips, setShowTips] = useState(false);
 
   const effectiveRange = applyTolerance(params, tolerance);
   const tolerancePercent = Math.round(tolerance * 100);
@@ -106,6 +107,52 @@ export const LearnedDetectionDialog: React.FC<LearnedDetectionDialogProps> = ({
                 ? 'Detect dark regions on light background (typical for follicles)'
                 : 'Detect light regions on dark background'}
             </p>
+          </div>
+
+          {/* Best Practices Tips */}
+          <div className="dialog-section tips-section">
+            <button
+              className="tips-toggle"
+              onClick={() => setShowTips(!showTips)}
+            >
+              <Lightbulb size={16} />
+              <span>Best Practices for Selection</span>
+              {showTips ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            </button>
+            {showTips && (
+              <div className="tips-content">
+                <ul className="tips-list">
+                  <li>
+                    <strong>Select 5-15 diverse examples</strong> — Include different sizes
+                    within your target range for better detection accuracy.
+                  </li>
+                  <li>
+                    <strong>Choose clear, representative follicles</strong> — Avoid partial,
+                    overlapping, or ambiguous examples that might confuse the detector.
+                  </li>
+                  <li>
+                    <strong>Include edge cases</strong> — Select both the smallest and largest
+                    follicles you want to detect to define the size range.
+                  </li>
+                  <li>
+                    <strong>Sample from different image regions</strong> — Lighting and contrast
+                    can vary across the image; select from multiple areas.
+                  </li>
+                  <li>
+                    <strong>Adjust tolerance for variation</strong> — Use higher tolerance (30-50%)
+                    if follicle sizes vary significantly, lower (10-20%) for uniform sizes.
+                  </li>
+                  <li>
+                    <strong>Enable CLAHE in Detection Settings</strong> — For images with uneven
+                    lighting, enable CLAHE preprocessing for better results.
+                  </li>
+                </ul>
+                <p className="tips-note">
+                  <strong>Note:</strong> This detection uses your Detection Settings (CLAHE, SAHI, Soft-NMS)
+                  combined with the learned size parameters from your selection.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

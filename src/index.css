@@ -1106,6 +1106,83 @@ body {
   line-height: 1.5;
 }
 
+/* Tips Section */
+.learned-detection-dialog .tips-section {
+  margin-top: 16px;
+}
+
+.learned-detection-dialog .tips-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.learned-detection-dialog .tips-toggle:hover {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.learned-detection-dialog .tips-toggle svg:first-child {
+  color: var(--warning);
+}
+
+.learned-detection-dialog .tips-toggle span {
+  flex: 1;
+  text-align: left;
+}
+
+.learned-detection-dialog .tips-content {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  border-left: 3px solid var(--warning);
+}
+
+.learned-detection-dialog .tips-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.learned-detection-dialog .tips-list li {
+  margin-bottom: 10px;
+}
+
+.learned-detection-dialog .tips-list li:last-child {
+  margin-bottom: 0;
+}
+
+.learned-detection-dialog .tips-list li strong {
+  color: var(--text-primary);
+}
+
+.learned-detection-dialog .tips-note {
+  margin: 14px 0 0 0;
+  padding: 10px 12px;
+  background-color: var(--bg-secondary);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.learned-detection-dialog .tips-note strong {
+  color: var(--accent);
+}
+
 /* Spinner animation for loading states */
 @keyframes spin {
   from { transform: rotate(0deg); }
