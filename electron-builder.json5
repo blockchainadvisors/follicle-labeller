@@ -34,10 +34,15 @@
     "artifactName": "${name}-${version}-windows-setup.${ext}"
   },
   "mac": {
-    "target": ["dmg"]
+    "target": [
+      {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      }
+    ]
   },
   "dmg": {
-    "artifactName": "${name}-${version}-macos.${ext}"
+    "artifactName": "${name}-${version}-macos-${arch}.${ext}"
   },
   "linux": {
     "target": ["AppImage"],
