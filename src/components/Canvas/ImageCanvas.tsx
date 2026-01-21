@@ -614,6 +614,29 @@ export const ImageCanvas: React.FC = () => {
     setDragState(prev => ({ ...prev, currentPoint: point }));
   }, [dragState, pan, getImagePoint]);
 
+  // Mouse leave handler - keep selection active, just stop updating position
+  const handleMouseLeave = useCallback(() => {
+    // For pan operations, we want to stop panning when mouse leaves
+    if (dragState.dragType === 'pan') {
+      setDragState({
+        isDragging: false,
+        startPoint: null,
+        currentPoint: null,
+        dragType: null,
+        targetId: null,
+        resizeHandle: undefined,
+        createPhase: undefined,
+        lineEndPoint: undefined,
+        lassoPoints: undefined,
+      });
+      return;
+    }
+
+    // For selection operations (marquee, lasso), keep the state active
+    // The selection will remain visible and can be completed when mouse returns
+    // or finalized on mouse up (even outside canvas via document listener)
+  }, [dragState.dragType]);
+
   // Mouse up handler
   const handleMouseUp = useCallback(() => {
     if (!dragState.isDragging) return;
@@ -731,6 +754,57 @@ export const ImageCanvas: React.FC = () => {
       lassoPoints: undefined,
     });
   }, [dragState, moveAnnotation, moveSelected, resizeCircle, resizeRectangle, resizeLinear, follicles, selectMultiple, clearSelection]);
+
+  // Document-level mouse handlers for selections that extend outside canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleDocumentMouseMove = (e: MouseEvent) => {
+      // Only handle marquee and lasso selections
+      if (!dragState.isDragging ||
+          (dragState.dragType !== 'marquee' && dragState.dragType !== 'lasso')) {
+        return;
+      }
+
+      // Convert document coordinates to image coordinates
+      const rect = canvas.getBoundingClientRect();
+      const point = screenToImage(e.clientX, e.clientY, viewport, rect);
+
+      if (dragState.dragType === 'lasso' && dragState.lassoPoints) {
+        setDragState(prev => ({
+          ...prev,
+          currentPoint: point,
+          lassoPoints: [...(prev.lassoPoints || []), point],
+        }));
+      } else {
+        setDragState(prev => ({ ...prev, currentPoint: point }));
+      }
+    };
+
+    const handleDocumentMouseUp = () => {
+      // Only handle if we're in a drag operation that should finalize on mouse up
+      if (dragState.isDragging && (
+        dragState.dragType === 'marquee' ||
+        dragState.dragType === 'lasso' ||
+        dragState.dragType === 'move' ||
+        dragState.dragType === 'resize'
+      )) {
+        handleMouseUp();
+      }
+    };
+
+    // Add listeners when dragging starts
+    if (dragState.isDragging) {
+      document.addEventListener('mousemove', handleDocumentMouseMove);
+      document.addEventListener('mouseup', handleDocumentMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleDocumentMouseMove);
+      document.removeEventListener('mouseup', handleDocumentMouseUp);
+    };
+  }, [dragState.isDragging, dragState.dragType, dragState.lassoPoints, handleMouseUp, viewport]);
 
   // Wheel zoom handler - use native event listener to allow preventDefault
   useEffect(() => {
@@ -1012,7 +1086,7 @@ export const ImageCanvas: React.FC = () => {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
         onAuxClick={(e) => e.preventDefault()}
         onContextMenu={(e) => e.preventDefault()}
         style={{ cursor: hasImage ? getCursor() : 'pointer' }}
