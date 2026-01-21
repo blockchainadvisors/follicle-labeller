@@ -285,7 +285,11 @@ export const Toolbar: React.FC = () => {
 
     // Set the current project path
     setCurrentProjectPath(result.filePath);
-  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
+
+    // Mark as clean after loading - use setTimeout to ensure it runs after
+    // dirty-tracking effects have fired (addImage sets isDirty, useEffect also sets it)
+    setTimeout(markClean, 0);
+  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath, markClean]);
 
   const handleLoad = useCallback(async () => {
     // Check for unsaved changes first
