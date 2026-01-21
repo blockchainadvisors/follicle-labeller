@@ -575,15 +575,16 @@ export const Toolbar: React.FC = () => {
       // Apply tolerance to get effective size range
       const effectiveRange = applyTolerance(learnedParams, tolerance);
 
-      // Run detection with learned size range
+      // Merge learned size params with advanced settings from Detection Settings
+      const baseOptions = settingsToOptions(detectionSettings);
       const blobs = await detectBlobs(activeImage.imageBitmap, {
+        ...baseOptions,
+        // Override size parameters with learned values
         minWidth: effectiveRange.minWidth,
         maxWidth: effectiveRange.maxWidth,
         minHeight: effectiveRange.minHeight,
         maxHeight: effectiveRange.maxHeight,
         darkBlobs,
-        useGPU: true,
-        workerCount: navigator.hardwareConcurrency || 4,
       });
 
       if (blobs.length === 0) {
@@ -622,7 +623,7 @@ export const Toolbar: React.FC = () => {
     } finally {
       setIsDetecting(false);
     }
-  }, [learnedParams, activeImage, activeImageId, follicles, importFollicles]);
+  }, [learnedParams, activeImage, activeImageId, follicles, importFollicles, detectionSettings]);
 
   // Close learned detection dialog
   const handleCancelLearnDialog = useCallback(() => {
