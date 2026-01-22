@@ -1,5 +1,5 @@
 import { autoUpdater, UpdateInfo, ProgressInfo } from 'electron-updater';
-import { BrowserWindow, dialog, app, Notification } from 'electron';
+import { BrowserWindow, dialog, app } from 'electron';
 
 // Disable default logging, use console instead
 autoUpdater.logger = null;
@@ -27,13 +27,15 @@ export function initUpdater(window: BrowserWindow): void {
     updateAvailable = true;
     console.log(`Update available: ${info.version} (downloading in background...)`);
 
-    // For manual checks, show a brief notification that download started
-    if (isManualCheck && Notification.isSupported()) {
-      new Notification({
-        title: 'Update Available',
-        body: `Version ${info.version} is downloading in the background.`,
-        silent: true,
-      }).show();
+    // For manual checks, show a dialog that download started
+    if (isManualCheck && mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Follicle Labeller - Update Available',
+        message: `Version ${info.version} is available`,
+        detail: 'The update is downloading in the background. You will be notified when it\'s ready to install.',
+        buttons: ['OK'],
+      });
     }
     isManualCheck = false;
   });
@@ -48,7 +50,7 @@ export function initUpdater(window: BrowserWindow): void {
     if (isManualCheck && mainWindow) {
       dialog.showMessageBox(mainWindow, {
         type: 'info',
-        title: 'No Updates Available',
+        title: 'Follicle Labeller - No Updates',
         message: 'You are running the latest version.',
         detail: `Current version: ${app.getVersion()}`,
         buttons: ['OK'],
@@ -67,31 +69,38 @@ export function initUpdater(window: BrowserWindow): void {
     }
   });
 
-  // Update downloaded - show non-intrusive notification
-  // Update will auto-install on quit (no action required from user)
+  // Update downloaded - show dialog asking user to restart
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     updateDownloaded = true;
     downloadedVersion = info.version;
-    console.log(`Update ${info.version} downloaded and ready to install on quit`);
+    console.log(`Update ${info.version} downloaded and ready to install`);
 
     if (mainWindow) {
       // Clear progress bar
       mainWindow.setProgressBar(-1);
     }
 
-    // Show a subtle notification (not a blocking dialog)
-    if (Notification.isSupported()) {
-      const notification = new Notification({
-        title: 'Update Ready',
-        body: `Version ${info.version} will be installed when you quit the app.`,
-        silent: true,
-      });
-      notification.show();
-    }
-
     // Notify renderer (for optional UI indicator)
     if (mainWindow) {
       mainWindow.webContents.send('update:ready', { version: info.version });
+    }
+
+    // Show dialog asking user to restart
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Follicle Labeller - Update Ready',
+        message: `Version ${info.version} has been downloaded`,
+        detail: 'The update has been downloaded. Restart the application now to apply the update.',
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      }).then((result) => {
+        if (result.response === 0) {
+          // User chose to restart - quit and install
+          autoUpdater.quitAndInstall(false, true);
+        }
+      });
     }
   });
 
@@ -108,7 +117,7 @@ export function initUpdater(window: BrowserWindow): void {
     if (isManualCheck && mainWindow) {
       dialog.showMessageBox(mainWindow, {
         type: 'error',
-        title: 'Update Error',
+        title: 'Follicle Labeller - Update Error',
         message: 'Failed to check for updates.',
         detail: error.message || 'An unknown error occurred. Please try again later.',
         buttons: ['OK'],
