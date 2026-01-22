@@ -117,19 +117,33 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      # macOS: Notarize and staple DMG files
+      # macOS: Notarize DMG files in parallel, then staple
       - name: Notarize macOS DMG
         if: matrix.platform == 'mac'
         run: |
+          # Submit all DMGs for notarization in parallel
+          pids=()
           for dmg in release/*.dmg; do
             if [ -f "$dmg" ]; then
-              echo "Notarizing $dmg..."
+              echo "Submitting $dmg for notarization..."
               xcrun notarytool submit "$dmg" \
                 --apple-id "${{ secrets.APPLE_ID }}" \
                 --password "${{ secrets.APPLE_ID_PASSWORD }}" \
                 --team-id "${{ secrets.APPLE_TEAM_ID }}" \
-                --wait
+                --wait &
+              pids+=($!)
+            fi
+          done
 
+          # Wait for all notarizations to complete
+          echo "Waiting for all notarizations to complete..."
+          for pid in "${pids[@]}"; do
+            wait $pid || exit 1
+          done
+
+          # Staple all DMGs
+          for dmg in release/*.dmg; do
+            if [ -f "$dmg" ]; then
               echo "Stapling $dmg..."
               xcrun stapler staple "$dmg"
             fi
