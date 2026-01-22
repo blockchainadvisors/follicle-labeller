@@ -39,7 +39,13 @@
         "target": "dmg",
         "arch": ["x64", "arm64"]
       }
-    ]
+    ],
+    "icon": "public/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "entitlements.plist",
+    "entitlementsInherit": "entitlements.plist",
+    "notarize": false
   },
   "dmg": {
     "artifactName": "${name}-${version}-macos-${arch}.${ext}"

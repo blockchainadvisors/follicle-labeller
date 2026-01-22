@@ -22,6 +22,10 @@ npm-debug.log*
 .env
 .env.local
 
+# Apple signing secrets
+apple-secrets.txt
+*.p12
+
 # Temp files
 *.tmp
 tmpclaude-*

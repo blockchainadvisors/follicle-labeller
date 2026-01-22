@@ -53,10 +53,70 @@ jobs:
           rm -rf ~/.cache/electron ~/Library/Caches/electron ~/AppData/Local/electron/Cache 2>/dev/null || true
         shell: bash
 
+      # macOS: Import code signing certificate
+      - name: Import Code Signing Certificate
+        if: matrix.platform == 'mac'
+        run: |
+          # Decode certificate
+          echo "${{ secrets.APPLE_CERTIFICATE_BASE64 }}" | base64 --decode > certificate.p12
+
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate
+          security import certificate.p12 -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Clean up certificate file
+          rm certificate.p12
+
+          # Verify certificate was imported
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
       - name: Build application
         run: npm run electron:build:${{ matrix.platform }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing environment variables for electron-builder
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_BASE64 || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          # macOS notarization environment variables
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_ID_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+
+      # macOS: Notarize and staple the DMG files
+      - name: Notarize macOS DMG
+        if: matrix.platform == 'mac'
+        run: |
+          for dmg in release/*.dmg; do
+            if [ -f "$dmg" ]; then
+              echo "Notarizing $dmg..."
+              xcrun notarytool submit "$dmg" \
+                --apple-id "${{ secrets.APPLE_ID }}" \
+                --password "${{ secrets.APPLE_ID_PASSWORD }}" \
+                --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+                --wait
+
+              echo "Stapling $dmg..."
+              xcrun stapler staple "$dmg"
+            fi
+          done
+
+      # macOS: Clean up keychain
+      - name: Cleanup Keychain
+        if: matrix.platform == 'mac' && always()
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          if [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain $KEYCHAIN_PATH
+          fi
 
       - name: Upload Windows artifacts
         if: matrix.platform == 'win'
