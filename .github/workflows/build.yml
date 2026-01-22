@@ -36,9 +36,9 @@ jobs:
             ~/AppData/Local/electron/Cache
             ~/.cache/electron
             ~/Library/Caches/electron
-          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-electron-v2-${{ hashFiles('package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ runner.os }}-electron-v2-
 
       - name: Install dependencies
         run: npm ci
@@ -46,28 +46,12 @@ jobs:
         env:
           ELECTRON_CACHE: ${{ runner.os == 'Windows' && '~/AppData/Local/electron/Cache' || '~/.cache/electron' }}
 
-      - name: Install icon generation tools
-        run: npm install sharp png-to-ico --save-dev
-
-      - name: Generate icons
-        run: npm run icons
-
-      - name: Generate macOS icns
-        if: matrix.platform == 'mac'
+      - name: Clean build directories and Electron cache
         run: |
-          mkdir -p public/icon.iconset
-          cp public/icon-16.png public/icon.iconset/icon_16x16.png
-          cp public/icon-32.png public/icon.iconset/icon_16x16@2x.png
-          cp public/icon-32.png public/icon.iconset/icon_32x32.png
-          cp public/icon-64.png public/icon.iconset/icon_32x32@2x.png
-          cp public/icon-128.png public/icon.iconset/icon_128x128.png
-          cp public/icon-256.png public/icon.iconset/icon_128x128@2x.png
-          cp public/icon-256.png public/icon.iconset/icon_256x256.png
-          cp public/icon-512.png public/icon.iconset/icon_256x256@2x.png
-          cp public/icon-512.png public/icon.iconset/icon_512x512.png
-          cp public/icon-1024.png public/icon.iconset/icon_512x512@2x.png
-          iconutil -c icns public/icon.iconset -o public/icon.icns
-          rm -rf public/icon.iconset
+          rm -rf release dist dist-electron
+          # Clear Electron cache to avoid icon.icns hard link issues
+          rm -rf ~/.cache/electron ~/Library/Caches/electron ~/AppData/Local/electron/Cache 2>/dev/null || true
+        shell: bash
 
       - name: Build application
         run: npm run electron:build:${{ matrix.platform }}
@@ -82,6 +66,8 @@ jobs:
           path: |
             release/*.exe
             release/*.msi
+            release/*.yml
+            release/*.yaml
           if-no-files-found: ignore
 
       - name: Upload macOS artifacts
@@ -92,6 +78,8 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/*.yml
+            release/*.yaml
           if-no-files-found: ignore
 
   release:

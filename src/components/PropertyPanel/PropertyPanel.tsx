@@ -4,19 +4,21 @@ import { useProjectStore } from '../../store/projectStore';
 import { isCircle, isRectangle, isLinear } from '../../types';
 
 export const PropertyPanel: React.FC = () => {
-  const selectedId = useFollicleStore(state => state.selectedId);
+  const selectedIds = useFollicleStore(state => state.selectedIds);
   const follicles = useFollicleStore(state => state.follicles);
   const setLabel = useFollicleStore(state => state.setLabel);
   const setNotes = useFollicleStore(state => state.setNotes);
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
+  const deleteSelected = useFollicleStore(state => state.deleteSelected);
   const updateFollicle = useFollicleStore(state => state.updateFollicle);
 
   const activeImageId = useProjectStore(state => state.activeImageId);
 
-  // Only show selected annotation if it belongs to the active image
-  const selected = follicles.find(f => f.id === selectedId && f.imageId === activeImageId);
+  // Get selected annotations that belong to the active image
+  const selectedFollicles = follicles.filter(f => selectedIds.has(f.id) && f.imageId === activeImageId);
 
-  if (!selected) {
+  // No selection
+  if (selectedFollicles.length === 0) {
     return (
       <div className="property-panel empty">
         <div className="empty-state">
@@ -30,9 +32,13 @@ export const PropertyPanel: React.FC = () => {
               <li><strong>Rectangle (2):</strong> Click corner, click opposite corner</li>
               <li><strong>Linear (3):</strong> Click start, click end, click for width</li>
               <li><strong>Select:</strong> Click on an annotation</li>
-              <li><strong>Move:</strong> Drag a selected annotation</li>
-              <li><strong>Resize:</strong> Drag the edge/corner handles</li>
-              <li><strong>Cancel:</strong> Press Escape to cancel creation</li>
+              <li><strong>Ctrl+Click:</strong> Add/remove from selection</li>
+              <li><strong>Marquee (M):</strong> Drag to select multiple</li>
+              <li><strong>Lasso (F):</strong> Draw to select multiple</li>
+              <li><strong>Ctrl+A:</strong> Select all annotations</li>
+              <li><strong>Move:</strong> Drag selected annotation(s)</li>
+              <li><strong>Resize:</strong> Drag handles (single selection)</li>
+              <li><strong>Cancel:</strong> Press Escape to cancel/deselect</li>
               <li><strong>Delete:</strong> Press Delete key</li>
             </ul>
           </div>
@@ -40,6 +46,66 @@ export const PropertyPanel: React.FC = () => {
       </div>
     );
   }
+
+  // Multi-selection view
+  if (selectedFollicles.length > 1) {
+    // Count by type
+    const circleCount = selectedFollicles.filter(isCircle).length;
+    const rectangleCount = selectedFollicles.filter(isRectangle).length;
+    const linearCount = selectedFollicles.filter(isLinear).length;
+
+    // Batch color change handler
+    const handleBatchColorChange = (color: string) => {
+      for (const f of selectedFollicles) {
+        updateFollicle(f.id, { color });
+      }
+    };
+
+    return (
+      <div className="property-panel multi-selection">
+        <h3>Multiple Selection</h3>
+
+        <div className="property-group readonly">
+          <label>Selected</label>
+          <span className="type-display">{selectedFollicles.length} items</span>
+        </div>
+
+        <div className="property-group readonly">
+          <label>Breakdown</label>
+          <div className="selection-breakdown">
+            {circleCount > 0 && <span>{circleCount} Circle{circleCount > 1 ? 's' : ''}</span>}
+            {rectangleCount > 0 && <span>{rectangleCount} Rectangle{rectangleCount > 1 ? 's' : ''}</span>}
+            {linearCount > 0 && <span>{linearCount} Linear{linearCount > 1 ? 's' : ''}</span>}
+          </div>
+        </div>
+
+        <div className="property-group">
+          <label htmlFor="batch-color">Batch Color</label>
+          <div className="color-picker">
+            <input
+              id="batch-color"
+              type="color"
+              defaultValue="#4ECDC4"
+              onChange={(e) => handleBatchColorChange(e.target.value)}
+            />
+            <span className="color-hint">Apply to all selected</span>
+          </div>
+        </div>
+
+        <div className="property-actions">
+          <button
+            className="delete-button"
+            onClick={() => deleteSelected()}
+          >
+            Delete All ({selectedFollicles.length})
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Single selection - original behavior
+  const selected = selectedFollicles[0];
 
   const shapeLabel = isCircle(selected) ? 'Circle' : isRectangle(selected) ? 'Rectangle' : 'Linear';
 

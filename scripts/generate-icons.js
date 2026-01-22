@@ -1,12 +1,13 @@
 /**
  * Icon Generator Script
- * Generates app icons for Windows, macOS, and Linux from SVG source
+ * Generates app icons for Windows, macOS, and Linux from PNG source
  *
  * Usage: node scripts/generate-icons.js
  *
  * Requirements:
- * - npm install sharp png-to-ico
- * - For macOS .icns: use online converter or macOS iconutil
+ * - npm install sharp png-to-ico icns-lib
+ *
+ * Note: Uses icon.png (1024x1024) as the source for best quality
  */
 
 const fs = require('fs');
@@ -22,7 +23,7 @@ try {
   sharp = require('sharp');
 }
 
-const SVG_PATH = path.join(__dirname, '../public/icon.svg');
+const SOURCE_PNG = path.join(__dirname, '../public/icon.png');
 const OUTPUT_DIR = path.join(__dirname, '../public');
 
 // Icon sizes needed
@@ -34,27 +35,32 @@ const SIZES = {
 async function generateIcons() {
   console.log('Generating app icons...\n');
 
-  // Read SVG
-  const svgBuffer = fs.readFileSync(SVG_PATH);
+  // Check if source PNG exists
+  if (!fs.existsSync(SOURCE_PNG)) {
+    console.error(`Error: Source icon not found at ${SOURCE_PNG}`);
+    console.error('Please ensure icon.png (1024x1024 recommended) exists in public/');
+    process.exit(1);
+  }
 
-  // Generate PNG files at various sizes
+  // Read source PNG
+  const sourceBuffer = fs.readFileSync(SOURCE_PNG);
+  const metadata = await sharp(sourceBuffer).metadata();
+  console.log(`Source: icon.png (${metadata.width}x${metadata.height})\n`);
+
+  // Generate PNG files at various sizes (skip sizes larger than source)
   console.log('Generating PNG icons...');
   for (const size of SIZES.png) {
+    if (size > metadata.width) {
+      console.log(`  Skipped: icon-${size}.png (larger than source)`);
+      continue;
+    }
     const outputPath = path.join(OUTPUT_DIR, `icon-${size}.png`);
-    await sharp(svgBuffer)
-      .resize(size, size)
+    await sharp(sourceBuffer)
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .png()
       .toFile(outputPath);
     console.log(`  Created: icon-${size}.png`);
   }
-
-  // Generate main icon.png (512x512 for Linux)
-  const mainPngPath = path.join(OUTPUT_DIR, 'icon.png');
-  await sharp(svgBuffer)
-    .resize(512, 512)
-    .png()
-    .toFile(mainPngPath);
-  console.log('  Created: icon.png (512x512)');
 
   // Generate Windows ICO
   console.log('\nGenerating Windows ICO...');
@@ -75,22 +81,40 @@ async function generateIcons() {
     console.log('  If png-to-ico is not installed, run: npm install png-to-ico --save-dev');
   }
 
-  // Instructions for macOS ICNS
-  console.log('\nFor macOS icon.icns:');
-  console.log('  Option 1: Use online converter (cloudconvert.com, iconverticons.com)');
-  console.log('  Option 2: On macOS, create iconset folder and use iconutil:');
-  console.log('    mkdir icon.iconset');
-  console.log('    cp icon-16.png icon.iconset/icon_16x16.png');
-  console.log('    cp icon-32.png icon.iconset/icon_16x16@2x.png');
-  console.log('    cp icon-32.png icon.iconset/icon_32x32.png');
-  console.log('    cp icon-64.png icon.iconset/icon_32x32@2x.png');
-  console.log('    cp icon-128.png icon.iconset/icon_128x128.png');
-  console.log('    cp icon-256.png icon.iconset/icon_128x128@2x.png');
-  console.log('    cp icon-256.png icon.iconset/icon_256x256.png');
-  console.log('    cp icon-512.png icon.iconset/icon_256x256@2x.png');
-  console.log('    cp icon-512.png icon.iconset/icon_512x512.png');
-  console.log('    cp icon-1024.png icon.iconset/icon_512x512@2x.png');
-  console.log('    iconutil -c icns icon.iconset -o icon.icns');
+  // Generate macOS ICNS
+  console.log('\nGenerating macOS ICNS...');
+  try {
+    const icnsLib = require('icns-lib');
+
+    // ICNS icon types and their corresponding sizes
+    // ic07 = 128x128, ic08 = 256x256, ic09 = 512x512, ic10 = 1024x1024
+    // ic11 = 32x32 (16@2x), ic12 = 64x64 (32@2x), ic13 = 256x256 (128@2x), ic14 = 512x512 (256@2x)
+    const iconTypes = {
+      'ic07': 128,   // 128x128
+      'ic08': 256,   // 256x256
+      'ic09': 512,   // 512x512
+      'ic10': 1024,  // 1024x1024 (512@2x)
+      'ic11': 32,    // 32x32 (16@2x)
+      'ic12': 64,    // 64x64 (32@2x)
+      'ic13': 256,   // 256x256 (128@2x)
+      'ic14': 512,   // 512x512 (256@2x)
+    };
+
+    const icons = {};
+    for (const [type, size] of Object.entries(iconTypes)) {
+      const pngPath = path.join(OUTPUT_DIR, `icon-${size}.png`);
+      icons[type] = fs.readFileSync(pngPath);
+    }
+
+    // Create ICNS buffer
+    const icnsBuffer = icnsLib.format(icons);
+    fs.writeFileSync(path.join(OUTPUT_DIR, 'icon.icns'), icnsBuffer);
+    console.log('  Created: icon.icns');
+  } catch (e) {
+    console.log('  Error generating ICNS:', e.message);
+    console.log('  If icns-lib is not installed, run: npm install icns-lib --save-dev');
+    console.log('\n  Alternative: Use online converter (cloudconvert.com, iconverticons.com)');
+  }
 
   console.log('\nIcon generation complete!');
 }

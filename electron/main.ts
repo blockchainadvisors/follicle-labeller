@@ -1,9 +1,21 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions, powerMonitor } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { spawn, ChildProcess } from 'child_process';
 import JSZip from 'jszip';
+import { initUpdater, checkForUpdates } from './updater';
 
 let mainWindow: BrowserWindow | null = null;
+
+// SAM server process
+let samServerProcess: ChildProcess | null = null;
+const SAM_SERVER_PORT = 5555;
+
+// File to open when launched via file association
+let fileToOpen: string | null = null;
+
+// Track if we're force closing (bypass unsaved changes check)
+let forceClose = false;
 
 function createWindow(): void {
   // Determine icon path based on platform
@@ -37,10 +49,30 @@ function createWindow(): void {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Handle window close - check for unsaved changes
+  mainWindow.on('close', (event) => {
+    if (forceClose) {
+      forceClose = false;
+      return; // Allow close
+    }
+
+    // Prevent close and ask renderer about unsaved changes
+    event.preventDefault();
+    mainWindow?.webContents.send('app:checkUnsavedChanges');
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+// IPC handler for renderer to confirm close after checking unsaved changes
+ipcMain.on('app:confirmClose', (_, canClose: boolean) => {
+  if (canClose && mainWindow) {
+    forceClose = true;
+    mainWindow.close();
+  }
+});
 
 // IPC Handlers
 
@@ -330,6 +362,95 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
   }
 });
 
+// Load project from specific file path (for file association)
+ipcMain.handle('file:loadProject', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
+
+    // Check if this is V2 (has manifest.json)
+    const hasManifest = 'manifest.json' in zip.files;
+
+    if (hasManifest) {
+      // V2 format
+      const manifest = await zip.files['manifest.json'].async('string');
+      const annotations = await zip.files['annotations.json'].async('string');
+
+      // Load all images from images/ folder
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
+      const imagesFolder = zip.folder('images');
+
+      if (imagesFolder) {
+        for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
+          if (file.dir) continue;
+
+          const archiveFileName = relativePath.replace('images/', '');
+          if (!archiveFileName) continue;
+
+          const dashIndex = archiveFileName.indexOf('-');
+          if (dashIndex === -1) continue;
+
+          const id = archiveFileName.substring(0, dashIndex);
+          const fileName = archiveFileName.substring(dashIndex + 1);
+
+          const imageBuffer = await file.async('nodebuffer');
+          const imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+
+          images.push({ id, fileName, data: imageData });
+        }
+      }
+
+      return {
+        version: '2.0' as const,
+        filePath,
+        manifest,
+        images,
+        annotations,
+      };
+    } else {
+      // V1 format
+      let imageFileName = '';
+      let imageData: ArrayBuffer | null = null;
+      let jsonData = '';
+
+      for (const fileName of Object.keys(zip.files)) {
+        if (fileName === 'annotations.json') {
+          jsonData = await zip.files[fileName].async('string');
+        } else if (!zip.files[fileName].dir) {
+          imageFileName = fileName;
+          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          imageData = imageBuffer.buffer.slice(
+            imageBuffer.byteOffset,
+            imageBuffer.byteOffset + imageBuffer.byteLength
+          );
+        }
+      }
+
+      if (!imageData || !jsonData) {
+        throw new Error('Invalid .fol file: missing image or annotations');
+      }
+
+      return {
+        version: '1.0' as const,
+        filePath,
+        imageFileName,
+        imageData,
+        jsonData,
+      };
+    }
+  } catch (error) {
+    console.error('Failed to load project from path:', error);
+    return null;
+  }
+});
+
 // Menu item references for dynamic enable/disable
 let saveMenuItem: Electron.MenuItem | null = null;
 let saveAsMenuItem: Electron.MenuItem | null = null;
@@ -465,13 +586,18 @@ function createMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Check for Updates...',
+          click: () => checkForUpdates(),
+        },
+        { type: 'separator' },
+        {
           label: 'About Follicle Labeller',
           click: () => {
             if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
                 title: 'About Follicle Labeller',
-                message: 'Follicle Labeller v1.0.0',
+                message: `Follicle Labeller v${app.getVersion()}`,
                 detail: 'Medical image annotation tool for follicle labeling.',
               });
             }
@@ -490,10 +616,340 @@ function createMenu(): void {
   closeProjectMenuItem = menu.getMenuItemById('close-project');
 }
 
+// Show download options dialog when there's an active selection
+// Returns: 'all' | 'currentImage' | 'selected' | 'cancel'
+ipcMain.handle('dialog:downloadOptions', async (_, selectedCount: number, currentImageCount: number, totalCount: number) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return 'cancel';
+
+  const result = await dialog.showMessageBox(window, {
+    type: 'question',
+    title: 'Download Follicle Images',
+    message: 'What would you like to download?',
+    buttons: [
+      `Selected Only (${selectedCount})`,
+      `Current Image (${currentImageCount})`,
+      `All Follicles (${totalCount})`,
+      'Cancel'
+    ],
+    defaultId: 0,
+    cancelId: 3,
+  });
+
+  switch (result.response) {
+    case 0: return 'selected';
+    case 1: return 'currentImage';
+    case 2: return 'all';
+    default: return 'cancel';
+  }
+});
+
+// Show unsaved changes dialog
+// Returns: 'save' | 'discard' | 'cancel'
+ipcMain.handle('dialog:unsavedChanges', async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return 'discard';
+
+  const result = await dialog.showMessageBox(window, {
+    type: 'warning',
+    title: 'Unsaved Changes',
+    message: 'You have unsaved changes. Do you want to save before closing?',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+  });
+
+  switch (result.response) {
+    case 0: return 'save';
+    case 1: return 'discard';
+    default: return 'cancel';
+  }
+});
+
+// ============================================
+// SAM 2 Server Management
+// ============================================
+
+/**
+ * Get the path to the SAM server Python script.
+ */
+function getSAMServerPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'python', 'sam_server.py');
+  }
+  return path.join(__dirname, 'python', 'sam_server.py');
+}
+
+/**
+ * Check if Python is available.
+ */
+async function checkPythonAvailable(): Promise<{ available: boolean; version?: string; error?: string }> {
+  return new Promise((resolve) => {
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const proc = spawn(pythonCmd, ['--version']);
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        const version = stdout.trim() || stderr.trim();
+        resolve({ available: true, version });
+      } else {
+        resolve({ available: false, error: 'Python not found' });
+      }
+    });
+
+    proc.on('error', () => {
+      resolve({ available: false, error: 'Python not found' });
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      proc.kill();
+      resolve({ available: false, error: 'Python check timed out' });
+    }, 5000);
+  });
+}
+
+/**
+ * Start the SAM server process.
+ */
+async function startSAMServer(modelSize: string = 'small'): Promise<{ success: boolean; error?: string }> {
+  // Check if already running
+  if (samServerProcess && !samServerProcess.killed) {
+    return { success: true };
+  }
+
+  // Check Python availability
+  const pythonCheck = await checkPythonAvailable();
+  if (!pythonCheck.available) {
+    return { success: false, error: pythonCheck.error };
+  }
+
+  // Check if server script exists
+  const serverPath = getSAMServerPath();
+  if (!fs.existsSync(serverPath)) {
+    return { success: false, error: 'SAM server script not found' };
+  }
+
+  return new Promise((resolve) => {
+    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+    samServerProcess = spawn(pythonCmd, [
+      serverPath,
+      '--port', SAM_SERVER_PORT.toString(),
+      '--model', modelSize,
+    ], {
+      cwd: path.dirname(serverPath),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let resolved = false;
+    let errorOutput = '';
+
+    samServerProcess.stdout?.on('data', (data) => {
+      const output = data.toString();
+      console.log('[SAM Server]', output);
+
+      // Check for successful startup
+      if (!resolved && output.includes('Running on')) {
+        resolved = true;
+        resolve({ success: true });
+      }
+    });
+
+    samServerProcess.stderr?.on('data', (data) => {
+      const output = data.toString();
+      console.error('[SAM Server Error]', output);
+      errorOutput += output;
+    });
+
+    samServerProcess.on('close', (code) => {
+      console.log(`SAM server exited with code ${code}`);
+      samServerProcess = null;
+      if (!resolved) {
+        resolved = true;
+        resolve({ success: false, error: errorOutput || `Process exited with code ${code}` });
+      }
+    });
+
+    samServerProcess.on('error', (err) => {
+      console.error('Failed to start SAM server:', err);
+      if (!resolved) {
+        resolved = true;
+        resolve({ success: false, error: err.message });
+      }
+    });
+
+    // Timeout after 60 seconds (model loading can take time)
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        resolve({ success: false, error: 'Server startup timed out' });
+      }
+    }, 60000);
+  });
+}
+
+/**
+ * Stop the SAM server process.
+ */
+function stopSAMServer(): void {
+  if (samServerProcess && !samServerProcess.killed) {
+    console.log('Stopping SAM server...');
+
+    // Try graceful shutdown first via HTTP
+    const http = require('http');
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: SAM_SERVER_PORT,
+      path: '/shutdown',
+      method: 'POST',
+      timeout: 2000,
+    }, () => {
+      // Response received, server is shutting down
+    });
+
+    req.on('error', () => {
+      // If HTTP fails, kill the process
+      if (samServerProcess && !samServerProcess.killed) {
+        samServerProcess.kill();
+      }
+    });
+
+    req.end();
+
+    // Force kill after timeout if still running
+    setTimeout(() => {
+      if (samServerProcess && !samServerProcess.killed) {
+        samServerProcess.kill('SIGKILL');
+      }
+      samServerProcess = null;
+    }, 3000);
+  }
+}
+
+/**
+ * Check if SAM server is running.
+ */
+async function isSAMServerRunning(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: SAM_SERVER_PORT,
+      path: '/health',
+      method: 'GET',
+      timeout: 2000,
+    }, (res: any) => {
+      resolve(res.statusCode === 200);
+    });
+
+    req.on('error', () => {
+      resolve(false);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+
+    req.end();
+  });
+}
+
+// SAM IPC Handlers
+ipcMain.handle('sam:startServer', async (_, modelSize?: string) => {
+  return startSAMServer(modelSize || 'small');
+});
+
+ipcMain.handle('sam:stopServer', async () => {
+  stopSAMServer();
+  return { success: true };
+});
+
+ipcMain.handle('sam:isAvailable', async () => {
+  return isSAMServerRunning();
+});
+
+ipcMain.handle('sam:checkPython', async () => {
+  return checkPythonAvailable();
+});
+
+ipcMain.handle('sam:getServerInfo', async () => {
+  return {
+    port: SAM_SERVER_PORT,
+    running: await isSAMServerRunning(),
+    scriptPath: getSAMServerPath(),
+  };
+});
+
+// ============================================
+// File Handling
+// ============================================
+
+// Handle file open from command line (Windows/Linux)
+function getFileFromArgs(args: string[]): string | null {
+  // Skip the first arg (executable path) and look for .fol files
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg && arg.endsWith('.fol') && fs.existsSync(arg)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+// macOS: Handle file open before app is ready
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (filePath.endsWith('.fol')) {
+    if (mainWindow) {
+      // App is already running, send to renderer
+      mainWindow.webContents.send('file:open', filePath);
+    } else {
+      // App is starting, store for later
+      fileToOpen = filePath;
+    }
+  }
+});
+
+// IPC handler for renderer to request file to open on startup
+ipcMain.handle('app:getFileToOpen', () => {
+  const file = fileToOpen;
+  fileToOpen = null; // Clear after returning
+  return file;
+});
+
 // App lifecycle
 app.whenReady().then(() => {
+  // Check for file in command line args (Windows/Linux)
+  if (process.platform !== 'darwin') {
+    fileToOpen = getFileFromArgs(process.argv);
+  }
+
   createWindow();
   createMenu();
+
+  // Initialize auto-updater (only in production)
+  if (app.isPackaged && mainWindow) {
+    initUpdater(mainWindow);
+  }
+
+  // Listen for system suspend (sleep/hibernate) to auto-save before sleep
+  powerMonitor.on('suspend', () => {
+    console.log('System suspending - triggering auto-save');
+    mainWindow?.webContents.send('system:suspend');
+  });
+
+  // Log when system resumes (for debugging)
+  powerMonitor.on('resume', () => {
+    console.log('System resumed from sleep');
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -502,8 +958,18 @@ app.whenReady().then(() => {
   });
 });
 
+// Allow multiple instances - each double-clicked file opens a new window
+
 app.on('window-all-closed', () => {
+  // Stop SAM server before quitting
+  stopSAMServer();
+
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Ensure SAM server is stopped on app quit
+app.on('will-quit', () => {
+  stopSAMServer();
 });

@@ -1,7 +1,12 @@
 {
   "name": "follicle-labeller",
-  "version": "1.0.0",
+  "version": "1.2.1",
   "description": "Medical image follicle annotation tool",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blockchainadvisors/follicle-labeller.git"
+  },
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -9,13 +14,15 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/generate-icons.js",
+    "version:sync": "node scripts/sync-version.js",
     "electron:dev": "vite",
-    "electron:build": "npm run build && electron-builder",
-    "electron:build:win": "npm run build && electron-builder --win",
-    "electron:build:mac": "npm run build && electron-builder --mac",
-    "electron:build:all": "npm run build && electron-builder --win --mac"
+    "electron:build": "npm run version:sync && npm run build && electron-builder",
+    "electron:build:win": "npm run version:sync && npm run build && electron-builder --win",
+    "electron:build:mac": "npm run version:sync && npm run build && electron-builder --mac",
+    "electron:build:all": "npm run version:sync && npm run build && electron-builder --win --mac"
   },
   "dependencies": {
+    "electron-updater": "^6.1.7",
     "jszip": "^3.10.1",
     "lucide-react": "^0.469.0",
     "react": "^18.2.0",
@@ -31,6 +38,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "electron": "^25.9.8",
     "electron-builder": "^24.9.1",
+    "icns-lib": "^1.0.1",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "typescript": "^5.3.3",

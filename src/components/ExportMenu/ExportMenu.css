@@ -1,0 +1,121 @@
+.export-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-button {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--text-primary, #333);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.export-button:hover:not(:disabled) {
+  background: var(--bg-hover, #e5e5e5);
+}
+
+.export-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-button.active {
+  background: var(--bg-hover, #e5e5e5);
+  border-color: var(--border-color, #ddd);
+}
+
+.export-button .chevron {
+  margin-left: 2px;
+  opacity: 0.6;
+}
+
+.export-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.export-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.export-option:hover {
+  background: var(--bg-hover, #f5f5f5);
+}
+
+.export-option:not(:last-child) {
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.export-option svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-secondary, #666);
+}
+
+.option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #333);
+}
+
+.option-description {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+
+/* Dark theme support */
+[data-theme="dark"] .export-button {
+  color: var(--text-primary, #e0e0e0);
+}
+
+[data-theme="dark"] .export-button:hover:not(:disabled) {
+  background: var(--bg-hover, #3d3d3d);
+}
+
+[data-theme="dark"] .export-button.active {
+  background: var(--bg-hover, #3d3d3d);
+  border-color: var(--border-color, #555);
+}
+
+[data-theme="dark"] .export-dropdown {
+  background: var(--bg-primary, #2d2d2d);
+  border-color: var(--border-color, #444);
+}
+
+[data-theme="dark"] .export-option:hover {
+  background: var(--bg-hover, #3d3d3d);
+}
+
+[data-theme="dark"] .export-option:not(:last-child) {
+  border-color: var(--border-color, #444);
+}

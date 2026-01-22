@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ImageId, ProjectImage, Viewport, Point } from '../types';
+import { useCanvasStore } from './canvasStore';
 
 interface ProjectState {
   // Multi-image state
@@ -7,6 +8,7 @@ interface ProjectState {
   imageOrder: ImageId[];  // Order for explorer display
   activeImageId: ImageId | null;
   currentProjectPath: string | null;  // Path to the currently loaded/saved project file
+  isDirty: boolean;  // Track unsaved changes
 
   // Actions
   addImage: (image: ProjectImage) => void;
@@ -15,6 +17,8 @@ interface ProjectState {
   setImageViewport: (imageId: ImageId, viewport: Partial<Viewport>) => void;
   reorderImages: (newOrder: ImageId[]) => void;
   setCurrentProjectPath: (path: string | null) => void;
+  setDirty: (dirty: boolean) => void;
+  markClean: () => void;
   clearProject: () => void;
 
   // Viewport actions for active image
@@ -28,7 +32,7 @@ interface ProjectState {
   getImageCount: () => number;
 }
 
-const ZOOM_MIN = 0.1;
+const ZOOM_MIN = 0.01;
 const ZOOM_MAX = 10;
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -36,6 +40,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   imageOrder: [],
   activeImageId: null,
   currentProjectPath: null,
+  isDirty: false,
 
   addImage: (image) => {
     set(state => {
@@ -50,6 +55,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         images: newImages,
         imageOrder: newOrder,
         activeImageId: newActiveId,
+        isDirty: true,
       };
     });
   },
@@ -87,12 +93,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         images: newImages,
         imageOrder: newOrder,
         activeImageId: newActiveId,
+        isDirty: true,
       };
     });
   },
 
   setActiveImage: (imageId) => {
     set({ activeImageId: imageId });
+    // Reset to select mode when switching images
+    useCanvasStore.getState().setMode('select');
   },
 
   setImageViewport: (imageId, viewport) => {
@@ -127,6 +136,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ currentProjectPath: path });
   },
 
+  setDirty: (dirty) => {
+    set({ isDirty: dirty });
+  },
+
+  markClean: () => {
+    set({ isDirty: false });
+  },
+
   clearProject: () => {
     // Close all bitmaps and revoke URLs
     const state = get();
@@ -144,6 +161,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       imageOrder: [],
       activeImageId: null,
       currentProjectPath: null,
+      isDirty: false,
     });
   },
 

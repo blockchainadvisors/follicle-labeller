@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import {
   Pencil,
   MousePointer2,
@@ -14,12 +14,30 @@ import {
   EyeOff,
   Tag,
   ImagePlus,
+  BoxSelect,
+  Lasso,
+  Sparkles,
+  Loader2,
+  GraduationCap,
+  FolderOpen,
+  Save,
+  Flame,
+  BarChart3,
+  Settings,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore, useTemporalStore } from '../../store/follicleStore';
-import { generateExportV2, parseImportV2 } from '../../utils/export-utils';
-import { ProjectImage } from '../../types';
+import { generateExportV2, parseImportV2, exportYOLODataset, exportToCSV } from '../../utils/export-utils';
+import { extractAllFolliclesToZip, extractSelectedFolliclesToZip, extractImageFolliclesToZip, downloadBlob } from '../../utils/follicle-extract';
+import { detectBlobs } from '../../services/blobDetector';
+import { learnFromExamples, applyTolerance } from '../../services/parameterLearner';
+import { LearnedDetectionDialog } from '../LearnedDetectionDialog/LearnedDetectionDialog';
+import { DetectionSettingsDialog, DetectionSettings, DEFAULT_DETECTION_SETTINGS, settingsToOptions } from '../DetectionSettingsDialog/DetectionSettingsDialog';
+import { ExportMenu, ExportType } from '../ExportMenu/ExportMenu';
+import { ThemePicker } from '../ThemePicker/ThemePicker';
+import { ProjectImage, RectangleAnnotation, LearnedDetectionParams } from '../../types';
+import { generateId } from '../../utils/id-generator';
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -63,8 +81,14 @@ export const Toolbar: React.FC = () => {
   const toggleShapes = useCanvasStore(state => state.toggleShapes);
   const currentShapeType = useCanvasStore(state => state.currentShapeType);
   const setShapeType = useCanvasStore(state => state.setShapeType);
+  const selectionToolType = useCanvasStore(state => state.selectionToolType);
+  const setSelectionToolType = useCanvasStore(state => state.setSelectionToolType);
   const showHelp = useCanvasStore(state => state.showHelp);
   const toggleHelp = useCanvasStore(state => state.toggleHelp);
+  const showHeatmap = useCanvasStore(state => state.showHeatmap);
+  const toggleHeatmap = useCanvasStore(state => state.toggleHeatmap);
+  const showStatistics = useCanvasStore(state => state.showStatistics);
+  const toggleStatistics = useCanvasStore(state => state.toggleStatistics);
 
   // Project store for multi-image support
   const images = useProjectStore(state => state.images);
@@ -76,6 +100,9 @@ export const Toolbar: React.FC = () => {
   const resetZoom = useProjectStore(state => state.resetZoom);
   const currentProjectPath = useProjectStore(state => state.currentProjectPath);
   const setCurrentProjectPath = useProjectStore(state => state.setCurrentProjectPath);
+  const isDirty = useProjectStore(state => state.isDirty);
+  const setDirty = useProjectStore(state => state.setDirty);
+  const markClean = useProjectStore(state => state.markClean);
 
   // Get active image info
   const activeImage = activeImageId ? images.get(activeImageId) : null;
@@ -83,10 +110,22 @@ export const Toolbar: React.FC = () => {
   const viewport = activeImage?.viewport ?? { offsetX: 0, offsetY: 0, scale: 1 };
 
   const follicles = useFollicleStore(state => state.follicles);
+  const selectedIds = useFollicleStore(state => state.selectedIds);
   const importFollicles = useFollicleStore(state => state.importFollicles);
   const clearAll = useFollicleStore(state => state.clearAll);
 
   const temporalStore = useTemporalStore();
+
+  // State for auto-detection loading
+  const [isDetecting, setIsDetecting] = useState(false);
+
+  // State for learned detection dialog
+  const [learnedParams, setLearnedParams] = useState<LearnedDetectionParams | null>(null);
+  const [showLearnDialog, setShowLearnDialog] = useState(false);
+
+  // State for detection settings dialog
+  const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>(DEFAULT_DETECTION_SETTINGS);
+  const [showDetectionSettings, setShowDetectionSettings] = useState(false);
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -98,6 +137,15 @@ export const Toolbar: React.FC = () => {
     const hasProject = images.size > 0;
     window.electronAPI.setProjectState(hasProject);
   }, [images.size]);
+
+  // Track follicle changes to mark project as dirty
+  const prevFolliclesRef = useRef(follicles);
+  useEffect(() => {
+    if (prevFolliclesRef.current !== follicles && images.size > 0) {
+      setDirty(true);
+    }
+    prevFolliclesRef.current = follicles;
+  }, [follicles, images.size, setDirty]);
 
   // Handler functions
   const handleOpenImage = useCallback(async () => {
@@ -130,8 +178,8 @@ export const Toolbar: React.FC = () => {
     }
   }, [addImage, imageOrder.length]);
 
-  const handleSave = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -160,15 +208,18 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
 
-  const handleSaveAs = useCallback(async () => {
-    if (images.size === 0) return;
+  const handleSaveAs = useCallback(async (): Promise<boolean> => {
+    if (images.size === 0) return false;
 
     try {
       const { manifest, annotations, imageList } = generateExportV2(
@@ -186,44 +237,78 @@ export const Toolbar: React.FC = () => {
 
       if (result.success && result.filePath) {
         setCurrentProjectPath(result.filePath);
+        markClean();
         console.log('Project saved successfully to:', result.filePath);
       }
+      return result.success;
     } catch (error) {
       console.error('Failed to save project:', error);
+      return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+
+  // Check for unsaved changes and prompt user
+  // Returns true if safe to proceed, false if user cancelled
+  const checkUnsavedChanges = useCallback(async (): Promise<boolean> => {
+    if (!isDirty) return true;
+
+    const response = await window.electronAPI.showUnsavedChangesDialog();
+
+    if (response === 'save') {
+      const saved = await handleSave();
+      return saved;
+    } else if (response === 'discard') {
+      return true;
+    } else {
+      // Cancel
+      return false;
+    }
+  }, [isDirty, handleSave]);
+
+  // Load project from parsed result (shared logic)
+  const loadProjectFromResult = useCallback(async (result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>) => {
+    if (!result) return;
+
+    // Clear existing project
+    clearProject();
+    clearAll();
+
+    const { loadedImages, loadedFollicles } = await parseImportV2(result);
+
+    // Add all loaded images
+    for (const image of loadedImages) {
+      addImage(image);
+    }
+
+    // Import all annotations
+    importFollicles(loadedFollicles);
+
+    // Set the current project path
+    setCurrentProjectPath(result.filePath);
+  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
 
   const handleLoad = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     try {
       const result = await window.electronAPI.loadProjectV2();
-      if (!result) return;
-
-      // Clear existing project
-      clearProject();
-      clearAll();
-
-      const { loadedImages, loadedFollicles } = await parseImportV2(result);
-
-      // Add all loaded images
-      for (const image of loadedImages) {
-        addImage(image);
-      }
-
-      // Import all annotations
-      importFollicles(loadedFollicles);
-
-      // Set the current project path
-      setCurrentProjectPath(result.filePath);
+      await loadProjectFromResult(result);
     } catch (error) {
       console.error('Failed to load project:', error);
       alert('Failed to load project file. Please check the file format.');
     }
-  }, [clearProject, clearAll, addImage, importFollicles, setCurrentProjectPath]);
+  }, [loadProjectFromResult, checkUnsavedChanges]);
 
-  const handleCloseProject = useCallback(() => {
+  const handleCloseProject = useCallback(async () => {
+    // Check for unsaved changes first
+    const canProceed = await checkUnsavedChanges();
+    if (!canProceed) return;
+
     clearProject();
     clearAll();
-  }, [clearProject, clearAll]);
+  }, [clearProject, clearAll, checkUnsavedChanges]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -235,6 +320,324 @@ export const Toolbar: React.FC = () => {
 
   const handleZoomIn = useCallback(() => zoom(0.2), [zoom]);
   const handleZoomOut = useCallback(() => zoom(-0.2), [zoom]);
+
+  // Download extracted follicle images
+  const handleDownloadFollicles = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      // Calculate counts for dialog
+      const selectedCount = selectedIds.size;
+      const currentImageCount = activeImageId
+        ? follicles.filter(f => f.imageId === activeImageId).length
+        : 0;
+      const totalCount = follicles.length;
+
+      // Generate base filename
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : activeImage?.fileName.replace(/\.[^/.]+$/, '') ?? 'follicles';
+
+      let zipBlob: Blob;
+      let suffix: string;
+
+      // If there's a selection, show options dialog
+      if (selectedCount > 0) {
+        const choice = await window.electronAPI.showDownloadOptionsDialog(
+          selectedCount,
+          currentImageCount,
+          totalCount
+        );
+
+        if (choice === 'cancel') return;
+
+        if (choice === 'selected') {
+          zipBlob = await extractSelectedFolliclesToZip(images, follicles, selectedIds);
+          suffix = '_selected';
+        } else if (choice === 'currentImage' && activeImage) {
+          zipBlob = await extractImageFolliclesToZip(activeImage, follicles);
+          suffix = `_${activeImage.fileName.replace(/\.[^/.]+$/, '')}`;
+        } else {
+          // 'all'
+          zipBlob = await extractAllFolliclesToZip(images, follicles);
+          suffix = '_all';
+        }
+      } else {
+        // No selection - download all
+        zipBlob = await extractAllFolliclesToZip(images, follicles);
+        suffix = '_follicles';
+      }
+
+      downloadBlob(zipBlob, `${baseName}${suffix}.zip`);
+    } catch (error) {
+      console.error('Failed to extract follicles:', error);
+      alert('Failed to extract follicle images. Please ensure there are annotations to extract.');
+    }
+  }, [images, follicles, selectedIds, activeImageId, activeImage, currentProjectPath]);
+
+  // Export to YOLO dataset format
+  const handleExportYOLO = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      const { files, dataYaml } = exportYOLODataset(
+        Array.from(images.values()),
+        follicles
+      );
+
+      // Create a ZIP file with YOLO dataset structure
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+
+      // Add data.yaml
+      zip.file('data.yaml', dataYaml);
+
+      // Add images and labels folders
+      const imagesFolder = zip.folder('images');
+      const labelsFolder = zip.folder('labels');
+
+      for (const file of files) {
+        imagesFolder?.file(file.imageName, file.imageData);
+        labelsFolder?.file(file.labelName, file.labelContent);
+      }
+
+      // Generate and download ZIP
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : 'yolo_dataset';
+      downloadBlob(zipBlob, `${baseName}_yolo.zip`);
+
+      console.log(`Exported YOLO dataset with ${files.length} images`);
+    } catch (error) {
+      console.error('Failed to export YOLO dataset:', error);
+      alert('Failed to export YOLO dataset. Please try again.');
+    }
+  }, [images, follicles, currentProjectPath]);
+
+  // Export to CSV format
+  const handleExportCSV = useCallback(() => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      // Combine CSV for all images (using first image dimensions as reference,
+      // normalized coordinates will still be correct per-annotation)
+      const allImages = Array.from(images.values());
+      let csvContent = '';
+      let isFirst = true;
+
+      for (const image of allImages) {
+        const imageFollicles = follicles.filter(f => f.imageId === image.id);
+        if (imageFollicles.length === 0) continue;
+
+        const csv = exportToCSV(imageFollicles, image.width, image.height);
+        if (isFirst) {
+          csvContent = csv;
+          isFirst = false;
+        } else {
+          // Skip header row for subsequent images
+          const lines = csv.split('\n');
+          csvContent += '\n' + lines.slice(1).join('\n');
+        }
+      }
+
+      // Create and download blob
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+      const baseName = currentProjectPath
+        ? currentProjectPath.replace(/\.[^/.]+$/, '').split(/[/\\]/).pop()
+        : 'annotations';
+      downloadBlob(blob, `${baseName}_annotations.csv`);
+
+      console.log(`Exported ${follicles.length} annotations to CSV`);
+    } catch (error) {
+      console.error('Failed to export CSV:', error);
+      alert('Failed to export CSV. Please try again.');
+    }
+  }, [images, follicles, currentProjectPath]);
+
+  // Handle export menu selection
+  const handleExport = useCallback((type: ExportType) => {
+    switch (type) {
+      case 'images':
+        handleDownloadFollicles();
+        break;
+      case 'yolo':
+        handleExportYOLO();
+        break;
+      case 'csv':
+        handleExportCSV();
+        break;
+    }
+  }, [handleDownloadFollicles, handleExportYOLO, handleExportCSV]);
+
+  // Colors for auto-detected annotations (cycles through)
+  const ANNOTATION_COLORS = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4',
+    '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F',
+    '#74B9FF', '#A29BFE', '#FD79A8', '#00CEC9',
+  ];
+
+  // Auto-detect follicles using BLOB detection
+  const handleAutoDetect = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    setIsDetecting(true);
+
+    try {
+      // Run detection with user-configured settings
+      const options = settingsToOptions(detectionSettings);
+      const blobs = await detectBlobs(activeImage.imageBitmap, options);
+
+      if (blobs.length === 0) {
+        console.log('No follicles detected');
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert detected blobs to RECTANGLE annotations
+      const existingCount = follicles.filter(f => f.imageId === activeImageId).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = blobs.map((blob, i) => ({
+        id: generateId(),
+        imageId: activeImageId,
+        shape: 'rectangle' as const,
+        x: blob.x,
+        y: blob.y,
+        width: blob.width,
+        height: blob.height,
+        label: `Auto ${existingCount + i + 1}`,
+        notes: `Detected (area: ${blob.area}px, ratio: ${blob.aspectRatio.toFixed(2)})`,
+        color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      // Import all at once (supports undo as single action)
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Detected ${blobs.length} follicles`);
+    } catch (error) {
+      console.error('Failed to detect follicles:', error);
+      alert('Failed to detect follicles. Please try again.');
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [activeImage, activeImageId, isDetecting, follicles, importFollicles, detectionSettings]);
+
+  // Learn from selected annotations
+  const handleLearnFromSelection = useCallback(() => {
+    if (selectedIds.size === 0 || !activeImageId) return;
+
+    // Get selected annotations for active image
+    const selectedAnnotations = follicles.filter(
+      f => f.imageId === activeImageId && selectedIds.has(f.id)
+    );
+
+    if (selectedAnnotations.length === 0) {
+      alert('Please select annotations on the active image first.');
+      return;
+    }
+
+    // Get image data for intensity analysis
+    let imageData: ImageData | undefined;
+    if (activeImage?.imageBitmap) {
+      const canvas = new OffscreenCanvas(
+        activeImage.imageBitmap.width,
+        activeImage.imageBitmap.height
+      );
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(activeImage.imageBitmap, 0, 0);
+        imageData = ctx.getImageData(
+          0, 0,
+          activeImage.imageBitmap.width,
+          activeImage.imageBitmap.height
+        );
+      }
+    }
+
+    // Learn parameters from examples
+    const params = learnFromExamples(selectedAnnotations, imageData);
+    setLearnedParams(params);
+    setShowLearnDialog(true);
+  }, [selectedIds, activeImageId, follicles, activeImage]);
+
+  // Run detection with learned parameters
+  const handleRunLearnedDetection = useCallback(async (tolerance: number, darkBlobs: boolean) => {
+    if (!learnedParams || !activeImage || !activeImageId) return;
+
+    setShowLearnDialog(false);
+    setIsDetecting(true);
+
+    try {
+      // Apply tolerance to get effective size range
+      const effectiveRange = applyTolerance(learnedParams, tolerance);
+
+      // Run detection with learned size range
+      const blobs = await detectBlobs(activeImage.imageBitmap, {
+        minWidth: effectiveRange.minWidth,
+        maxWidth: effectiveRange.maxWidth,
+        minHeight: effectiveRange.minHeight,
+        maxHeight: effectiveRange.maxHeight,
+        darkBlobs,
+        useGPU: true,
+        workerCount: navigator.hardwareConcurrency || 4,
+      });
+
+      if (blobs.length === 0) {
+        console.log('No follicles detected with learned parameters');
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert detected blobs to RECTANGLE annotations
+      const existingCount = follicles.filter(f => f.imageId === activeImageId).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = blobs.map((blob, i) => ({
+        id: generateId(),
+        imageId: activeImageId,
+        shape: 'rectangle' as const,
+        x: blob.x,
+        y: blob.y,
+        width: blob.width,
+        height: blob.height,
+        label: `Learned ${existingCount + i + 1}`,
+        notes: `Detected with learned params (area: ${blob.area}px, ratio: ${blob.aspectRatio.toFixed(2)})`,
+        color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+      // Import all at once (supports undo as single action)
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Detected ${blobs.length} follicles with learned parameters`);
+    } catch (error) {
+      console.error('Failed to detect follicles with learned parameters:', error);
+      alert('Failed to detect follicles. Please try again.');
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [learnedParams, activeImage, activeImageId, follicles, importFollicles]);
+
+  // Close learned detection dialog
+  const handleCancelLearnDialog = useCallback(() => {
+    setShowLearnDialog(false);
+    setLearnedParams(null);
+  }, []);
+
+  // Listen for Learn from Selection keyboard shortcut (Shift+D) from ImageCanvas
+  useEffect(() => {
+    const handleLearnEvent = () => {
+      handleLearnFromSelection();
+    };
+    window.addEventListener('learnFromSelection', handleLearnEvent);
+    return () => window.removeEventListener('learnFromSelection', handleLearnEvent);
+  }, [handleLearnFromSelection]);
 
   // Register menu event listeners
   useEffect(() => {
@@ -273,17 +676,102 @@ export const Toolbar: React.FC = () => {
     toggleHelp,
   ]);
 
+  // Handle file open from file association (double-click .fol file)
+  useEffect(() => {
+    const loadFromPath = async (filePath: string) => {
+      try {
+        const result = await window.electronAPI.loadProjectFromPath(filePath);
+        await loadProjectFromResult(result);
+      } catch (error) {
+        console.error('Failed to load project from file association:', error);
+        alert('Failed to load project file. Please check the file format.');
+      }
+    };
+
+    // Check for file to open on startup
+    window.electronAPI.getFileToOpen().then((filePath) => {
+      if (filePath) {
+        loadFromPath(filePath);
+      }
+    });
+
+    // Listen for file open while app is running
+    const cleanup = window.electronAPI.onFileOpen((filePath) => {
+      loadFromPath(filePath);
+    });
+
+    return cleanup;
+  }, [loadProjectFromResult]);
+
+  // Handle app close - check for unsaved changes
+  useEffect(() => {
+    const handleCheckUnsavedChanges = async () => {
+      const canClose = await checkUnsavedChanges();
+      window.electronAPI.confirmClose(canClose);
+    };
+
+    const cleanup = window.electronAPI.onCheckUnsavedChanges(handleCheckUnsavedChanges);
+    return cleanup;
+  }, [checkUnsavedChanges]);
+
+  // Handle system suspend (sleep/hibernate) - auto-save to prevent data loss
+  useEffect(() => {
+    const handleSystemSuspend = async () => {
+      // Only auto-save if there's a project with unsaved changes AND an existing save path
+      // (we can't show a dialog during suspend - no time for user interaction)
+      if (isDirty && currentProjectPath && images.size > 0) {
+        console.log('System suspending - auto-saving project to:', currentProjectPath);
+        try {
+          const { manifest, annotations, imageList } = generateExportV2(
+            Array.from(images.values()),
+            follicles
+          );
+
+          const result = await window.electronAPI.saveProjectV2ToPath(
+            currentProjectPath,
+            imageList,
+            JSON.stringify(manifest, null, 2),
+            JSON.stringify(annotations, null, 2)
+          );
+
+          if (result.success) {
+            markClean();
+            console.log('Auto-save before suspend completed successfully');
+          }
+        } catch (error) {
+          console.error('Auto-save before suspend failed:', error);
+        }
+      }
+    };
+
+    const cleanup = window.electronAPI.onSystemSuspend(handleSystemSuspend);
+    return cleanup;
+  }, [isDirty, currentProjectPath, images, follicles, markClean]);
+
   const zoomPercent = Math.round(viewport.scale * 100);
 
   return (
     <div className="toolbar">
-      {/* Add Image */}
-      <div className="toolbar-group" role="group" aria-label="Add image">
+      {/* File Operations */}
+      <div className="toolbar-group" role="group" aria-label="File operations">
         <IconButton
           icon={<ImagePlus size={18} />}
           tooltip="Add Image"
           shortcut="Ctrl+O"
           onClick={handleOpenImage}
+        />
+        <IconButton
+          icon={<FolderOpen size={18} />}
+          tooltip="Open Project"
+          shortcut="Ctrl+Shift+O"
+          onClick={handleLoad}
+        />
+        <IconButton
+          icon={<Save size={18} />}
+          tooltip="Save Project"
+          shortcut="Ctrl+S"
+          onClick={handleSave}
+          disabled={!isDirty || images.size === 0}
         />
       </div>
 
@@ -316,28 +804,80 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Shape tools */}
-      <div className="toolbar-group" role="group" aria-label="Shape types">
+      {/* Selection tools (visible only in select mode) */}
+      {mode === 'select' && (
+        <>
+          <div className="toolbar-group" role="group" aria-label="Selection tools">
+            <IconButton
+              icon={<BoxSelect size={18} />}
+              tooltip="Marquee Select"
+              shortcut="M"
+              onClick={() => setSelectionToolType('marquee')}
+              active={selectionToolType === 'marquee'}
+            />
+            <IconButton
+              icon={<Lasso size={18} />}
+              tooltip="Lasso Select"
+              shortcut="F"
+              onClick={() => setSelectionToolType('lasso')}
+              active={selectionToolType === 'lasso'}
+            />
+          </div>
+          <div className="toolbar-divider" />
+        </>
+      )}
+
+      {/* Shape tools (visible only in create mode) */}
+      {mode === 'create' && (
+        <>
+          <div className="toolbar-group" role="group" aria-label="Shape types">
+            <IconButton
+              icon={<Circle size={18} />}
+              tooltip="Circle Shape"
+              shortcut="1"
+              onClick={() => setShapeType('circle')}
+              active={currentShapeType === 'circle'}
+            />
+            <IconButton
+              icon={<Square size={18} />}
+              tooltip="Rectangle Shape"
+              shortcut="2"
+              onClick={() => setShapeType('rectangle')}
+              active={currentShapeType === 'rectangle'}
+            />
+            <IconButton
+              icon={<Minus size={18} strokeWidth={3} />}
+              tooltip="Linear Shape"
+              shortcut="3"
+              onClick={() => setShapeType('linear')}
+              active={currentShapeType === 'linear'}
+            />
+          </div>
+          <div className="toolbar-divider" />
+        </>
+      )}
+
+      {/* Auto Detect */}
+      <div className="toolbar-group" role="group" aria-label="Auto detect">
         <IconButton
-          icon={<Circle size={18} />}
-          tooltip="Circle Shape"
-          shortcut="1"
-          onClick={() => setShapeType('circle')}
-          active={currentShapeType === 'circle'}
+          icon={isDetecting ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+          tooltip="Auto Detect Follicles"
+          shortcut="D"
+          onClick={handleAutoDetect}
+          disabled={!imageLoaded || isDetecting}
         />
         <IconButton
-          icon={<Square size={18} />}
-          tooltip="Rectangle Shape"
-          shortcut="2"
-          onClick={() => setShapeType('rectangle')}
-          active={currentShapeType === 'rectangle'}
+          icon={<GraduationCap size={18} />}
+          tooltip="Learn from Selection"
+          shortcut="Shift+D"
+          onClick={handleLearnFromSelection}
+          disabled={!imageLoaded || selectedIds.size === 0 || isDetecting}
         />
         <IconButton
-          icon={<Minus size={18} strokeWidth={3} />}
-          tooltip="Linear Shape"
-          shortcut="3"
-          onClick={() => setShapeType('linear')}
-          active={currentShapeType === 'linear'}
+          icon={<Settings size={18} />}
+          tooltip="Detection Settings"
+          onClick={() => setShowDetectionSettings(true)}
+          disabled={!imageLoaded}
         />
       </div>
 
@@ -385,6 +925,33 @@ export const Toolbar: React.FC = () => {
           disabled={!showShapes}
           active={showLabels}
         />
+        <IconButton
+          icon={<Flame size={18} />}
+          tooltip="Toggle Heatmap"
+          shortcut="H"
+          onClick={toggleHeatmap}
+          disabled={!imageLoaded}
+          active={showHeatmap}
+        />
+        <IconButton
+          icon={<BarChart3 size={18} />}
+          tooltip="Toggle Statistics Panel"
+          shortcut="S"
+          onClick={toggleStatistics}
+          disabled={!imageLoaded}
+          active={showStatistics}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* Export options */}
+      <div className="toolbar-group" role="group" aria-label="Export">
+        <ExportMenu
+          onExport={handleExport}
+          disabled={!imageLoaded || follicles.length === 0}
+          hasSelection={selectedIds.size > 0}
+        />
       </div>
 
       <div className="toolbar-divider" />
@@ -398,6 +965,13 @@ export const Toolbar: React.FC = () => {
           onClick={toggleHelp}
           active={showHelp}
         />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* Theme Picker */}
+      <div className="toolbar-group" role="group" aria-label="Theme">
+        <ThemePicker />
       </div>
 
       {/* Status display */}
@@ -416,6 +990,27 @@ export const Toolbar: React.FC = () => {
           <span className="no-image">No image loaded</span>
         )}
       </div>
+
+      {/* Learned Detection Dialog */}
+      {showLearnDialog && learnedParams && (
+        <LearnedDetectionDialog
+          params={learnedParams}
+          onRun={handleRunLearnedDetection}
+          onCancel={handleCancelLearnDialog}
+        />
+      )}
+
+      {/* Detection Settings Dialog */}
+      {showDetectionSettings && (
+        <DetectionSettingsDialog
+          settings={detectionSettings}
+          onSave={(settings) => {
+            setDetectionSettings(settings);
+            setShowDetectionSettings(false);
+          }}
+          onCancel={() => setShowDetectionSettings(false)}
+        />
+      )}
     </div>
   );
 };
