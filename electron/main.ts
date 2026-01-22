@@ -5,6 +5,11 @@ import { spawn, ChildProcess } from 'child_process';
 import JSZip from 'jszip';
 import { initUpdater, checkForUpdates } from './updater';
 
+// Set Windows AppUserModelId for proper notifications (must be early)
+if (process.platform === 'win32') {
+  app.setAppUserModelId('Follicle Labeller');
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 // SAM server process
