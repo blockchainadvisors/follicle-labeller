@@ -101,6 +101,8 @@ jobs:
         run: npm run electron:build:${{ matrix.platform }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Windows: Disable code signing (no certificate)
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'win' && 'false' || 'true' }}
           # macOS code signing environment variables for electron-builder
           CSC_LINK: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_BASE64 || '' }}
           CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
