@@ -117,10 +117,11 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      # macOS: Notarize and staple the DMG files
-      - name: Notarize macOS DMG
+      # macOS: Notarize and staple DMG and ZIP files
+      - name: Notarize macOS builds
         if: matrix.platform == 'mac'
         run: |
+          # Notarize DMG files
           for dmg in release/*.dmg; do
             if [ -f "$dmg" ]; then
               echo "Notarizing $dmg..."
@@ -132,6 +133,19 @@ jobs:
 
               echo "Stapling $dmg..."
               xcrun stapler staple "$dmg"
+            fi
+          done
+
+          # Notarize ZIP files (required for auto-update)
+          for zip in release/*.zip; do
+            if [ -f "$zip" ]; then
+              echo "Notarizing $zip..."
+              xcrun notarytool submit "$zip" \
+                --apple-id "${{ secrets.APPLE_ID }}" \
+                --password "${{ secrets.APPLE_ID_PASSWORD }}" \
+                --team-id "${{ secrets.APPLE_TEAM_ID }}" \
+                --wait
+              # Note: ZIP files cannot be stapled, but notarization is registered with Apple
             fi
           done
 
