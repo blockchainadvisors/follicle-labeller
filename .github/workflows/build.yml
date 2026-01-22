@@ -97,19 +97,25 @@ jobs:
           # Verify certificate was imported
           security find-identity -v -p codesigning $KEYCHAIN_PATH
 
-      - name: Build application
-        run: npm run electron:build:${{ matrix.platform }}
+      # Windows build - no code signing
+      - name: Build Windows application
+        if: matrix.platform == 'win'
+        run: npm run electron:build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Windows: Disable code signing (no certificate)
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ matrix.platform == 'win' && 'false' || 'true' }}
-          # macOS code signing environment variables for electron-builder
-          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_BASE64 || '' }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          # macOS notarization environment variables
-          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_ID_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # macOS build - with code signing
+      - name: Build macOS application
+        if: matrix.platform == 'mac'
+        run: npm run electron:build:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       # macOS: Notarize and staple the DMG files
       - name: Notarize macOS DMG
