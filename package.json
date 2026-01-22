@@ -29,12 +29,12 @@
     "@types/react-dom": "^18.2.18",
     "@types/uuid": "^9.0.7",
     "@vitejs/plugin-react": "^4.2.1",
-    "electron": "^28.0.0",
+    "electron": "^25.9.8",
     "electron-builder": "^24.9.1",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
     "typescript": "^5.3.3",
-    "vite": "^5.0.10",
+    "vite": "^6.4.1",
     "vite-plugin-electron": "^0.28.0",
     "vite-plugin-electron-renderer": "^0.14.5"
   }
