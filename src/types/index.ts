@@ -288,6 +288,7 @@ declare global {
       // Menu event listeners (return cleanup function)
       onMenuOpenImage: (callback: () => void) => () => void;
       onMenuLoadProject: (callback: () => void) => () => void;
+      onMenuMergeProject: (callback: () => void) => () => void;
       onMenuSaveProject: (callback: () => void) => () => void;
       onMenuSaveProjectAs: (callback: () => void) => () => void;
       onMenuCloseProject: (callback: () => void) => () => void;

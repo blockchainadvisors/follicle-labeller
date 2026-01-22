@@ -119,6 +119,11 @@ const electronAPI = {
     ipcRenderer.on('menu:loadProject', handler);
     return () => ipcRenderer.removeListener('menu:loadProject', handler);
   },
+  onMenuMergeProject: (callback: MenuCallback) => {
+    const handler = (_event: IpcRendererEvent) => callback();
+    ipcRenderer.on('menu:mergeProject', handler);
+    return () => ipcRenderer.removeListener('menu:mergeProject', handler);
+  },
   onMenuSaveProject: (callback: MenuCallback) => {
     const handler = (_event: IpcRendererEvent) => callback();
     ipcRenderer.on('menu:saveProject', handler);

@@ -455,12 +455,14 @@ ipcMain.handle('file:loadProject', async (_, filePath: string) => {
 let saveMenuItem: Electron.MenuItem | null = null;
 let saveAsMenuItem: Electron.MenuItem | null = null;
 let closeProjectMenuItem: Electron.MenuItem | null = null;
+let mergeProjectMenuItem: Electron.MenuItem | null = null;
 
 // Update menu items based on project state
 ipcMain.on('menu:setProjectState', (_, hasProject: boolean) => {
   if (saveMenuItem) saveMenuItem.enabled = hasProject;
   if (saveAsMenuItem) saveAsMenuItem.enabled = hasProject;
   if (closeProjectMenuItem) closeProjectMenuItem.enabled = hasProject;
+  if (mergeProjectMenuItem) mergeProjectMenuItem.enabled = hasProject;
 });
 
 // Create application menu
@@ -492,6 +494,13 @@ function createMenu(): void {
           label: 'Load Project...',
           accelerator: 'CmdOrCtrl+Shift+O',
           click: () => mainWindow?.webContents.send('menu:loadProject'),
+        },
+        {
+          id: 'merge-project',
+          label: 'Merge Project...',
+          accelerator: 'CmdOrCtrl+Shift+M',
+          enabled: false,
+          click: () => mainWindow?.webContents.send('menu:mergeProject'),
         },
         {
           id: 'save-project',
@@ -614,6 +623,7 @@ function createMenu(): void {
   saveMenuItem = menu.getMenuItemById('save-project');
   saveAsMenuItem = menu.getMenuItemById('save-project-as');
   closeProjectMenuItem = menu.getMenuItemById('close-project');
+  mergeProjectMenuItem = menu.getMenuItemById('merge-project');
 }
 
 // Show download options dialog when there's an active selection

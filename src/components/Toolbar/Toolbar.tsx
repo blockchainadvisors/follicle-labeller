@@ -24,6 +24,7 @@ import {
   Flame,
   BarChart3,
   Settings,
+  GitMerge,
 } from 'lucide-react';
 import { useCanvasStore } from '../../store/canvasStore';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
@@ -71,6 +72,19 @@ const IconButton: React.FC<IconButtonProps> = ({
     </button>
   );
 };
+
+// Hash image data to detect duplicates; falls back to null on failure so callers can use width/height heuristics.
+async function computeImageHash(data: ArrayBuffer): Promise<string | null> {
+  try {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  } catch (error) {
+    console.error('Failed to hash image data', error);
+    return null;
+  }
+}
 
 export const Toolbar: React.FC = () => {
   const mode = useCanvasStore(state => state.mode);
@@ -300,6 +314,109 @@ export const Toolbar: React.FC = () => {
       alert('Failed to load project file. Please check the file format.');
     }
   }, [loadProjectFromResult, checkUnsavedChanges]);
+
+  // Merge another project into the current one, discarding duplicate images while keeping their annotations mapped to the existing image.
+  const mergeProjectFromResult = useCallback(async (result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>) => {
+    if (!result) return;
+
+    // If no project is open yet, fall back to normal load.
+    if (images.size === 0) {
+      await loadProjectFromResult(result);
+      return;
+    }
+
+    const { loadedImages, loadedFollicles } = await parseImportV2(result);
+
+    const existingImages = Array.from(images.values());
+    const hashToImageId = new Map<string, string>();
+
+    for (const img of existingImages) {
+      const hash = await computeImageHash(img.imageData);
+      if (hash) {
+        hashToImageId.set(hash, img.id);
+      }
+    }
+
+    const imageIdMap = new Map<string, string>(); // incoming id -> target id
+    let nextSortOrder = images.size;
+    let duplicateCount = 0;
+    let newImageCount = 0;
+
+    for (const image of loadedImages) {
+      const incomingHash = await computeImageHash(image.imageData);
+
+      let targetImageId: string | undefined;
+
+      if (incomingHash && hashToImageId.has(incomingHash)) {
+        targetImageId = hashToImageId.get(incomingHash);
+      } else {
+        const fallbackMatch = existingImages.find(
+          existing =>
+            existing.width === image.width &&
+            existing.height === image.height &&
+            existing.fileName === image.fileName
+        );
+        if (fallbackMatch) {
+          targetImageId = fallbackMatch.id;
+        }
+      }
+
+      if (targetImageId) {
+        // Duplicate image detected – discard incoming copy but remap its annotations.
+        imageIdMap.set(image.id, targetImageId);
+        duplicateCount += 1;
+        continue;
+      }
+
+      const newImageId = generateImageId();
+      imageIdMap.set(image.id, newImageId);
+      newImageCount += 1;
+
+      addImage({
+        ...image,
+        id: newImageId,
+        sortOrder: nextSortOrder++,
+      });
+
+      // Track the new image so later iterations can detect duplicates against it.
+      if (incomingHash) {
+        hashToImageId.set(incomingHash, newImageId);
+      }
+      existingImages.push({
+        ...image,
+        id: newImageId,
+        sortOrder: nextSortOrder - 1,
+      });
+    }
+
+    const remappedFollicles = loadedFollicles
+      .map(f => {
+        const targetImageId = imageIdMap.get(f.imageId);
+        if (!targetImageId) return null;
+        return { ...f, id: generateId(), imageId: targetImageId };
+      })
+      .filter((f): f is typeof loadedFollicles[number] => !!f);
+
+    if (remappedFollicles.length > 0) {
+      importFollicles([...follicles, ...remappedFollicles]);
+      setDirty(true);
+    }
+
+    console.log(
+      `Merge completed: ${newImageCount} new image(s), ${duplicateCount} duplicate image(s) discarded, ${remappedFollicles.length} annotation(s) added.`
+    );
+    alert(`Merged projects: added ${newImageCount} image(s), discarded ${duplicateCount} duplicate(s), added ${remappedFollicles.length} annotation(s).`);
+  }, [images, follicles, addImage, importFollicles, setDirty, loadProjectFromResult]);
+
+  const handleMergeProject = useCallback(async () => {
+    try {
+      const result = await window.electronAPI.loadProjectV2();
+      await mergeProjectFromResult(result);
+    } catch (error) {
+      console.error('Failed to merge project:', error);
+      alert('Failed to merge project file. Please check the file format.');
+    }
+  }, [mergeProjectFromResult]);
 
   const handleCloseProject = useCallback(async () => {
     // Check for unsaved changes first
@@ -644,6 +761,7 @@ export const Toolbar: React.FC = () => {
     const cleanups = [
       window.electronAPI.onMenuOpenImage(handleOpenImage),
       window.electronAPI.onMenuLoadProject(handleLoad),
+      window.electronAPI.onMenuMergeProject(handleMergeProject),
       window.electronAPI.onMenuSaveProject(handleSave),
       window.electronAPI.onMenuSaveProjectAs(handleSaveAs),
       window.electronAPI.onMenuCloseProject(handleCloseProject),
@@ -662,6 +780,7 @@ export const Toolbar: React.FC = () => {
   }, [
     handleOpenImage,
     handleLoad,
+    handleMergeProject,
     handleSave,
     handleSaveAs,
     handleCloseProject,
@@ -765,6 +884,13 @@ export const Toolbar: React.FC = () => {
           tooltip="Open Project"
           shortcut="Ctrl+Shift+O"
           onClick={handleLoad}
+        />
+        <IconButton
+          icon={<GitMerge size={18} />}
+          tooltip="Merge Project"
+          shortcut="Ctrl+Shift+M"
+          onClick={handleMergeProject}
+          disabled={images.size === 0}
         />
         <IconButton
           icon={<Save size={18} />}
