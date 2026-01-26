@@ -98,6 +98,81 @@ def estimate_follicle_size(annotations: List[dict]) -> int:
     return 20
 
 
+def calculate_learned_stats(annotations: List[dict], image: Optional[np.ndarray] = None) -> dict:
+    """
+    Calculate detailed statistics from annotations for the Learn from Selection dialog.
+
+    Args:
+        annotations: List of annotation dicts with x, y, width, height
+        image: Optional BGR image for mean intensity calculation
+
+    Returns:
+        Dict with examplesAnalyzed, minWidth, maxWidth, minHeight, maxHeight,
+        minAspectRatio, maxAspectRatio, meanIntensity
+    """
+    if not annotations:
+        return {
+            'examplesAnalyzed': 0,
+            'minWidth': 10,
+            'maxWidth': 100,
+            'minHeight': 10,
+            'maxHeight': 100,
+            'minAspectRatio': 1.0,
+            'maxAspectRatio': 1.0,
+            'meanIntensity': 128
+        }
+
+    widths = []
+    heights = []
+    aspect_ratios = []
+    intensities = []
+
+    for ann in annotations:
+        w = ann.get('width', 0)
+        h = ann.get('height', 0)
+        x = ann.get('x', 0)
+        y = ann.get('y', 0)
+
+        if w > 0 and h > 0:
+            widths.append(w)
+            heights.append(h)
+            aspect_ratios.append(w / h)
+
+            # Calculate mean intensity if image is provided
+            if image is not None:
+                x1 = max(0, int(x))
+                y1 = max(0, int(y))
+                x2 = min(image.shape[1], int(x + w))
+                y2 = min(image.shape[0], int(y + h))
+                if x2 > x1 and y2 > y1:
+                    roi = image[y1:y2, x1:x2]
+                    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if len(roi.shape) == 3 else roi
+                    intensities.append(np.mean(gray_roi))
+
+    if not widths:
+        return {
+            'examplesAnalyzed': 0,
+            'minWidth': 10,
+            'maxWidth': 100,
+            'minHeight': 10,
+            'maxHeight': 100,
+            'minAspectRatio': 1.0,
+            'maxAspectRatio': 1.0,
+            'meanIntensity': 128
+        }
+
+    return {
+        'examplesAnalyzed': len(widths),
+        'minWidth': int(min(widths)),
+        'maxWidth': int(max(widths)),
+        'minHeight': int(min(heights)),
+        'maxHeight': int(max(heights)),
+        'minAspectRatio': round(min(aspect_ratios), 2),
+        'maxAspectRatio': round(max(aspect_ratios), 2),
+        'meanIntensity': int(np.mean(intensities)) if intensities else 128
+    }
+
+
 def calculate_iou(box1: Tuple[int, int, int, int],
                    box2: Tuple[int, int, int, int]) -> float:
     """
@@ -146,36 +221,92 @@ def overlaps_existing(box: Tuple[int, int, int, int],
 
 
 def detect_blobs(image: np.ndarray,
-                 annotations: List[dict]) -> List[dict]:
+                 annotations: List[dict],
+                 settings: Optional[dict] = None) -> List[dict]:
     """
     Detect follicles using OpenCV SimpleBlobDetector with contour fallback.
 
     This implements the proven algorithm from hair_follicle_detection:
-    1. Apply CLAHE for contrast enhancement
+    1. Apply CLAHE for contrast enhancement (if enabled)
     2. Run SimpleBlobDetector with multi-threshold scanning
     3. Fall back to adaptive thresholding + contours if few detections
-    4. Filter by size learned from annotations
+    4. Filter by size (learned from annotations OR manual settings)
 
     Args:
         image: BGR image as numpy array
         annotations: List of user annotations for size learning
+        settings: Optional dict with manual settings:
+            - minWidth, maxWidth, minHeight, maxHeight: Size range
+            - useCLAHE: Whether to apply CLAHE preprocessing
+            - claheClipLimit: CLAHE clip limit (default 3.0)
+            - claheTileSize: CLAHE tile grid size (default 8)
+            - darkBlobs: Detect dark blobs (True) or light blobs (False)
+            - useSoftNMS: Whether to use soft-NMS (not yet implemented)
 
     Returns:
         List of detected follicle dicts with x, y, width, height, confidence
     """
-    # Estimate follicle size from annotations
-    follicle_size = estimate_follicle_size(annotations)
-    min_area = max(10, (follicle_size // 3) ** 2)
-    max_area = (follicle_size * 3) ** 2
+    settings = settings or {}
 
-    logger.info(f"Follicle size estimate: {follicle_size}px, area range: {min_area}-{max_area}")
+    # Determine size range based on mode:
+    # 1. learnedWithTolerance: Use learned stats with tolerance adjustment
+    # 2. Manual settings: Use exact minWidth/maxWidth values
+    # 3. Auto-learn: Use 3x tolerance from mean size
+
+    if settings.get('useLearnedStats') and annotations:
+        # Mode 1: Use learned stats from annotations with tolerance adjustment
+        stats = calculate_learned_stats(annotations)
+        tolerance = settings.get('tolerance', 20) / 100.0  # Default 20%
+
+        width_range = stats['maxWidth'] - stats['minWidth']
+        height_range = stats['maxHeight'] - stats['minHeight']
+
+        min_width = max(1, int(stats['minWidth'] - width_range * tolerance))
+        max_width = int(stats['maxWidth'] + width_range * tolerance)
+        min_height = max(1, int(stats['minHeight'] - height_range * tolerance))
+        max_height = int(stats['maxHeight'] + height_range * tolerance)
+
+        min_area = min_width * min_height
+        max_area = max_width * max_height
+        follicle_size = int((min_width + max_width + min_height + max_height) / 4)
+        logger.info(f"Using learned stats with {int(tolerance*100)}% tolerance: {min_width}-{max_width} x {min_height}-{max_height}")
+
+    elif settings.get('minWidth') and settings.get('maxWidth'):
+        # Mode 2: Use manual settings (exact values)
+        min_width = settings.get('minWidth', 10)
+        max_width = settings.get('maxWidth', 200)
+        min_height = settings.get('minHeight', 10)
+        max_height = settings.get('maxHeight', 200)
+        min_area = min_width * min_height
+        max_area = max_width * max_height
+        follicle_size = int((min_width + max_width + min_height + max_height) / 4)
+        logger.info(f"Using manual size settings: {min_width}-{max_width} x {min_height}-{max_height}")
+
+    elif annotations:
+        # Mode 3: Auto-learn with 3x tolerance (legacy behavior)
+        follicle_size = estimate_follicle_size(annotations)
+        min_area = max(10, (follicle_size // 3) ** 2)
+        max_area = (follicle_size * 3) ** 2
+        logger.info(f"Follicle size estimate from annotations: {follicle_size}px, area range: {min_area}-{max_area}")
+
+    else:
+        # Default fallback
+        follicle_size = 30
+        min_area = 100  # ~10x10
+        max_area = 10000  # ~100x100
+        logger.info(f"Using default size range: area {min_area}-{max_area}")
 
     # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Apply CLAHE for better contrast (clipLimit=3.0 as per working implementation)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
+    # Apply CLAHE for better contrast (if enabled)
+    use_clahe = settings.get('useCLAHE', True)
+    if use_clahe:
+        clip_limit = settings.get('claheClipLimit', 3.0)
+        tile_size = settings.get('claheTileSize', 8)
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+        gray = clahe.apply(gray)
+        logger.info(f"Applied CLAHE with clipLimit={clip_limit}, tileSize={tile_size}")
 
     detected_boxes: List[Tuple[int, int, int, int]] = []
     detected_results: List[dict] = []
@@ -209,9 +340,39 @@ def detect_blobs(image: np.ndarray,
     params.filterByConvexity = False
     params.filterByInertia = False
 
-    # Color filter - detect dark blobs
+    # Color filter - detect dark or light blobs based on settings
+    dark_blobs = settings.get('darkBlobs', True)
     params.filterByColor = True
-    params.blobColor = 0  # 0 = dark blobs, 255 = light blobs
+    params.blobColor = 0 if dark_blobs else 255  # 0 = dark blobs, 255 = light blobs
+
+    # Log all detection parameters
+    logger.info("=" * 60)
+    logger.info("BLOB DETECTION PARAMETERS:")
+    logger.info(f"  Image size: {image.shape[1]}x{image.shape[0]}")
+    logger.info(f"  Annotations count: {len(annotations)}")
+    logger.info(f"  Settings received: {settings}")
+    logger.info("-" * 40)
+    logger.info("  SIZE SETTINGS:")
+    logger.info(f"    Follicle size estimate: {follicle_size}px")
+    logger.info(f"    Min area: {min_area}px²")
+    logger.info(f"    Max area: {max_area}px²")
+    logger.info("-" * 40)
+    logger.info("  CLAHE SETTINGS:")
+    logger.info(f"    Enabled: {use_clahe}")
+    if use_clahe:
+        logger.info(f"    Clip limit: {settings.get('claheClipLimit', 3.0)}")
+        logger.info(f"    Tile size: {settings.get('claheTileSize', 8)}")
+    logger.info("-" * 40)
+    logger.info("  BLOB DETECTOR SETTINGS:")
+    logger.info(f"    Dark blobs: {dark_blobs}")
+    logger.info(f"    Blob color: {params.blobColor} (0=dark, 255=light)")
+    logger.info(f"    Threshold range: {params.minThreshold}-{params.maxThreshold} (step: {params.thresholdStep})")
+    logger.info(f"    Min circularity: {params.minCircularity}")
+    logger.info(f"    Filter by area: {params.filterByArea}")
+    logger.info(f"    Filter by circularity: {params.filterByCircularity}")
+    logger.info(f"    Filter by convexity: {params.filterByConvexity}")
+    logger.info(f"    Filter by inertia: {params.filterByInertia}")
+    logger.info("=" * 60)
 
     detector = cv2.SimpleBlobDetector_create(params)
     keypoints = detector.detect(gray)
@@ -445,6 +606,43 @@ def sync_annotations():
     })
 
 
+@app.route('/get-learned-stats', methods=['POST'])
+def get_learned_stats():
+    """
+    Get learned statistics from annotations for the Learn from Selection dialog.
+
+    Request body:
+        - sessionId: Session identifier
+
+    Returns:
+        - stats: Object with examplesAnalyzed, minWidth, maxWidth, minHeight, maxHeight,
+                 minAspectRatio, maxAspectRatio, meanIntensity
+        - canDetect: Whether minimum annotations reached
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Missing request data'}), 400
+
+    session_id = data.get('sessionId')
+    if not session_id or session_id not in sessions:
+        return jsonify({'error': 'Invalid session'}), 400
+
+    session = sessions[session_id]
+    annotations = session['annotations']
+    image = session.get('image')
+
+    stats = calculate_learned_stats(annotations, image)
+    can_detect = len(annotations) >= MIN_ANNOTATIONS_FOR_DETECTION
+
+    logger.info(f"Session {session_id}: learned stats = {stats}")
+
+    return jsonify({
+        'stats': stats,
+        'canDetect': can_detect,
+        'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
+    })
+
+
 @app.route('/get-annotation-count', methods=['POST'])
 def get_annotation_count():
     """
@@ -480,11 +678,18 @@ def blob_detect():
     """
     Run BLOB detection on the session image.
 
-    Requires at least MIN_ANNOTATIONS_FOR_DETECTION annotations to have been
-    added via /add-annotation for size learning.
+    Can work in two modes:
+    1. With annotations (learns size from them)
+    2. With manual settings (uses provided size range)
 
     Request body:
         - sessionId: Session identifier
+        - settings: Optional dict with manual settings:
+            - minWidth, maxWidth, minHeight, maxHeight: Size range
+            - useCLAHE: Whether to apply CLAHE preprocessing
+            - claheClipLimit: CLAHE clip limit
+            - claheTileSize: CLAHE tile grid size
+            - darkBlobs: Detect dark blobs (True) or light blobs (False)
 
     Returns:
         - detections: Array of {x, y, width, height, confidence, method}
@@ -500,18 +705,22 @@ def blob_detect():
 
     session = sessions[session_id]
     annotations = session['annotations']
+    settings = data.get('settings', {})
 
-    # Check minimum annotations
-    if len(annotations) < MIN_ANNOTATIONS_FOR_DETECTION:
+    # Check if we have either enough annotations OR manual size settings
+    has_manual_settings = settings.get('minWidth') and settings.get('maxWidth')
+    has_enough_annotations = len(annotations) >= MIN_ANNOTATIONS_FOR_DETECTION
+
+    if not has_manual_settings and not has_enough_annotations:
         return jsonify({
-            'error': f'Minimum {MIN_ANNOTATIONS_FOR_DETECTION} annotations required',
+            'error': f'Either provide manual size settings or at least {MIN_ANNOTATIONS_FOR_DETECTION} annotations',
             'annotationCount': len(annotations),
             'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
         }), 400
 
     try:
-        # Run detection
-        detections = detect_blobs(session['image'], annotations)
+        # Run detection with settings
+        detections = detect_blobs(session['image'], annotations, settings)
 
         return jsonify({
             'detections': detections,
