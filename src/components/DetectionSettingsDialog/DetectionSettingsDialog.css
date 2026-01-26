@@ -91,29 +91,24 @@
   margin-bottom: 4px;
 }
 
-/* Settings grid for form inputs */
-.settings-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.setting-row {
+/* Settings row for form inputs */
+.settings-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
-.setting-row label {
-  min-width: 80px;
+.settings-row label {
+  min-width: 100px;
   font-size: 13px;
   color: var(--text-secondary, #666);
+  flex-shrink: 0;
 }
 
-.setting-row input[type="number"] {
-  width: 70px;
-  padding: 6px 8px;
+.settings-row input[type="number"] {
+  width: 80px;
+  padding: 6px 10px;
   border: 1px solid var(--border-color, #e0e0e0);
   border-radius: 6px;
   font-size: 13px;
@@ -121,36 +116,71 @@
   color: var(--text-primary, #333);
 }
 
-.setting-row input[type="number"]:focus {
+.settings-row input[type="number"]:focus {
   outline: none;
   border-color: var(--accent-color, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
-.setting-hint {
-  font-size: 11px;
-  color: var(--text-tertiary, #999);
+.settings-row select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #333);
+  cursor: pointer;
+  min-width: 160px;
 }
 
-/* Checkbox row */
-.checkbox-row {
+.settings-row select:focus {
+  outline: none;
+  border-color: var(--accent-color, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.settings-row .hint {
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  margin-left: 8px;
+}
+
+/* Checkbox settings row */
+.settings-row.checkbox {
+  margin-top: 4px;
+}
+
+.settings-row.checkbox label {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  min-width: auto;
+  font-size: 13px;
+  color: var(--text-primary, #333);
+  cursor: pointer;
 }
 
-.checkbox-row input[type="checkbox"] {
+.settings-row.checkbox input[type="checkbox"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
   accent-color: var(--accent-color, #3b82f6);
 }
 
-.checkbox-row label {
-  font-size: 13px;
-  color: var(--text-primary, #333);
+/* Section toggle (checkbox in h3) */
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   cursor: pointer;
+  font-weight: 600;
+}
+
+.section-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-color, #3b82f6);
 }
 
 /* Disabled sections */
@@ -186,7 +216,7 @@
   background: var(--bg-secondary, #f5f5f5);
 }
 
-.footer-right {
+.footer-actions {
   display: flex;
   gap: 8px;
 }
@@ -244,7 +274,13 @@
   border-color: var(--border-color, #444);
 }
 
-[data-theme="dark"] .setting-row input[type="number"] {
+[data-theme="dark"] .settings-row input[type="number"] {
+  background: var(--bg-secondary, #2d2d2d);
+  border-color: var(--border-color, #444);
+  color: var(--text-primary, #e0e0e0);
+}
+
+[data-theme="dark"] .settings-row select {
   background: var(--bg-secondary, #2d2d2d);
   border-color: var(--border-color, #444);
   color: var(--text-primary, #e0e0e0);
@@ -262,4 +298,101 @@
 
 [data-theme="dark"] .button-secondary:hover {
   background: var(--bg-tertiary, #3d3d3d);
+}
+
+/* GPU Status Indicator */
+.gpu-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+.gpu-status svg {
+  flex-shrink: 0;
+}
+
+.gpu-status-label {
+  font-weight: 600;
+}
+
+.gpu-status-device {
+  color: var(--text-secondary, #666);
+  margin-left: auto;
+}
+
+.gpu-status-memory {
+  color: var(--text-tertiary, #999);
+  font-size: 12px;
+}
+
+/* CPU Mode - neutral/gray */
+.gpu-status-cpu {
+  background: var(--bg-secondary, #f5f5f5);
+  border: 1px solid var(--border-color, #e0e0e0);
+  color: var(--text-secondary, #666);
+}
+
+.gpu-status-cpu svg {
+  color: var(--text-tertiary, #999);
+}
+
+/* CUDA - green for NVIDIA */
+.gpu-status-cuda {
+  background: rgba(118, 185, 0, 0.1);
+  border: 1px solid rgba(118, 185, 0, 0.3);
+  color: #4a7a00;
+}
+
+.gpu-status-cuda svg {
+  color: #76b900;
+}
+
+.gpu-status-cuda .gpu-status-device {
+  color: #5a8a00;
+}
+
+/* MPS - blue for Apple */
+.gpu-status-mps {
+  background: rgba(0, 122, 255, 0.1);
+  border: 1px solid rgba(0, 122, 255, 0.3);
+  color: #005bb5;
+}
+
+.gpu-status-mps svg {
+  color: #007aff;
+}
+
+.gpu-status-mps .gpu-status-device {
+  color: #006acc;
+}
+
+/* Dark theme GPU status */
+[data-theme="dark"] .gpu-status-cpu {
+  background: var(--bg-tertiary, #2d2d2d);
+  border-color: var(--border-color, #444);
+  color: var(--text-secondary, #aaa);
+}
+
+[data-theme="dark"] .gpu-status-cuda {
+  background: rgba(118, 185, 0, 0.15);
+  border-color: rgba(118, 185, 0, 0.4);
+  color: #9ed33c;
+}
+
+[data-theme="dark"] .gpu-status-cuda .gpu-status-device {
+  color: #8cc42a;
+}
+
+[data-theme="dark"] .gpu-status-mps {
+  background: rgba(0, 122, 255, 0.15);
+  border-color: rgba(0, 122, 255, 0.4);
+  color: #5eaeff;
+}
+
+[data-theme="dark"] .gpu-status-mps .gpu-status-device {
+  color: #4a9eff;
 }
