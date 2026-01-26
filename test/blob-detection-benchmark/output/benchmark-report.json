@@ -1,0 +1,386 @@
+{
+  "generatedAt": "2026-01-26T21:11:00.780Z",
+  "image": {
+    "filePath": "D:\\BA Work\\label-for-llm\\test\\5.jpg",
+    "fileName": "5.jpg",
+    "width": 7500,
+    "height": 10000,
+    "originalWidth": 7500,
+    "originalHeight": 10000,
+    "wasResized": false
+  },
+  "summary": {
+    "totalTests": 242,
+    "totalTimeMs": 9811574.9339,
+    "totalTimeFormatted": "9811.6s",
+    "bestBlobCount": 5305
+  },
+  "bestConfiguration": {
+    "config": {
+      "useGaussianBlur": false,
+      "useMorphOpen": false,
+      "minCircularity": 0,
+      "useCLAHE": true,
+      "claheClipLimit": 1.1
+    },
+    "blobCount": 5305,
+    "executionTimeMs": 3243.5067999996245
+  },
+  "topConfigurations": [
+    {
+      "rank": 1,
+      "blobCount": 5305,
+      "executionTimeMs": 3243.5067999996245,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0,
+        "useCLAHE": true,
+        "claheClipLimit": 1.1
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.00+clahe=1.1"
+    },
+    {
+      "rank": 2,
+      "blobCount": 5272,
+      "executionTimeMs": 3155.7039999999106,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.03,
+        "useCLAHE": true,
+        "claheClipLimit": 1
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.03+clahe=1.0"
+    },
+    {
+      "rank": 3,
+      "blobCount": 5272,
+      "executionTimeMs": 3202.0512999985367,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.02,
+        "useCLAHE": true,
+        "claheClipLimit": 1
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.02+clahe=1.0"
+    },
+    {
+      "rank": 4,
+      "blobCount": 5272,
+      "executionTimeMs": 3244.8433999996632,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0,
+        "useCLAHE": true,
+        "claheClipLimit": 1
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.00+clahe=1.0"
+    },
+    {
+      "rank": 5,
+      "blobCount": 5272,
+      "executionTimeMs": 3344.191600000486,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.01,
+        "useCLAHE": true,
+        "claheClipLimit": 1
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.01+clahe=1.0"
+    },
+    {
+      "rank": 6,
+      "blobCount": 5268,
+      "executionTimeMs": 3192.886599998921,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.01,
+        "useCLAHE": true,
+        "claheClipLimit": 1.25
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.01+clahe=1.3"
+    },
+    {
+      "rank": 7,
+      "blobCount": 5268,
+      "executionTimeMs": 3229.156799999997,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.02,
+        "useCLAHE": true,
+        "claheClipLimit": 1.25
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.02+clahe=1.3"
+    },
+    {
+      "rank": 8,
+      "blobCount": 5268,
+      "executionTimeMs": 3244.7190000005066,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0.03,
+        "useCLAHE": true,
+        "claheClipLimit": 1.25
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.03+clahe=1.3"
+    },
+    {
+      "rank": 9,
+      "blobCount": 5268,
+      "executionTimeMs": 3269.026599999517,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0,
+        "useCLAHE": true,
+        "claheClipLimit": 1.2
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.00+clahe=1.2"
+    },
+    {
+      "rank": 10,
+      "blobCount": 5268,
+      "executionTimeMs": 4367.471200000495,
+      "config": {
+        "useGaussianBlur": false,
+        "useMorphOpen": false,
+        "minCircularity": 0,
+        "useCLAHE": true,
+        "claheClipLimit": 1.25
+      },
+      "description": "blur=OFF+morph=OFF+circ=0.00+clahe=1.3"
+    }
+  ],
+  "parameterImpact": [
+    {
+      "parameter": "Gaussian Blur",
+      "values": [
+        {
+          "value": "OFF",
+          "avgBlobs": 4263,
+          "count": 78,
+          "isRecommended": true
+        },
+        {
+          "value": "3x3",
+          "avgBlobs": 4067,
+          "count": 66,
+          "isRecommended": false
+        },
+        {
+          "value": "5x5",
+          "avgBlobs": 3718,
+          "count": 50,
+          "isRecommended": false
+        },
+        {
+          "value": "7x7",
+          "avgBlobs": 3621,
+          "count": 48,
+          "isRecommended": false
+        }
+      ]
+    },
+    {
+      "parameter": "Morphological Opening",
+      "values": [
+        {
+          "value": "OFF",
+          "avgBlobs": 4451,
+          "count": 91,
+          "isRecommended": true
+        },
+        {
+          "value": "3x3",
+          "avgBlobs": 3995,
+          "count": 54,
+          "isRecommended": false
+        },
+        {
+          "value": "5x5",
+          "avgBlobs": 3647,
+          "count": 49,
+          "isRecommended": false
+        },
+        {
+          "value": "7x7",
+          "avgBlobs": 3358,
+          "count": 48,
+          "isRecommended": false
+        }
+      ]
+    },
+    {
+      "parameter": "Circularity",
+      "values": [
+        {
+          "value": "0.03",
+          "avgBlobs": 5233,
+          "count": 3,
+          "isRecommended": true
+        },
+        {
+          "value": "0.02",
+          "avgBlobs": 5233,
+          "count": 3,
+          "isRecommended": false
+        },
+        {
+          "value": "0.01",
+          "avgBlobs": 5233,
+          "count": 3,
+          "isRecommended": false
+        },
+        {
+          "value": "0.05",
+          "avgBlobs": 4972,
+          "count": 3,
+          "isRecommended": false
+        },
+        {
+          "value": "0.15",
+          "avgBlobs": 4948,
+          "count": 2,
+          "isRecommended": false
+        },
+        {
+          "value": "0.10",
+          "avgBlobs": 4946,
+          "count": 3,
+          "isRecommended": false
+        },
+        {
+          "value": "0.25",
+          "avgBlobs": 4774,
+          "count": 2,
+          "isRecommended": false
+        },
+        {
+          "value": "0.30",
+          "avgBlobs": 4666,
+          "count": 2,
+          "isRecommended": false
+        },
+        {
+          "value": "0.00",
+          "avgBlobs": 4113,
+          "count": 84,
+          "isRecommended": false
+        },
+        {
+          "value": "0.20",
+          "avgBlobs": 3909,
+          "count": 73,
+          "isRecommended": false
+        },
+        {
+          "value": "0.40",
+          "avgBlobs": 3503,
+          "count": 64,
+          "isRecommended": false
+        }
+      ]
+    },
+    {
+      "parameter": "CLAHE",
+      "values": [
+        {
+          "value": "1.1",
+          "avgBlobs": 5238,
+          "count": 2,
+          "isRecommended": true
+        },
+        {
+          "value": "1.2",
+          "avgBlobs": 5198,
+          "count": 2,
+          "isRecommended": false
+        },
+        {
+          "value": "1.3",
+          "avgBlobs": 5172,
+          "count": 8,
+          "isRecommended": false
+        },
+        {
+          "value": "1.0",
+          "avgBlobs": 5171,
+          "count": 11,
+          "isRecommended": false
+        },
+        {
+          "value": "1.4",
+          "avgBlobs": 5151,
+          "count": 1,
+          "isRecommended": false
+        },
+        {
+          "value": "1.8",
+          "avgBlobs": 4710,
+          "count": 5,
+          "isRecommended": false
+        },
+        {
+          "value": "2.0",
+          "avgBlobs": 4587,
+          "count": 5,
+          "isRecommended": false
+        },
+        {
+          "value": "1.5",
+          "avgBlobs": 4474,
+          "count": 64,
+          "isRecommended": false
+        },
+        {
+          "value": "3.0",
+          "avgBlobs": 3798,
+          "count": 48,
+          "isRecommended": false
+        },
+        {
+          "value": "4.5",
+          "avgBlobs": 3677,
+          "count": 48,
+          "isRecommended": false
+        },
+        {
+          "value": "OFF",
+          "avgBlobs": 3016,
+          "count": 48,
+          "isRecommended": false
+        }
+      ]
+    }
+  ],
+  "phases": [
+    {
+      "name": "Phase 1",
+      "description": "Coarse Grid Search",
+      "testCount": 192,
+      "durationMs": 9419276.8751,
+      "bestBlobCount": 5093
+    },
+    {
+      "name": "Phase 2",
+      "description": "Refinement",
+      "testCount": 35,
+      "durationMs": 296735.3988999985,
+      "bestBlobCount": 5272
+    },
+    {
+      "name": "Phase 3",
+      "description": "Fine-Tuning",
+      "testCount": 15,
+      "durationMs": 95559.4001000002,
+      "bestBlobCount": 5305
+    }
+  ]
+}
