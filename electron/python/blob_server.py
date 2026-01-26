@@ -242,17 +242,13 @@ def detect_blobs(image: np.ndarray,
     if len(detected_results) < 50:
         logger.info("Trying contour-based detection...")
 
-        # Adaptive thresholding
-        block_size = max(11, follicle_size * 2 + 1)
-        if block_size % 2 == 0:
-            block_size += 1
+        # Use Gaussian blur + Otsu thresholding (better than adaptive for this use case)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-        thresh = cv2.adaptiveThreshold(
-            gray, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            block_size, 2
-        )
+        # Morphological opening to remove noise and separate touching objects
+        kernel = np.ones((3, 3), np.uint8)
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
