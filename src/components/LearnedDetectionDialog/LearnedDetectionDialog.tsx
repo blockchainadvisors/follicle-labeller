@@ -1,170 +1,386 @@
-import React, { useState, useCallback } from 'react';
-import { X, Lightbulb, ChevronDown, ChevronUp } from 'lucide-react';
-import type { LearnedDetectionParams } from '../../types';
-import { applyTolerance, formatSizeRange, formatAspectRatio } from '../../services/parameterLearner';
+import { useState, useMemo, useEffect } from "react";
+import { X, ChevronDown, ChevronUp, Lightbulb, Loader2 } from "lucide-react";
+import { blobService } from "../../services/blobService";
+import "./LearnedDetectionDialog.css";
+
+export interface LearnedStats {
+  examplesAnalyzed: number;
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  minAspectRatio: number;
+  maxAspectRatio: number;
+  meanIntensity: number;
+}
+
+export interface LearnedDetectionSettings {
+  tolerance: number; // 0-100, percentage to expand size range
+  darkBlobs: boolean;
+}
+
+export const DEFAULT_LEARNED_SETTINGS: LearnedDetectionSettings = {
+  tolerance: 20,
+  darkBlobs: true,
+};
 
 interface LearnedDetectionDialogProps {
-  params: LearnedDetectionParams;
-  onRun: (tolerance: number, darkBlobs: boolean) => void;
+  sessionId: string;
+  settings: LearnedDetectionSettings;
+  onRun: (settings: LearnedDetectionSettings) => void;
   onCancel: () => void;
 }
 
-export const LearnedDetectionDialog: React.FC<LearnedDetectionDialogProps> = ({
-  params,
+export function LearnedDetectionDialog({
+  sessionId,
+  settings,
   onRun,
   onCancel,
-}) => {
-  const [tolerance, setTolerance] = useState(0.2); // 20% default
-  const [darkBlobs, setDarkBlobs] = useState(true);
-  const [showTips, setShowTips] = useState(false);
+}: LearnedDetectionDialogProps) {
+  const [localSettings, setLocalSettings] = useState<LearnedDetectionSettings>({
+    ...settings,
+  });
+  const [showBestPractices, setShowBestPractices] = useState(false);
+  const [stats, setStats] = useState<LearnedStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const effectiveRange = applyTolerance(params, tolerance);
-  const tolerancePercent = Math.round(tolerance * 100);
+  // Fetch stats from server on mount
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const response = await blobService.getLearnedStats(sessionId);
+        setStats(response.stats);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to fetch stats");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchStats();
+  }, [sessionId]);
 
-  const handleRun = useCallback(() => {
-    onRun(tolerance, darkBlobs);
-  }, [tolerance, darkBlobs, onRun]);
+  // Calculate effective size range based on tolerance
+  const effectiveRange = useMemo(() => {
+    if (!stats) return null;
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      onCancel();
-    } else if (e.key === 'Enter') {
-      handleRun();
-    }
-  }, [onCancel, handleRun]);
+    const toleranceMultiplier = localSettings.tolerance / 100;
+    const widthRange = stats.maxWidth - stats.minWidth;
+    const heightRange = stats.maxHeight - stats.minHeight;
+
+    return {
+      minWidth: Math.max(
+        1,
+        Math.round(stats.minWidth - widthRange * toleranceMultiplier),
+      ),
+      maxWidth: Math.round(stats.maxWidth + widthRange * toleranceMultiplier),
+      minHeight: Math.max(
+        1,
+        Math.round(stats.minHeight - heightRange * toleranceMultiplier),
+      ),
+      maxHeight: Math.round(
+        stats.maxHeight + heightRange * toleranceMultiplier,
+      ),
+    };
+  }, [stats, localSettings.tolerance]);
+
+  const handleRun = () => {
+    onRun(localSettings);
+  };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="learned-detection-overlay" onClick={onCancel}>
+        <div
+          className="learned-detection-dialog"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="dialog-header">
+            <h2>Learn from Selection</h2>
+            <button className="close-button" onClick={onCancel}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="dialog-content loading-content">
+            <Loader2 className="spinner" size={32} />
+            <p>Analyzing annotations...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error || !stats) {
+    return (
+      <div className="learned-detection-overlay" onClick={onCancel}>
+        <div
+          className="learned-detection-dialog"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="dialog-header">
+            <h2>Learn from Selection</h2>
+            <button className="close-button" onClick={onCancel}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="dialog-content error-content">
+            <p className="error-message">
+              {error || "Failed to analyze annotations"}
+            </p>
+            <button className="button-secondary" onClick={onCancel}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Not enough annotations
+  if (stats.examplesAnalyzed < 3) {
+    return (
+      <div className="learned-detection-overlay" onClick={onCancel}>
+        <div
+          className="learned-detection-dialog"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="dialog-header">
+            <h2>Learn from Selection</h2>
+            <button className="close-button" onClick={onCancel}>
+              <X size={18} />
+            </button>
+          </div>
+          <div className="dialog-content error-content">
+            <p className="error-message">
+              Need at least 3 annotations to learn from. Currently have{" "}
+              {stats.examplesAnalyzed}.
+            </p>
+            <p className="error-hint">
+              Draw rectangle or circle annotations around follicles, then try
+              again.
+            </p>
+            <button className="button-secondary" onClick={onCancel}>
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="dialog-overlay" onKeyDown={handleKeyDown}>
-      <div className="dialog-content learned-detection-dialog">
+    <div className="learned-detection-overlay" onClick={onCancel}>
+      <div
+        className="learned-detection-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="dialog-header">
-          <h3>Learn from Selection</h3>
-          <button className="dialog-close" onClick={onCancel} title="Close (Esc)">
+          <h2>Learn from Selection</h2>
+          <button className="close-button" onClick={onCancel}>
             <X size={18} />
           </button>
         </div>
 
-        <div className="dialog-body">
-          <div className="learned-summary">
-            <div className="summary-item">
-              <span className="summary-label">Examples analyzed</span>
-              <span className="summary-value">{params.exampleCount} annotations</span>
+        <div className="dialog-content">
+          {/* Learned Statistics */}
+          <div className="stats-box">
+            <div className="stat-row">
+              <span className="stat-label">Examples analyzed</span>
+              <span className="stat-value">
+                {stats.examplesAnalyzed} annotations
+              </span>
             </div>
-            <div className="summary-item">
-              <span className="summary-label">Learned size range</span>
-              <span className="summary-value">{formatSizeRange(params)}</span>
+            <div className="stat-row">
+              <span className="stat-label">Learned size range</span>
+              <span className="stat-value">
+                {stats.minWidth}-{stats.maxWidth}px (W) × {stats.minHeight}-
+                {stats.maxHeight}px (H)
+              </span>
             </div>
-            <div className="summary-item">
-              <span className="summary-label">Aspect ratio</span>
-              <span className="summary-value">{formatAspectRatio(params)}</span>
+            <div className="stat-row">
+              <span className="stat-label">Aspect ratio</span>
+              <span className="stat-value">
+                {stats.minAspectRatio.toFixed(2)} -{" "}
+                {stats.maxAspectRatio.toFixed(2)}
+              </span>
             </div>
-            {params.meanIntensity !== undefined && (
-              <div className="summary-item">
-                <span className="summary-label">Mean intensity</span>
-                <span className="summary-value">{Math.round(params.meanIntensity)}</span>
+            <div className="stat-row">
+              <span className="stat-label">Mean intensity</span>
+              <span className="stat-value">{stats.meanIntensity}</span>
+            </div>
+          </div>
+
+          {/* Tolerance Slider */}
+          <div className="tolerance-section">
+            <div className="tolerance-header">
+              <span className="section-label">TOLERANCE</span>
+              <span className="tolerance-value">
+                {localSettings.tolerance}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={localSettings.tolerance}
+              onChange={(e) =>
+                setLocalSettings((prev) => ({
+                  ...prev,
+                  tolerance: parseInt(e.target.value),
+                }))
+              }
+              className="tolerance-slider"
+            />
+            {effectiveRange && (
+              <div className="effective-range">
+                Effective size range: {effectiveRange.minWidth}-
+                {effectiveRange.maxWidth}px (W) × {effectiveRange.minHeight}-
+                {effectiveRange.maxHeight}px (H)
               </div>
             )}
           </div>
 
-          <div className="dialog-section">
-            <label className="section-label">Tolerance</label>
-            <div className="tolerance-control">
-              <input
-                type="range"
-                min="0"
-                max="50"
-                value={tolerancePercent}
-                onChange={(e) => setTolerance(parseInt(e.target.value) / 100)}
-                className="tolerance-slider"
-              />
-              <span className="tolerance-value">{tolerancePercent}%</span>
-            </div>
-            <div className="effective-range">
-              <span className="range-label">Effective size range:</span>
-              <span className="range-value">
-                {effectiveRange.minWidth}-{effectiveRange.maxWidth}px (W) × {effectiveRange.minHeight}-{effectiveRange.maxHeight}px (H)
-              </span>
-            </div>
-          </div>
-
-          <div className="dialog-section">
-            <label className="section-label">Blob Type</label>
-            <div className="blob-type-toggle">
+          {/* Blob Type */}
+          <div className="blob-type-section">
+            <span className="section-label">BLOB TYPE</span>
+            <div className="blob-type-buttons">
               <button
-                className={`toggle-btn ${darkBlobs ? 'active' : ''}`}
-                onClick={() => setDarkBlobs(true)}
+                className={`blob-type-btn ${localSettings.darkBlobs ? "active" : ""}`}
+                onClick={() =>
+                  setLocalSettings((prev) => ({ ...prev, darkBlobs: true }))
+                }
               >
                 Dark blobs
               </button>
               <button
-                className={`toggle-btn ${!darkBlobs ? 'active' : ''}`}
-                onClick={() => setDarkBlobs(false)}
+                className={`blob-type-btn ${!localSettings.darkBlobs ? "active" : ""}`}
+                onClick={() =>
+                  setLocalSettings((prev) => ({ ...prev, darkBlobs: false }))
+                }
               >
                 Light blobs
               </button>
             </div>
             <p className="blob-type-hint">
-              {darkBlobs
-                ? 'Detect dark regions on light background (typical for follicles)'
-                : 'Detect light regions on dark background'}
+              {localSettings.darkBlobs
+                ? "Detect dark regions on light background (typical for follicles)"
+                : "Detect light regions on dark background"}
             </p>
           </div>
 
-          {/* Best Practices Tips */}
-          <div className="dialog-section tips-section">
+          {/* Best Practices Collapsible */}
+          <div className="best-practices-section">
             <button
-              className="tips-toggle"
-              onClick={() => setShowTips(!showTips)}
+              className="best-practices-toggle"
+              onClick={() => setShowBestPractices(!showBestPractices)}
             >
               <Lightbulb size={16} />
               <span>Best Practices for Selection</span>
-              {showTips ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {showBestPractices ? (
+                <ChevronUp size={16} />
+              ) : (
+                <ChevronDown size={16} />
+              )}
             </button>
-            {showTips && (
-              <div className="tips-content">
-                <ul className="tips-list">
+            {showBestPractices && (
+              <div className="best-practices-content">
+                <ul>
+                  <li>Select at least 10-20 representative follicles</li>
+                  <li>Include both small and large examples</li>
+                  <li>Select follicles from different areas of the image</li>
+                  <li>Avoid selecting artifacts or non-follicle structures</li>
+                  <li>Use a higher tolerance if detection misses follicles</li>
                   <li>
-                    <strong>Select 5-15 diverse examples</strong> — Include different sizes
-                    within your target range for better detection accuracy.
-                  </li>
-                  <li>
-                    <strong>Choose clear, representative follicles</strong> — Avoid partial,
-                    overlapping, or ambiguous examples that might confuse the detector.
-                  </li>
-                  <li>
-                    <strong>Include edge cases</strong> — Select both the smallest and largest
-                    follicles you want to detect to define the size range.
-                  </li>
-                  <li>
-                    <strong>Sample from different image regions</strong> — Lighting and contrast
-                    can vary across the image; select from multiple areas.
-                  </li>
-                  <li>
-                    <strong>Adjust tolerance for variation</strong> — Use higher tolerance (30-50%)
-                    if follicle sizes vary significantly, lower (10-20%) for uniform sizes.
-                  </li>
-                  <li>
-                    <strong>Enable CLAHE in Detection Settings</strong> — For images with uneven
-                    lighting, enable CLAHE preprocessing for better results.
+                    Use a lower tolerance if detection finds too many false
+                    positives
                   </li>
                 </ul>
-                <p className="tips-note">
-                  <strong>Note:</strong> This detection uses your Detection Settings (CLAHE, SAHI, Soft-NMS)
-                  combined with the learned size parameters from your selection.
-                </p>
               </div>
             )}
           </div>
         </div>
 
         <div className="dialog-footer">
-          <button className="dialog-btn cancel" onClick={onCancel}>
+          <button className="button-secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button className="dialog-btn primary" onClick={handleRun}>
+          <button className="button-primary" onClick={handleRun}>
             Run Detection
           </button>
         </div>
       </div>
     </div>
   );
-};
+}
+
+/**
+ * Calculate learned statistics from annotations.
+ */
+export function calculateLearnedStats(
+  annotations: Array<{
+    shape: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    center?: { x: number; y: number };
+    radius?: number;
+  }>,
+  _imageData?: ArrayBuffer, // Reserved for future mean intensity calculation
+): LearnedStats {
+  if (annotations.length === 0) {
+    return {
+      examplesAnalyzed: 0,
+      minWidth: 10,
+      maxWidth: 100,
+      minHeight: 10,
+      maxHeight: 100,
+      minAspectRatio: 1,
+      maxAspectRatio: 1,
+      meanIntensity: 128,
+    };
+  }
+
+  const sizes: { width: number; height: number }[] = [];
+
+  for (const ann of annotations) {
+    if (ann.shape === "rectangle" && ann.width && ann.height) {
+      sizes.push({ width: ann.width, height: ann.height });
+    } else if (ann.shape === "circle" && ann.radius) {
+      const diameter = ann.radius * 2;
+      sizes.push({ width: diameter, height: diameter });
+    }
+  }
+
+  if (sizes.length === 0) {
+    return {
+      examplesAnalyzed: 0,
+      minWidth: 10,
+      maxWidth: 100,
+      minHeight: 10,
+      maxHeight: 100,
+      minAspectRatio: 1,
+      maxAspectRatio: 1,
+      meanIntensity: 128,
+    };
+  }
+
+  const widths = sizes.map((s) => s.width);
+  const heights = sizes.map((s) => s.height);
+  const aspectRatios = sizes.map((s) => s.width / s.height);
+
+  return {
+    examplesAnalyzed: sizes.length,
+    minWidth: Math.round(Math.min(...widths)),
+    maxWidth: Math.round(Math.max(...widths)),
+    minHeight: Math.round(Math.min(...heights)),
+    maxHeight: Math.round(Math.max(...heights)),
+    minAspectRatio: Math.min(...aspectRatios),
+    maxAspectRatio: Math.max(...aspectRatios),
+    meanIntensity: 92, // Placeholder - would need image data to calculate
+  };
+}
