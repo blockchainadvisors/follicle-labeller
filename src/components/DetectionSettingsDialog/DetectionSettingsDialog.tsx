@@ -1,26 +1,39 @@
-import { useState } from "react";
-import { X, RotateCcw } from "lucide-react";
-import "./DetectionSettingsDialog.css";
+import { useState } from 'react';
+import { X } from 'lucide-react';
+import type { BlobDetectionOptions } from '../../types';
+import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
-  // Size range settings
+  // Basic size parameters
   minWidth: number;
   maxWidth: number;
   minHeight: number;
   maxHeight: number;
   darkBlobs: boolean;
 
-  // CLAHE settings
+  // Gaussian blur preprocessing
+  useGaussianBlur: boolean;
+  gaussianKernelSize: number;
+
+  // Morphological opening
+  useMorphOpen: boolean;
+  morphKernelSize: number;
+
+  // Circularity filter
+  useCircularityFilter: boolean;
+  minCircularity: number;
+
+  // CLAHE preprocessing
   useCLAHE: boolean;
   claheClipLimit: number;
   claheTileSize: number;
 
-  // SAHI settings (for future use)
+  // SAHI-style tiling
   useSAHI: boolean;
   tileSize: number;
   tileOverlap: number;
 
-  // Soft-NMS settings (for future use)
+  // Soft-NMS
   useSoftNMS: boolean;
   softNMSSigma: number;
   softNMSThreshold: number;
@@ -32,15 +45,27 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   minHeight: 10,
   maxHeight: 200,
   darkBlobs: true,
+  // Gaussian blur - matches OpenCV pipeline
+  useGaussianBlur: true,
+  gaussianKernelSize: 5,
+  // Morphological opening - separates touching objects
+  useMorphOpen: true,
+  morphKernelSize: 3,
+  // Circularity filter - rejects elongated shapes
+  useCircularityFilter: true,
+  minCircularity: 0.2,
+  // CLAHE - matches Python clipLimit=3.0
   useCLAHE: true,
   claheClipLimit: 3.0,
   claheTileSize: 8,
+  // SAHI tiling
   useSAHI: false,
   tileSize: 512,
   tileOverlap: 0.2,
+  // Soft-NMS
   useSoftNMS: true,
   softNMSSigma: 0.5,
-  softNMSThreshold: 0.3,
+  softNMSThreshold: 0.1,
 };
 
 interface DetectionSettingsDialogProps {
@@ -54,15 +79,13 @@ export function DetectionSettingsDialog({
   onSave,
   onCancel,
 }: DetectionSettingsDialogProps) {
-  const [localSettings, setLocalSettings] = useState<DetectionSettings>({
-    ...settings,
-  });
+  const [localSettings, setLocalSettings] = useState<DetectionSettings>({ ...settings });
 
-  const handleChange = (
-    key: keyof DetectionSettings,
-    value: number | boolean,
+  const handleChange = <K extends keyof DetectionSettings>(
+    key: K,
+    value: DetectionSettings[K]
   ) => {
-    setLocalSettings((prev) => ({ ...prev, [key]: value }));
+    setLocalSettings(prev => ({ ...prev, [key]: value }));
   };
 
   const handleReset = () => {
@@ -75,10 +98,7 @@ export function DetectionSettingsDialog({
 
   return (
     <div className="detection-settings-overlay" onClick={onCancel}>
-      <div
-        className="detection-settings-dialog"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="detection-settings-dialog" onClick={e => e.stopPropagation()}>
         <div className="dialog-header">
           <h2>Detection Settings</h2>
           <button className="close-button" onClick={onCancel}>
@@ -87,209 +107,294 @@ export function DetectionSettingsDialog({
         </div>
 
         <div className="dialog-content">
-          {/* Size Range Section */}
+          {/* Basic Size Parameters */}
           <section className="settings-section">
             <h3>Size Range</h3>
-            <p className="section-description">
-              Set the minimum and maximum follicle size to detect. If you have
-              3+ annotations, size will be learned automatically unless you set
-              manual values here.
-            </p>
-
-            <div className="settings-grid">
-              <div className="setting-row">
-                <label htmlFor="minWidth">Min Width</label>
-                <input
-                  type="number"
-                  id="minWidth"
-                  min={1}
-                  max={500}
-                  value={localSettings.minWidth}
-                  onChange={(e) =>
-                    handleChange("minWidth", parseInt(e.target.value) || 1)
-                  }
-                />
-                <span className="setting-hint">px</span>
-              </div>
-
-              <div className="setting-row">
-                <label htmlFor="maxWidth">Max Width</label>
-                <input
-                  type="number"
-                  id="maxWidth"
-                  min={1}
-                  max={500}
-                  value={localSettings.maxWidth}
-                  onChange={(e) =>
-                    handleChange("maxWidth", parseInt(e.target.value) || 1)
-                  }
-                />
-                <span className="setting-hint">px</span>
-              </div>
-
-              <div className="setting-row">
-                <label htmlFor="minHeight">Min Height</label>
-                <input
-                  type="number"
-                  id="minHeight"
-                  min={1}
-                  max={500}
-                  value={localSettings.minHeight}
-                  onChange={(e) =>
-                    handleChange("minHeight", parseInt(e.target.value) || 1)
-                  }
-                />
-                <span className="setting-hint">px</span>
-              </div>
-
-              <div className="setting-row">
-                <label htmlFor="maxHeight">Max Height</label>
-                <input
-                  type="number"
-                  id="maxHeight"
-                  min={1}
-                  max={500}
-                  value={localSettings.maxHeight}
-                  onChange={(e) =>
-                    handleChange("maxHeight", parseInt(e.target.value) || 1)
-                  }
-                />
-                <span className="setting-hint">px</span>
-              </div>
-            </div>
-
-            <div className="checkbox-row">
+            <div className="settings-row">
+              <label>Min Width</label>
               <input
-                type="checkbox"
-                id="darkBlobs"
-                checked={localSettings.darkBlobs}
-                onChange={(e) => handleChange("darkBlobs", e.target.checked)}
+                type="number"
+                value={localSettings.minWidth}
+                onChange={e => handleChange('minWidth', parseInt(e.target.value) || 0)}
+                min={1}
+                max={1000}
               />
-              <label htmlFor="darkBlobs">
+            </div>
+            <div className="settings-row">
+              <label>Max Width</label>
+              <input
+                type="number"
+                value={localSettings.maxWidth}
+                onChange={e => handleChange('maxWidth', parseInt(e.target.value) || 0)}
+                min={1}
+                max={5000}
+              />
+            </div>
+            <div className="settings-row">
+              <label>Min Height</label>
+              <input
+                type="number"
+                value={localSettings.minHeight}
+                onChange={e => handleChange('minHeight', parseInt(e.target.value) || 0)}
+                min={1}
+                max={1000}
+              />
+            </div>
+            <div className="settings-row">
+              <label>Max Height</label>
+              <input
+                type="number"
+                value={localSettings.maxHeight}
+                onChange={e => handleChange('maxHeight', parseInt(e.target.value) || 0)}
+                min={1}
+                max={5000}
+              />
+            </div>
+            <div className="settings-row checkbox">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={localSettings.darkBlobs}
+                  onChange={e => handleChange('darkBlobs', e.target.checked)}
+                />
                 Dark Blobs (detect dark regions on light background)
               </label>
             </div>
           </section>
 
-          {/* CLAHE Section */}
+          {/* Gaussian Blur */}
           <section className="settings-section">
-            <div className="section-header">
-              <div className="checkbox-row">
+            <h3>
+              <label className="section-toggle">
                 <input
                   type="checkbox"
-                  id="useCLAHE"
-                  checked={localSettings.useCLAHE}
-                  onChange={(e) => handleChange("useCLAHE", e.target.checked)}
+                  checked={localSettings.useGaussianBlur}
+                  onChange={e => handleChange('useGaussianBlur', e.target.checked)}
                 />
-                <label htmlFor="useCLAHE">
-                  <strong>CLAHE Preprocessing</strong>
-                </label>
-              </div>
-            </div>
+                Gaussian Blur
+              </label>
+            </h3>
             <p className="section-description">
-              Contrast Limited Adaptive Histogram Equalization improves
-              detection in images with uneven lighting or low contrast.
+              Smooths the image to reduce noise before detection. Helps avoid false positives from image artifacts.
             </p>
-
-            {localSettings.useCLAHE && (
-              <div className="settings-grid">
-                <div className="setting-row">
-                  <label htmlFor="claheClipLimit">Clip Limit</label>
-                  <input
-                    type="number"
-                    id="claheClipLimit"
-                    min={1}
-                    max={10}
-                    step={0.5}
-                    value={localSettings.claheClipLimit}
-                    onChange={(e) =>
-                      handleChange(
-                        "claheClipLimit",
-                        parseFloat(e.target.value) || 2,
-                      )
-                    }
-                  />
-                  <span className="setting-hint">
-                    1-10, higher = more contrast
-                  </span>
-                </div>
-
-                <div className="setting-row">
-                  <label htmlFor="claheTileSize">Tile Size</label>
-                  <input
-                    type="number"
-                    id="claheTileSize"
-                    min={2}
-                    max={16}
-                    value={localSettings.claheTileSize}
-                    onChange={(e) =>
-                      handleChange(
-                        "claheTileSize",
-                        parseInt(e.target.value) || 8,
-                      )
-                    }
-                  />
-                  <span className="setting-hint">
-                    2-16, tiles per dimension
-                  </span>
-                </div>
+            {localSettings.useGaussianBlur && (
+              <div className="settings-row">
+                <label>Kernel Size</label>
+                <select
+                  value={localSettings.gaussianKernelSize}
+                  onChange={e => handleChange('gaussianKernelSize', parseInt(e.target.value))}
+                >
+                  <option value={3}>3x3 (light blur)</option>
+                  <option value={5}>5x5 (recommended)</option>
+                  <option value={7}>7x7 (strong blur)</option>
+                </select>
               </div>
             )}
           </section>
 
-          {/* SAHI Section (disabled for now) */}
-          <section className="settings-section disabled-section">
-            <div className="section-header">
-              <div className="checkbox-row">
+          {/* Morphological Opening */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
                 <input
                   type="checkbox"
-                  id="useSAHI"
-                  checked={localSettings.useSAHI}
-                  onChange={(e) => handleChange("useSAHI", e.target.checked)}
-                  disabled
+                  checked={localSettings.useMorphOpen}
+                  onChange={e => handleChange('useMorphOpen', e.target.checked)}
                 />
-                <label htmlFor="useSAHI">
-                  <strong>SAHI Tiling</strong>{" "}
-                  <span className="coming-soon">(Coming Soon)</span>
-                </label>
-              </div>
-            </div>
+                Morphological Opening
+              </label>
+            </h3>
             <p className="section-description">
-              Sliced Aided Hyper Inference processes large images in overlapping
-              tiles for better detection of small objects.
+              Separates touching objects by eroding then dilating. Essential for splitting merged detections.
             </p>
+            {localSettings.useMorphOpen && (
+              <div className="settings-row">
+                <label>Kernel Size</label>
+                <select
+                  value={localSettings.morphKernelSize}
+                  onChange={e => handleChange('morphKernelSize', parseInt(e.target.value))}
+                >
+                  <option value={3}>3x3 (recommended)</option>
+                  <option value={5}>5x5 (stronger separation)</option>
+                  <option value={7}>7x7 (aggressive)</option>
+                </select>
+              </div>
+            )}
           </section>
 
-          {/* Soft-NMS Section (disabled for now) */}
-          <section className="settings-section disabled-section">
-            <div className="section-header">
-              <div className="checkbox-row">
+          {/* Circularity Filter */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
                 <input
                   type="checkbox"
-                  id="useSoftNMS"
-                  checked={localSettings.useSoftNMS}
-                  onChange={(e) => handleChange("useSoftNMS", e.target.checked)}
-                  disabled
+                  checked={localSettings.useCircularityFilter}
+                  onChange={e => handleChange('useCircularityFilter', e.target.checked)}
                 />
-                <label htmlFor="useSoftNMS">
-                  <strong>Soft-NMS (Non-Maximum Suppression)</strong>{" "}
-                  <span className="coming-soon">(Coming Soon)</span>
-                </label>
-              </div>
-            </div>
+                Circularity Filter
+              </label>
+            </h3>
             <p className="section-description">
-              Soft-NMS reduces confidence of overlapping detections instead of
-              removing them, helping detect closely packed follicles.
+              Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
             </p>
+            {localSettings.useCircularityFilter && (
+              <div className="settings-row">
+                <label>Min Circularity</label>
+                <input
+                  type="number"
+                  value={localSettings.minCircularity}
+                  onChange={e => handleChange('minCircularity', parseFloat(e.target.value) || 0)}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                />
+                <span className="hint">0-1, 1.0 = perfect circle</span>
+              </div>
+            )}
+          </section>
+
+          {/* CLAHE Preprocessing */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useCLAHE}
+                  onChange={e => handleChange('useCLAHE', e.target.checked)}
+                />
+                CLAHE Preprocessing
+              </label>
+            </h3>
+            <p className="section-description">
+              Contrast Limited Adaptive Histogram Equalization improves detection in
+              images with uneven lighting or low contrast.
+            </p>
+            {localSettings.useCLAHE && (
+              <>
+                <div className="settings-row">
+                  <label>Clip Limit</label>
+                  <input
+                    type="number"
+                    value={localSettings.claheClipLimit}
+                    onChange={e => handleChange('claheClipLimit', parseFloat(e.target.value) || 1)}
+                    min={1}
+                    max={10}
+                    step={0.5}
+                  />
+                  <span className="hint">1-10, higher = more contrast</span>
+                </div>
+                <div className="settings-row">
+                  <label>Tile Size</label>
+                  <input
+                    type="number"
+                    value={localSettings.claheTileSize}
+                    onChange={e => handleChange('claheTileSize', parseInt(e.target.value) || 4)}
+                    min={2}
+                    max={16}
+                  />
+                  <span className="hint">2-16, tiles per dimension</span>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* SAHI-style Tiling */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useSAHI}
+                  onChange={e => handleChange('useSAHI', e.target.checked)}
+                />
+                SAHI Tiling
+              </label>
+            </h3>
+            <p className="section-description">
+              Sliced Aided Hyper Inference processes large images in overlapping tiles
+              for better detection of small objects.
+            </p>
+            {localSettings.useSAHI && (
+              <>
+                <div className="settings-row">
+                  <label>Tile Size (px)</label>
+                  <input
+                    type="number"
+                    value={localSettings.tileSize}
+                    onChange={e => handleChange('tileSize', parseInt(e.target.value) || 256)}
+                    min={128}
+                    max={2048}
+                    step={64}
+                  />
+                  <span className="hint">128-2048px</span>
+                </div>
+                <div className="settings-row">
+                  <label>Overlap</label>
+                  <input
+                    type="number"
+                    value={localSettings.tileOverlap}
+                    onChange={e => handleChange('tileOverlap', parseFloat(e.target.value) || 0.1)}
+                    min={0}
+                    max={0.5}
+                    step={0.05}
+                  />
+                  <span className="hint">0-0.5, fraction of tile size</span>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* Soft-NMS */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useSoftNMS}
+                  onChange={e => handleChange('useSoftNMS', e.target.checked)}
+                />
+                Soft-NMS (Non-Maximum Suppression)
+              </label>
+            </h3>
+            <p className="section-description">
+              Reduces overlapping detections using soft suppression with Gaussian decay.
+            </p>
+            {localSettings.useSoftNMS && (
+              <>
+                <div className="settings-row">
+                  <label>Sigma</label>
+                  <input
+                    type="number"
+                    value={localSettings.softNMSSigma}
+                    onChange={e => handleChange('softNMSSigma', parseFloat(e.target.value) || 0.3)}
+                    min={0.1}
+                    max={2}
+                    step={0.1}
+                  />
+                  <span className="hint">0.1-2, Gaussian decay rate</span>
+                </div>
+                <div className="settings-row">
+                  <label>Threshold</label>
+                  <input
+                    type="number"
+                    value={localSettings.softNMSThreshold}
+                    onChange={e => handleChange('softNMSThreshold', parseFloat(e.target.value) || 0.05)}
+                    min={0.01}
+                    max={0.5}
+                    step={0.01}
+                  />
+                  <span className="hint">Min confidence to keep</span>
+                </div>
+              </>
+            )}
           </section>
         </div>
 
         <div className="dialog-footer">
           <button className="button-secondary" onClick={handleReset}>
-            <RotateCcw size={16} />
             Reset to Defaults
           </button>
-          <div className="footer-right">
+          <div className="footer-actions">
             <button className="button-secondary" onClick={onCancel}>
               Cancel
             </button>
@@ -301,4 +406,38 @@ export function DetectionSettingsDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * Convert DetectionSettings to BlobDetectionOptions
+ */
+export function settingsToOptions(settings: DetectionSettings): Partial<BlobDetectionOptions> {
+  return {
+    minWidth: settings.minWidth,
+    maxWidth: settings.maxWidth,
+    minHeight: settings.minHeight,
+    maxHeight: settings.maxHeight,
+    darkBlobs: settings.darkBlobs,
+    // Gaussian blur
+    useGaussianBlur: settings.useGaussianBlur,
+    gaussianKernelSize: settings.gaussianKernelSize,
+    // Morphological opening
+    useMorphOpen: settings.useMorphOpen,
+    morphKernelSize: settings.morphKernelSize,
+    // Circularity filter (0 disables it)
+    minCircularity: settings.useCircularityFilter ? settings.minCircularity : 0,
+    // CLAHE
+    useCLAHE: settings.useCLAHE,
+    claheClipLimit: settings.claheClipLimit,
+    claheTileSize: settings.claheTileSize,
+    // SAHI tiling
+    tileSize: settings.useSAHI ? settings.tileSize : 0,
+    tileOverlap: settings.tileOverlap,
+    // Soft-NMS
+    useSoftNMS: settings.useSoftNMS,
+    softNMSSigma: settings.softNMSSigma,
+    softNMSThreshold: settings.softNMSThreshold,
+    useGPU: true,
+    workerCount: navigator.hardwareConcurrency || 4,
+  };
 }
