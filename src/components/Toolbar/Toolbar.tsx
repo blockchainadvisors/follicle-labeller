@@ -506,16 +506,28 @@ export const Toolbar: React.FC = () => {
       const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
 
-      // Add data.yaml
-      zip.file('data.yaml', dataYaml);
+      // Standard YOLO layout under a dataset/ root folder
+      const datasetFolder = zip.folder('dataset');
+      datasetFolder?.file('data.yaml', dataYaml);
 
-      // Add images and labels folders
-      const imagesFolder = zip.folder('images');
-      const labelsFolder = zip.folder('labels');
+      const imagesFolder = datasetFolder?.folder('images');
+      const labelsFolder = datasetFolder?.folder('labels');
+
+      const imageSplits = {
+        train: imagesFolder?.folder('train'),
+        val: imagesFolder?.folder('val'),
+        test: imagesFolder?.folder('test'),
+      };
+
+      const labelSplits = {
+        train: labelsFolder?.folder('train'),
+        val: labelsFolder?.folder('val'),
+        test: labelsFolder?.folder('test'),
+      };
 
       for (const file of files) {
-        imagesFolder?.file(file.imageName, file.imageData);
-        labelsFolder?.file(file.labelName, file.labelContent);
+        imageSplits[file.split]?.file(file.imageName, file.imageData);
+        labelSplits[file.split]?.file(file.labelName, file.labelContent);
       }
 
       // Generate and download ZIP
