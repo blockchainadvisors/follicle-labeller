@@ -11,6 +11,18 @@ export interface DetectionSettings {
   maxHeight: number;
   darkBlobs: boolean;
 
+  // Gaussian blur preprocessing
+  useGaussianBlur: boolean;
+  gaussianKernelSize: number;
+
+  // Morphological opening
+  useMorphOpen: boolean;
+  morphKernelSize: number;
+
+  // Circularity filter
+  useCircularityFilter: boolean;
+  minCircularity: number;
+
   // CLAHE preprocessing
   useCLAHE: boolean;
   claheClipLimit: number;
@@ -33,12 +45,24 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   minHeight: 10,
   maxHeight: 200,
   darkBlobs: true,
-  useCLAHE: false,
-  claheClipLimit: 2.0,
+  // Gaussian blur - matches OpenCV pipeline
+  useGaussianBlur: true,
+  gaussianKernelSize: 5,
+  // Morphological opening - separates touching objects
+  useMorphOpen: true,
+  morphKernelSize: 3,
+  // Circularity filter - rejects elongated shapes
+  useCircularityFilter: true,
+  minCircularity: 0.2,
+  // CLAHE - matches Python clipLimit=3.0
+  useCLAHE: true,
+  claheClipLimit: 3.0,
   claheTileSize: 8,
+  // SAHI tiling
   useSAHI: false,
   tileSize: 512,
   tileOverlap: 0.2,
+  // Soft-NMS
   useSoftNMS: true,
   softNMSSigma: 0.5,
   softNMSThreshold: 0.1,
@@ -136,6 +160,97 @@ export function DetectionSettingsDialog({
                 Dark Blobs (detect dark regions on light background)
               </label>
             </div>
+          </section>
+
+          {/* Gaussian Blur */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useGaussianBlur}
+                  onChange={e => handleChange('useGaussianBlur', e.target.checked)}
+                />
+                Gaussian Blur
+              </label>
+            </h3>
+            <p className="section-description">
+              Smooths the image to reduce noise before detection. Helps avoid false positives from image artifacts.
+            </p>
+            {localSettings.useGaussianBlur && (
+              <div className="settings-row">
+                <label>Kernel Size</label>
+                <select
+                  value={localSettings.gaussianKernelSize}
+                  onChange={e => handleChange('gaussianKernelSize', parseInt(e.target.value))}
+                >
+                  <option value={3}>3x3 (light blur)</option>
+                  <option value={5}>5x5 (recommended)</option>
+                  <option value={7}>7x7 (strong blur)</option>
+                </select>
+              </div>
+            )}
+          </section>
+
+          {/* Morphological Opening */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useMorphOpen}
+                  onChange={e => handleChange('useMorphOpen', e.target.checked)}
+                />
+                Morphological Opening
+              </label>
+            </h3>
+            <p className="section-description">
+              Separates touching objects by eroding then dilating. Essential for splitting merged detections.
+            </p>
+            {localSettings.useMorphOpen && (
+              <div className="settings-row">
+                <label>Kernel Size</label>
+                <select
+                  value={localSettings.morphKernelSize}
+                  onChange={e => handleChange('morphKernelSize', parseInt(e.target.value))}
+                >
+                  <option value={3}>3x3 (recommended)</option>
+                  <option value={5}>5x5 (stronger separation)</option>
+                  <option value={7}>7x7 (aggressive)</option>
+                </select>
+              </div>
+            )}
+          </section>
+
+          {/* Circularity Filter */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useCircularityFilter}
+                  onChange={e => handleChange('useCircularityFilter', e.target.checked)}
+                />
+                Circularity Filter
+              </label>
+            </h3>
+            <p className="section-description">
+              Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
+            </p>
+            {localSettings.useCircularityFilter && (
+              <div className="settings-row">
+                <label>Min Circularity</label>
+                <input
+                  type="number"
+                  value={localSettings.minCircularity}
+                  onChange={e => handleChange('minCircularity', parseFloat(e.target.value) || 0)}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                />
+                <span className="hint">0-1, 1.0 = perfect circle</span>
+              </div>
+            )}
           </section>
 
           {/* CLAHE Preprocessing */}
@@ -303,11 +418,22 @@ export function settingsToOptions(settings: DetectionSettings): Partial<BlobDete
     minHeight: settings.minHeight,
     maxHeight: settings.maxHeight,
     darkBlobs: settings.darkBlobs,
+    // Gaussian blur
+    useGaussianBlur: settings.useGaussianBlur,
+    gaussianKernelSize: settings.gaussianKernelSize,
+    // Morphological opening
+    useMorphOpen: settings.useMorphOpen,
+    morphKernelSize: settings.morphKernelSize,
+    // Circularity filter (0 disables it)
+    minCircularity: settings.useCircularityFilter ? settings.minCircularity : 0,
+    // CLAHE
     useCLAHE: settings.useCLAHE,
     claheClipLimit: settings.claheClipLimit,
     claheTileSize: settings.claheTileSize,
+    // SAHI tiling
     tileSize: settings.useSAHI ? settings.tileSize : 0,
     tileOverlap: settings.tileOverlap,
+    // Soft-NMS
     useSoftNMS: settings.useSoftNMS,
     softNMSSigma: settings.softNMSSigma,
     softNMSThreshold: settings.softNMSThreshold,

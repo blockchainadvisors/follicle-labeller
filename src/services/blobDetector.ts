@@ -13,6 +13,7 @@ import BlobDetectorWorker from './blobDetector.worker.ts?worker';
 
 /**
  * Default detection options.
+ * Values tuned to match the Python/OpenCV pipeline for consistent results.
  */
 export const DEFAULT_DETECTION_OPTIONS: BlobDetectionOptions = {
   minWidth: 10,
@@ -26,14 +27,22 @@ export const DEFAULT_DETECTION_OPTIONS: BlobDetectionOptions = {
   // SAHI-style tiling (disabled by default for backward compatibility)
   tileSize: 0,            // 0 = auto based on workerCount (legacy behavior)
   tileOverlap: 0.2,       // 20% overlap when using fixed tile size
-  // CLAHE preprocessing
-  useCLAHE: false,        // Disabled by default
-  claheClipLimit: 2.0,
+  // CLAHE preprocessing (matches Python: clipLimit=3.0, always enabled)
+  useCLAHE: true,         // Enabled by default (matches Python)
+  claheClipLimit: 3.0,    // Match Python value (was 2.0)
   claheTileSize: 8,
   // Soft-NMS
   useSoftNMS: true,       // Use Soft-NMS for better overlap handling
   softNMSSigma: 0.5,
   softNMSThreshold: 0.1,
+  // Gaussian blur preprocessing (matches OpenCV pipeline)
+  useGaussianBlur: true,  // Enabled by default
+  gaussianKernelSize: 5,  // 5x5 kernel (matches Python)
+  // Morphological opening (separates touching objects)
+  useMorphOpen: true,     // Enabled by default
+  morphKernelSize: 3,     // 3x3 kernel (matches Python)
+  // Circularity filter (rejects elongated shapes)
+  minCircularity: 0.2,    // Match OpenCV SimpleBlobDetector
 };
 
 /**
@@ -454,8 +463,119 @@ export async function detectBlobs(
 }
 
 /**
+ * Apply Gaussian blur using separable convolution (sync version).
+ */
+function applyGaussianBlurSync(
+  grayscale: Uint8Array<ArrayBuffer>,
+  width: number,
+  height: number,
+  kernelSize: number = 5
+): Uint8Array<ArrayBuffer> {
+  const sigma = 0.3 * ((kernelSize - 1) * 0.5 - 1) + 0.8;
+  const kernel = new Float32Array(kernelSize);
+  const half = Math.floor(kernelSize / 2);
+  let sum = 0;
+
+  for (let i = 0; i < kernelSize; i++) {
+    const x = i - half;
+    kernel[i] = Math.exp(-(x * x) / (2 * sigma * sigma));
+    sum += kernel[i];
+  }
+  for (let i = 0; i < kernelSize; i++) {
+    kernel[i] /= sum;
+  }
+
+  const temp = new Uint8Array(grayscale.length);
+  const result = new Uint8Array(grayscale.length);
+
+  // Horizontal pass
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let val = 0;
+      for (let k = -half; k <= half; k++) {
+        const px = Math.min(Math.max(x + k, 0), width - 1);
+        val += grayscale[y * width + px] * kernel[k + half];
+      }
+      temp[y * width + x] = Math.round(val);
+    }
+  }
+
+  // Vertical pass
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let val = 0;
+      for (let k = -half; k <= half; k++) {
+        const py = Math.min(Math.max(y + k, 0), height - 1);
+        val += temp[py * width + x] * kernel[k + half];
+      }
+      result[y * width + x] = Math.round(val);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Apply morphological opening (erosion + dilation) (sync version).
+ */
+function morphologicalOpenSync(
+  binary: Uint8Array<ArrayBuffer>,
+  width: number,
+  height: number,
+  kernelSize: number = 3
+): Uint8Array<ArrayBuffer> {
+  const half = Math.floor(kernelSize / 2);
+  const eroded = new Uint8Array(binary.length);
+  const opened = new Uint8Array(binary.length);
+
+  // Erosion
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let allOnes = true;
+      for (let ky = -half; ky <= half && allOnes; ky++) {
+        for (let kx = -half; kx <= half && allOnes; kx++) {
+          const py = y + ky;
+          const px = x + kx;
+          if (py < 0 || py >= height || px < 0 || px >= width || binary[py * width + px] === 0) {
+            allOnes = false;
+          }
+        }
+      }
+      eroded[y * width + x] = allOnes ? 1 : 0;
+    }
+  }
+
+  // Dilation
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let anyOne = false;
+      for (let ky = -half; ky <= half && !anyOne; ky++) {
+        for (let kx = -half; kx <= half && !anyOne; kx++) {
+          const py = y + ky;
+          const px = x + kx;
+          if (py >= 0 && py < height && px >= 0 && px < width && eroded[py * width + px] === 1) {
+            anyOne = true;
+          }
+        }
+      }
+      opened[y * width + x] = anyOne ? 1 : 0;
+    }
+  }
+
+  return opened;
+}
+
+/**
+ * Extended component stats including perimeter for circularity calculation.
+ */
+interface SyncComponentStats extends ComponentStats {
+  perimeterCount: number;
+}
+
+/**
  * Quick synchronous detection for small images (no workers).
  * Useful for previews or when parallel overhead isn't worthwhile.
+ * Pipeline matches the worker: grayscale -> blur -> threshold -> morphology -> labeling
  */
 export function detectBlobsSync(
   imageData: ImageData,
@@ -469,8 +589,8 @@ export function detectBlobsSync(
   const width = imageData.width;
   const height = imageData.height;
 
-  // Convert to grayscale
-  const grayscale = new Uint8Array(width * height);
+  // Step 1: Convert to grayscale
+  let grayscale = new Uint8Array(width * height);
   const data = imageData.data;
   for (let i = 0; i < grayscale.length; i++) {
     const idx = i * 4;
@@ -481,11 +601,17 @@ export function detectBlobsSync(
     );
   }
 
-  // Compute threshold
+  // Step 2: Apply Gaussian blur
+  if (opts.useGaussianBlur !== false) {
+    const kernelSize = opts.gaussianKernelSize ?? 5;
+    grayscale = applyGaussianBlurSync(grayscale, width, height, kernelSize);
+  }
+
+  // Step 3: Compute threshold
   const threshold = opts.threshold ?? computeOtsuThreshold(grayscale);
 
-  // Apply threshold
-  const binary = new Uint8Array(grayscale.length);
+  // Step 4: Apply threshold
+  let binary = new Uint8Array(grayscale.length);
   for (let i = 0; i < grayscale.length; i++) {
     if (opts.darkBlobs) {
       binary[i] = grayscale[i] < threshold ? 1 : 0;
@@ -494,7 +620,13 @@ export function detectBlobsSync(
     }
   }
 
-  // Connected component labeling (simplified single-pass for sync version)
+  // Step 5: Apply morphological opening
+  if (opts.useMorphOpen !== false) {
+    const kernelSize = opts.morphKernelSize ?? 3;
+    binary = morphologicalOpenSync(binary, width, height, kernelSize);
+  }
+
+  // Step 6: Connected component labeling
   const labels = new Int32Array(binary.length);
   const parent: number[] = [];
   let nextLabel = 1;
@@ -541,8 +673,8 @@ export function detectBlobsSync(
     }
   }
 
-  // Second pass - resolve labels and collect stats
-  const stats = new Map<number, ComponentStats>();
+  // Step 7: Resolve labels and collect stats with perimeter
+  const stats = new Map<number, SyncComponentStats>();
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
@@ -553,7 +685,7 @@ export function detectBlobsSync(
 
       let s = stats.get(root);
       if (!s) {
-        s = { minX: x, minY: y, maxX: x, maxY: y, area: 0 };
+        s = { minX: x, minY: y, maxX: x, maxY: y, area: 0, perimeterCount: 0 };
         stats.set(root, s);
       }
 
@@ -562,41 +694,65 @@ export function detectBlobsSync(
       s.maxX = Math.max(s.maxX, x);
       s.maxY = Math.max(s.maxY, y);
       s.area++;
+
+      // Check if boundary pixel (4-connectivity)
+      const isBoundary =
+        x === 0 || binary[idx - 1] === 0 ||
+        x === width - 1 || binary[idx + 1] === 0 ||
+        y === 0 || binary[idx - width] === 0 ||
+        y === height - 1 || binary[idx + width] === 0;
+
+      if (isBoundary) {
+        s.perimeterCount++;
+      }
     }
   }
 
-  // Convert to blobs with confidence scores
+  // Step 8: Convert to blobs with circularity filter
   const blobs: DetectedBlob[] = [];
+  const minCircularity = opts.minCircularity ?? 0.2;
+
   for (const s of stats.values()) {
     const blobWidth = s.maxX - s.minX + 1;
     const blobHeight = s.maxY - s.minY + 1;
     const aspectRatio = blobWidth / blobHeight;
 
+    // Size filter
     if (
-      blobWidth >= opts.minWidth &&
-      blobWidth <= opts.maxWidth &&
-      blobHeight >= opts.minHeight &&
-      blobHeight <= opts.maxHeight
+      blobWidth < opts.minWidth ||
+      blobWidth > opts.maxWidth ||
+      blobHeight < opts.minHeight ||
+      blobHeight > opts.maxHeight
     ) {
-      // Calculate confidence score
-      const confidence = calculateSyncConfidence(
-        blobWidth,
-        blobHeight,
-        s.area,
-        aspectRatio,
-        opts
-      );
-
-      blobs.push({
-        x: s.minX,
-        y: s.minY,
-        width: blobWidth,
-        height: blobHeight,
-        area: s.area,
-        aspectRatio,
-        confidence,
-      });
+      continue;
     }
+
+    // Circularity filter
+    if (s.perimeterCount > 0 && minCircularity > 0) {
+      const circularity = (4 * Math.PI * s.area) / (s.perimeterCount * s.perimeterCount);
+      if (circularity < minCircularity) {
+        continue;
+      }
+    }
+
+    // Calculate confidence score
+    const confidence = calculateSyncConfidence(
+      blobWidth,
+      blobHeight,
+      s.area,
+      aspectRatio,
+      opts
+    );
+
+    blobs.push({
+      x: s.minX,
+      y: s.minY,
+      width: blobWidth,
+      height: blobHeight,
+      area: s.area,
+      aspectRatio,
+      confidence,
+    });
   }
 
   // Apply Soft-NMS if enabled

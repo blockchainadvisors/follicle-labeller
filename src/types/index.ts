@@ -25,6 +25,14 @@ export interface BlobDetectionOptions {
   useSoftNMS?: boolean;   // Use Soft-NMS instead of Union-Find (default: true)
   softNMSSigma?: number;  // Soft-NMS Gaussian decay sigma (default: 0.5)
   softNMSThreshold?: number; // Soft-NMS minimum score threshold (default: 0.1)
+  // Gaussian blur preprocessing (matches OpenCV pipeline)
+  useGaussianBlur?: boolean;   // Enable Gaussian blur (default: true)
+  gaussianKernelSize?: number; // Kernel size, must be odd (default: 5)
+  // Morphological opening to separate touching objects
+  useMorphOpen?: boolean;      // Enable morphological opening (default: true)
+  morphKernelSize?: number;    // Structuring element size (default: 3)
+  // Circularity filter to reject non-circular shapes
+  minCircularity?: number;     // Minimum circularity 0-1, 1=perfect circle (default: 0.2)
 }
 
 export interface DetectedBlob {

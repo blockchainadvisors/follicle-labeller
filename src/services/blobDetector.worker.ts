@@ -12,6 +12,7 @@ interface ComponentStats {
   maxX: number;
   maxY: number;
   pixelCount: number;
+  perimeterCount: number; // Number of boundary pixels for circularity calculation
 }
 
 /**
@@ -32,6 +33,63 @@ function toGrayscale(imageData: ImageData): Uint8Array {
   }
 
   return gray;
+}
+
+/**
+ * Apply Gaussian blur using separable convolution.
+ * Matches OpenCV's GaussianBlur with sigma=0 (auto-computed from kernel size).
+ */
+function applyGaussianBlur(
+  grayscale: Uint8Array,
+  width: number,
+  height: number,
+  kernelSize: number = 5
+): Uint8Array {
+  // Generate 1D Gaussian kernel (sigma = 0 means auto-compute from kernel size)
+  const sigma = 0.3 * ((kernelSize - 1) * 0.5 - 1) + 0.8;
+  const kernel = new Float32Array(kernelSize);
+  const half = Math.floor(kernelSize / 2);
+  let sum = 0;
+
+  for (let i = 0; i < kernelSize; i++) {
+    const x = i - half;
+    kernel[i] = Math.exp(-(x * x) / (2 * sigma * sigma));
+    sum += kernel[i];
+  }
+  // Normalize kernel
+  for (let i = 0; i < kernelSize; i++) {
+    kernel[i] /= sum;
+  }
+
+  // Separable convolution: horizontal pass then vertical pass
+  const temp = new Uint8Array(grayscale.length);
+  const result = new Uint8Array(grayscale.length);
+
+  // Horizontal pass
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let val = 0;
+      for (let k = -half; k <= half; k++) {
+        const px = Math.min(Math.max(x + k, 0), width - 1);
+        val += grayscale[y * width + px] * kernel[k + half];
+      }
+      temp[y * width + x] = Math.round(val);
+    }
+  }
+
+  // Vertical pass
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let val = 0;
+      for (let k = -half; k <= half; k++) {
+        const py = Math.min(Math.max(y + k, 0), height - 1);
+        val += temp[py * width + x] * kernel[k + half];
+      }
+      result[y * width + x] = Math.round(val);
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -105,6 +163,58 @@ function applyThreshold(
   }
 
   return binary;
+}
+
+/**
+ * Apply morphological opening (erosion followed by dilation).
+ * Separates touching objects and removes small noise.
+ * Matches OpenCV's morphologyEx with MORPH_OPEN.
+ */
+function morphologicalOpen(
+  binary: Uint8Array,
+  width: number,
+  height: number,
+  kernelSize: number = 3
+): Uint8Array {
+  const half = Math.floor(kernelSize / 2);
+  const eroded = new Uint8Array(binary.length);
+  const opened = new Uint8Array(binary.length);
+
+  // Erosion: pixel is 1 only if ALL neighbors within kernel are 1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let allOnes = true;
+      for (let ky = -half; ky <= half && allOnes; ky++) {
+        for (let kx = -half; kx <= half && allOnes; kx++) {
+          const py = y + ky;
+          const px = x + kx;
+          if (py < 0 || py >= height || px < 0 || px >= width || binary[py * width + px] === 0) {
+            allOnes = false;
+          }
+        }
+      }
+      eroded[y * width + x] = allOnes ? 1 : 0;
+    }
+  }
+
+  // Dilation: pixel is 1 if ANY neighbor within kernel is 1
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let anyOne = false;
+      for (let ky = -half; ky <= half && !anyOne; ky++) {
+        for (let kx = -half; kx <= half && !anyOne; kx++) {
+          const py = y + ky;
+          const px = x + kx;
+          if (py >= 0 && py < height && px >= 0 && px < width && eroded[py * width + px] === 1) {
+            anyOne = true;
+          }
+        }
+      }
+      opened[y * width + x] = anyOne ? 1 : 0;
+    }
+  }
+
+  return opened;
 }
 
 /**
@@ -218,10 +328,12 @@ function labelConnectedComponents(
 }
 
 /**
- * Extract component statistics (bounding boxes) from labeled image.
+ * Extract component statistics (bounding boxes and perimeter) from labeled image.
+ * Perimeter is counted as pixels that border background (4-connectivity).
  */
 function extractComponentStats(
   labels: Int32Array,
+  binary: Uint8Array,
   width: number,
   height: number,
   _maxLabel: number
@@ -230,7 +342,8 @@ function extractComponentStats(
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const label = labels[y * width + x];
+      const idx = y * width + x;
+      const label = labels[idx];
       if (label === 0) continue;
 
       let s = stats.get(label);
@@ -241,6 +354,7 @@ function extractComponentStats(
           maxX: x,
           maxY: y,
           pixelCount: 0,
+          perimeterCount: 0,
         };
         stats.set(label, s);
       }
@@ -250,6 +364,18 @@ function extractComponentStats(
       s.maxX = Math.max(s.maxX, x);
       s.maxY = Math.max(s.maxY, y);
       s.pixelCount++;
+
+      // Check if this pixel is on the boundary (4-connectivity)
+      // A pixel is on boundary if any of its 4 neighbors is background or out of bounds
+      const isBoundary =
+        x === 0 || binary[idx - 1] === 0 ||           // left
+        x === width - 1 || binary[idx + 1] === 0 ||   // right
+        y === 0 || binary[idx - width] === 0 ||       // top
+        y === height - 1 || binary[idx + width] === 0; // bottom
+
+      if (isBoundary) {
+        s.perimeterCount++;
+      }
     }
   }
 
@@ -300,6 +426,7 @@ function calculateConfidence(
 
 /**
  * Convert component stats to DetectedBlob objects.
+ * Filters by size constraints and circularity.
  */
 function statsToBlobs(
   stats: Map<number, ComponentStats>,
@@ -308,6 +435,7 @@ function statsToBlobs(
   offsetY: number
 ): DetectedBlob[] {
   const blobs: DetectedBlob[] = [];
+  const minCircularity = options.minCircularity ?? 0.2;
 
   for (const [, s] of stats) {
     const width = s.maxX - s.minX + 1;
@@ -316,29 +444,40 @@ function statsToBlobs(
 
     // Filter by size constraints
     if (
-      width >= options.minWidth &&
-      width <= options.maxWidth &&
-      height >= options.minHeight &&
-      height <= options.maxHeight
+      width < options.minWidth ||
+      width > options.maxWidth ||
+      height < options.minHeight ||
+      height > options.maxHeight
     ) {
-      const confidence = calculateConfidence(
-        width,
-        height,
-        s.pixelCount,
-        aspectRatio,
-        options
-      );
-
-      blobs.push({
-        x: s.minX + offsetX,
-        y: s.minY + offsetY,
-        width,
-        height,
-        area: s.pixelCount,
-        aspectRatio,
-        confidence,
-      });
+      continue;
     }
+
+    // Calculate circularity: 4 * PI * area / perimeter^2
+    // Perfect circle = 1.0, lower values = more elongated/irregular
+    if (s.perimeterCount > 0 && minCircularity > 0) {
+      const circularity = (4 * Math.PI * s.pixelCount) / (s.perimeterCount * s.perimeterCount);
+      if (circularity < minCircularity) {
+        continue; // Skip non-circular shapes
+      }
+    }
+
+    const confidence = calculateConfidence(
+      width,
+      height,
+      s.pixelCount,
+      aspectRatio,
+      options
+    );
+
+    blobs.push({
+      x: s.minX + offsetX,
+      y: s.minY + offsetY,
+      width,
+      height,
+      area: s.pixelCount,
+      aspectRatio,
+      confidence,
+    });
   }
 
   return blobs;
@@ -346,6 +485,7 @@ function statsToBlobs(
 
 /**
  * Process a single image tile and return detected blobs.
+ * Pipeline matches OpenCV blob detection: grayscale -> blur -> threshold -> morphology -> labeling
  */
 function processImageTile(
   imageData: ImageData,
@@ -353,31 +493,37 @@ function processImageTile(
   offsetX: number,
   offsetY: number
 ): DetectedBlob[] {
-  // Step 1: Convert to grayscale
-  const grayscale = toGrayscale(imageData);
+  const width = imageData.width;
+  const height = imageData.height;
 
-  // Step 2: Compute or use threshold
+  // Step 1: Convert to grayscale
+  let grayscale = toGrayscale(imageData);
+
+  // Step 2: Apply Gaussian blur (reduces noise, matches OpenCV pipeline)
+  if (options.useGaussianBlur !== false) {
+    const kernelSize = options.gaussianKernelSize ?? 5;
+    grayscale = applyGaussianBlur(grayscale, width, height, kernelSize);
+  }
+
+  // Step 3: Compute or use threshold
   const threshold = options.threshold ?? computeOtsuThreshold(grayscale);
 
-  // Step 3: Apply threshold
-  const binary = applyThreshold(grayscale, threshold, options.darkBlobs);
+  // Step 4: Apply threshold
+  let binary = applyThreshold(grayscale, threshold, options.darkBlobs);
 
-  // Step 4: Connected component labeling
-  const { labels, maxLabel } = labelConnectedComponents(
-    binary,
-    imageData.width,
-    imageData.height
-  );
+  // Step 5: Apply morphological opening (separates touching objects)
+  if (options.useMorphOpen !== false) {
+    const kernelSize = options.morphKernelSize ?? 3;
+    binary = morphologicalOpen(binary, width, height, kernelSize);
+  }
 
-  // Step 5: Extract component stats
-  const stats = extractComponentStats(
-    labels,
-    imageData.width,
-    imageData.height,
-    maxLabel
-  );
+  // Step 6: Connected component labeling
+  const { labels, maxLabel } = labelConnectedComponents(binary, width, height);
 
-  // Step 6: Convert to blobs with offset adjustment
+  // Step 7: Extract component stats (pass binary for perimeter calculation)
+  const stats = extractComponentStats(labels, binary, width, height, maxLabel);
+
+  // Step 8: Convert to blobs with offset adjustment and circularity filter
   return statsToBlobs(stats, options, offsetX, offsetY);
 }
 
