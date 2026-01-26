@@ -12,58 +12,67 @@ A desktop application for medical image annotation, specifically designed to lab
 
 Download the latest version for your platform:
 
-| Platform | Download |
-|----------|----------|
+| Platform    | Download                                                                                                                                        |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Windows** | [**Download Installer**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest/download/follicle-labeller-windows-latest.exe) |
-| **macOS** | [**Download DMG**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest/download/follicle-labeller-macos-latest.dmg) |
+| **macOS**   | [**Download DMG**](https://github.com/blockchainadvisors/follicle-labeller/releases/latest/download/follicle-labeller-macos-latest.dmg)         |
 
 See [all releases](https://github.com/blockchainadvisors/follicle-labeller/releases) for previous versions.
 
 ## Features
 
 ### Annotation Tools
+
 - **Circle** - Simple circular annotations with center point and radius
 - **Rectangle** - Rectangular annotations with position and dimensions
 - **Linear** - Rotated rectangles defined by centerline and half-width (ideal for elongated structures)
 
 ### Interaction Modes
+
 - **Create Mode** - Draw new annotations on the image
 - **Select Mode** - Select, move, and resize existing annotations
 - **Pan Mode** - Navigate around the canvas
 
 ### Annotation Properties
+
 - Customizable labels and notes for each annotation
 - Color customization per annotation
 - Automatic sequential naming (Circle 1, Circle 2, etc.)
 - View coordinates, dimensions, radius, and angle information
 
 ### Navigation
+
 - Zoom in/out with mouse wheel (0.1x to 10x scaling)
 - Pan with middle mouse button (works in any mode)
 - Zoom-to-fit and reset zoom options
 - Real-time zoom percentage display
 
 ### File Operations
+
 - Open image files (PNG, JPG, JPEG, TIFF, BMP, WebP)
 - Save projects as `.fol` archives (contains both image and annotations)
 - Load previously saved `.fol` project files
 - Annotations stored in JSON format
 
 ### Undo/Redo
+
 - Full undo/redo support with 50-level history
 - Keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z)
 
 ### Help & Documentation
+
 - Built-in user guide accessible via Help button or `?` key
 - Comprehensive documentation covering all features
 
 ## Installation
 
 ### Prerequisites
+
 - Node.js 18+
 - npm or yarn
 
 ### Setup
+
 ```bash
 # Clone the repository
 git clone <repository-url>
@@ -75,8 +84,25 @@ npm install
 
 ## Development
 
+### Python Environment Setup (Required for Auto Detection)
+
+The auto-detection feature requires a Python environment with OpenCV and Flask. Before running in development mode, activate your conda environment:
+
 ```bash
-# Start development server with hot reload
+# Create environment (first time only)
+conda create -n hair_follicle_detection python=3.10
+conda activate hair_follicle_detection
+pip install -r electron/python/requirements.txt
+
+# Activate environment before running dev server
+conda activate hair_follicle_detection
+npm run dev
+```
+
+### Development Commands
+
+```bash
+# Start development server with hot reload (activate conda env first!)
 npm run dev
 
 # Run Electron in development mode
@@ -99,6 +125,7 @@ npm run electron:build
 The packaged application will be available in the `release` directory.
 
 ### Supported Platforms
+
 - Windows (NSIS installer)
 - macOS (DMG)
 - Linux (AppImage)
@@ -131,25 +158,25 @@ The packaged application will be available in the `release` directory.
 
 ## Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `C` | Create mode |
-| `V` | Select mode |
-| `H` | Pan mode |
-| `1` | Circle shape |
-| `2` | Rectangle shape |
-| `3` | Linear shape |
-| `L` | Toggle labels visibility |
-| `O` | Toggle shapes visibility |
-| `?` | Toggle help panel |
-| `Delete` / `Backspace` | Delete selected annotation |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Shift+Z` | Redo |
-| `Ctrl+Tab` | Next image |
-| `Ctrl+Shift+Tab` | Previous image |
-| `Escape` | Deselect / Cancel operation |
-| `Middle Mouse` | Pan (in any mode) |
-| `Scroll Wheel` | Zoom in/out |
+| Key                    | Action                      |
+| ---------------------- | --------------------------- |
+| `C`                    | Create mode                 |
+| `V`                    | Select mode                 |
+| `H`                    | Pan mode                    |
+| `1`                    | Circle shape                |
+| `2`                    | Rectangle shape             |
+| `3`                    | Linear shape                |
+| `L`                    | Toggle labels visibility    |
+| `O`                    | Toggle shapes visibility    |
+| `?`                    | Toggle help panel           |
+| `Delete` / `Backspace` | Delete selected annotation  |
+| `Ctrl+Z`               | Undo                        |
+| `Ctrl+Shift+Z`         | Redo                        |
+| `Ctrl+Tab`             | Next image                  |
+| `Ctrl+Shift+Tab`       | Previous image              |
+| `Escape`               | Deselect / Cancel operation |
+| `Middle Mouse`         | Pan (in any mode)           |
+| `Scroll Wheel`         | Zoom in/out                 |
 
 ## Project Structure
 
@@ -196,6 +223,7 @@ The packaged application will be available in the `release` directory.
 ## File Format
 
 The `.fol` file is a ZIP archive (V2.0) containing:
+
 - `manifest.json` - Project metadata and image list
 - `annotations.json` - All shape annotations
 - `images/` - Folder with image files
@@ -220,4 +248,4 @@ Contributions are welcome! If you'd like to contribute:
 
 ## Author
 
-**LorenzoNey** - *Initial work and maintenance* - [@LorenzoNey](https://github.com/LorenzoNey)
+**LorenzoNey** - _Initial work and maintenance_ - [@LorenzoNey](https://github.com/LorenzoNey)

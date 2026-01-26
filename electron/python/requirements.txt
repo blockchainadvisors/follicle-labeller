@@ -1,22 +1,11 @@
-# SAM 2 Backend Dependencies
+# BLOB Detection Backend Dependencies
 # Install with: pip install -r requirements.txt
 
 # Core dependencies
-torch>=2.1.0
-torchvision>=0.16.0
 numpy>=1.24.0
 pillow>=10.0.0
+opencv-python>=4.8.0
 
 # Web server
 flask>=3.0.0
 flask-cors>=4.0.0
-
-# SAM 2 from Facebook Research
-# Note: Install separately with:
-# pip install git+https://github.com/facebookresearch/segment-anything-2.git
-# Or clone and install locally:
-# git clone https://github.com/facebookresearch/segment-anything-2.git
-# cd segment-anything-2 && pip install -e .
-
-# Optional: For CPU-only inference (if no GPU)
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
