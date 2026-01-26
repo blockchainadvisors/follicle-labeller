@@ -1,20 +1,28 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, MenuItemConstructorOptions, powerMonitor } from 'electron';
-import path from 'path';
-import fs from 'fs';
-import { spawn, ChildProcess } from 'child_process';
-import JSZip from 'jszip';
-import { initUpdater, checkForUpdates } from './updater';
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  Menu,
+  MenuItemConstructorOptions,
+  powerMonitor,
+} from "electron";
+import path from "path";
+import fs from "fs";
+import { spawn, ChildProcess } from "child_process";
+import JSZip from "jszip";
+import { initUpdater, checkForUpdates } from "./updater";
 
 // Set Windows AppUserModelId for proper notifications (must be early)
-if (process.platform === 'win32') {
-  app.setAppUserModelId('Follicle Labeller');
+if (process.platform === "win32") {
+  app.setAppUserModelId("Follicle Labeller");
 }
 
 let mainWindow: BrowserWindow | null = null;
 
-// SAM server process
-let samServerProcess: ChildProcess | null = null;
-const SAM_SERVER_PORT = 5555;
+// BLOB detection server process
+let blobServerProcess: ChildProcess | null = null;
+const BLOB_SERVER_PORT = 5555;
 
 // File to open when launched via file association
 let fileToOpen: string | null = null;
@@ -24,10 +32,10 @@ let forceClose = false;
 
 function createWindow(): void {
   // Determine icon path based on platform
-  const iconName = process.platform === 'win32' ? 'icon.ico' : 'icon.png';
+  const iconName = process.platform === "win32" ? "icon.ico" : "icon.png";
   const iconPath = app.isPackaged
     ? path.join(process.resourcesPath, iconName)
-    : path.join(__dirname, '../public', iconName);
+    : path.join(__dirname, "../public", iconName);
 
   // Check if icon exists (may not exist in dev if not generated)
   const iconExists = fs.existsSync(iconPath);
@@ -39,23 +47,28 @@ function createWindow(): void {
     minHeight: 700,
     ...(iconExists && { icon: iconPath }),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'Follicle Labeller',
+    title: "Follicle Labeller",
   });
 
   // Load content based on environment
-  if (process.env.NODE_ENV === 'development' || process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173');
+  if (
+    process.env.NODE_ENV === "development" ||
+    process.env.VITE_DEV_SERVER_URL
+  ) {
+    mainWindow.loadURL(
+      process.env.VITE_DEV_SERVER_URL || "http://localhost:5173",
+    );
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 
   // Handle window close - check for unsaved changes
-  mainWindow.on('close', (event) => {
+  mainWindow.on("close", (event) => {
     if (forceClose) {
       forceClose = false;
       return; // Allow close
@@ -63,16 +76,16 @@ function createWindow(): void {
 
     // Prevent close and ask renderer about unsaved changes
     event.preventDefault();
-    mainWindow?.webContents.send('app:checkUnsavedChanges');
+    mainWindow?.webContents.send("app:checkUnsavedChanges");
   });
 
-  mainWindow.on('closed', () => {
+  mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
 
 // IPC handler for renderer to confirm close after checking unsaved changes
-ipcMain.on('app:confirmClose', (_, canClose: boolean) => {
+ipcMain.on("app:confirmClose", (_, canClose: boolean) => {
   if (canClose && mainWindow) {
     forceClose = true;
     mainWindow.close();
@@ -82,15 +95,18 @@ ipcMain.on('app:confirmClose', (_, canClose: boolean) => {
 // IPC Handlers
 
 // Open image file dialog
-ipcMain.handle('dialog:openImage', async () => {
+ipcMain.handle("dialog:openImage", async () => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return null;
 
   const result = await dialog.showOpenDialog(window, {
-    properties: ['openFile'],
+    properties: ["openFile"],
     filters: [
-      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'tiff', 'tif', 'bmp', 'webp'] }
-    ]
+      {
+        name: "Images",
+        extensions: ["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp"],
+      },
+    ],
   });
 
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -106,51 +122,60 @@ ipcMain.handle('dialog:openImage', async () => {
 });
 
 // Save project as .fol archive (contains image + JSON)
-ipcMain.handle('dialog:saveProject', async (_, imageData: ArrayBuffer, imageFileName: string, jsonData: string) => {
-  const window = BrowserWindow.getFocusedWindow();
-  if (!window) return false;
+ipcMain.handle(
+  "dialog:saveProject",
+  async (
+    _,
+    imageData: ArrayBuffer,
+    imageFileName: string,
+    jsonData: string,
+  ) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return false;
 
-  const defaultName = imageFileName ? imageFileName.replace(/\.[^.]+$/, '.fol') : 'project.fol';
+    const defaultName = imageFileName
+      ? imageFileName.replace(/\.[^.]+$/, ".fol")
+      : "project.fol";
 
-  const result = await dialog.showSaveDialog(window, {
-    defaultPath: defaultName,
-    filters: [
-      { name: 'Follicle Project', extensions: ['fol'] }
-    ]
-  });
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: defaultName,
+      filters: [{ name: "Follicle Project", extensions: ["fol"] }],
+    });
 
-  if (result.canceled || !result.filePath) return false;
+    if (result.canceled || !result.filePath) return false;
 
-  try {
-    const zip = new JSZip();
+    try {
+      const zip = new JSZip();
 
-    // Add image to archive
-    zip.file(imageFileName, Buffer.from(imageData));
+      // Add image to archive
+      zip.file(imageFileName, Buffer.from(imageData));
 
-    // Add JSON data to archive
-    zip.file('annotations.json', jsonData);
+      // Add JSON data to archive
+      zip.file("annotations.json", jsonData);
 
-    // Generate and save the archive
-    const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-    fs.writeFileSync(result.filePath, content);
+      // Generate and save the archive
+      const content = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "DEFLATE",
+      });
+      fs.writeFileSync(result.filePath, content);
 
-    return true;
-  } catch (error) {
-    console.error('Failed to save project:', error);
-    return false;
-  }
-});
+      return true;
+    } catch (error) {
+      console.error("Failed to save project:", error);
+      return false;
+    }
+  },
+);
 
 // Load project from .fol archive (legacy V1)
-ipcMain.handle('dialog:loadProject', async () => {
+ipcMain.handle("dialog:loadProject", async () => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return null;
 
   const result = await dialog.showOpenDialog(window, {
-    properties: ['openFile'],
-    filters: [
-      { name: 'Follicle Project', extensions: ['fol'] }
-    ]
+    properties: ["openFile"],
+    filters: [{ name: "Follicle Project", extensions: ["fol"] }],
   });
 
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -162,25 +187,25 @@ ipcMain.handle('dialog:loadProject', async () => {
     const zip = await JSZip.loadAsync(data);
 
     // Find the image file (any file that's not annotations.json)
-    let imageFileName = '';
+    let imageFileName = "";
     let imageData: ArrayBuffer | null = null;
-    let jsonData = '';
+    let jsonData = "";
 
     for (const fileName of Object.keys(zip.files)) {
-      if (fileName === 'annotations.json') {
-        jsonData = await zip.files[fileName].async('string');
+      if (fileName === "annotations.json") {
+        jsonData = await zip.files[fileName].async("string");
       } else {
         imageFileName = fileName;
-        const imageBuffer = await zip.files[fileName].async('nodebuffer');
+        const imageBuffer = await zip.files[fileName].async("nodebuffer");
         imageData = imageBuffer.buffer.slice(
           imageBuffer.byteOffset,
-          imageBuffer.byteOffset + imageBuffer.byteLength
+          imageBuffer.byteOffset + imageBuffer.byteLength,
         );
       }
     }
 
     if (!imageData || !jsonData) {
-      throw new Error('Invalid .fol file: missing image or annotations');
+      throw new Error("Invalid .fol file: missing image or annotations");
     }
 
     return {
@@ -189,7 +214,7 @@ ipcMain.handle('dialog:loadProject', async () => {
       jsonData,
     };
   } catch (error) {
-    console.error('Failed to load project:', error);
+    console.error("Failed to load project:", error);
     return null;
   }
 });
@@ -199,16 +224,16 @@ async function saveProjectToPath(
   filePath: string,
   images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
   manifestJson: string,
-  annotationsJson: string
+  annotationsJson: string,
 ): Promise<boolean> {
   try {
     const zip = new JSZip();
 
     // Add manifest
-    zip.file('manifest.json', manifestJson);
+    zip.file("manifest.json", manifestJson);
 
     // Add images in images/ folder
-    const imagesFolder = zip.folder('images');
+    const imagesFolder = zip.folder("images");
     if (imagesFolder) {
       for (const image of images) {
         const archiveFileName = `${image.id}-${image.fileName}`;
@@ -217,65 +242,80 @@ async function saveProjectToPath(
     }
 
     // Add annotations
-    zip.file('annotations.json', annotationsJson);
+    zip.file("annotations.json", annotationsJson);
 
     // Generate and save the archive
-    const content = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const content = await zip.generateAsync({
+      type: "nodebuffer",
+      compression: "DEFLATE",
+    });
     fs.writeFileSync(filePath, content);
 
     return true;
   } catch (error) {
-    console.error('Failed to save project:', error);
+    console.error("Failed to save project:", error);
     return false;
   }
 }
 
 // V2 Save project with multiple images (Save As - shows dialog)
-ipcMain.handle('dialog:saveProjectV2', async (
-  _,
-  images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
-  manifestJson: string,
-  annotationsJson: string,
-  defaultPath?: string
-) => {
-  const window = BrowserWindow.getFocusedWindow();
-  if (!window) return { success: false };
+ipcMain.handle(
+  "dialog:saveProjectV2",
+  async (
+    _,
+    images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+    manifestJson: string,
+    annotationsJson: string,
+    defaultPath?: string,
+  ) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return { success: false };
 
-  const result = await dialog.showSaveDialog(window, {
-    defaultPath: defaultPath || 'project.fol',
-    filters: [
-      { name: 'Follicle Project', extensions: ['fol'] }
-    ]
-  });
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: defaultPath || "project.fol",
+      filters: [{ name: "Follicle Project", extensions: ["fol"] }],
+    });
 
-  if (result.canceled || !result.filePath) return { success: false };
+    if (result.canceled || !result.filePath) return { success: false };
 
-  const success = await saveProjectToPath(result.filePath, images, manifestJson, annotationsJson);
-  return { success, filePath: success ? result.filePath : undefined };
-});
+    const success = await saveProjectToPath(
+      result.filePath,
+      images,
+      manifestJson,
+      annotationsJson,
+    );
+    return { success, filePath: success ? result.filePath : undefined };
+  },
+);
 
 // V2 Save project to specific path (silent save - no dialog)
-ipcMain.handle('file:saveProjectV2', async (
-  _,
-  filePath: string,
-  images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
-  manifestJson: string,
-  annotationsJson: string
-) => {
-  const success = await saveProjectToPath(filePath, images, manifestJson, annotationsJson);
-  return { success, filePath: success ? filePath : undefined };
-});
+ipcMain.handle(
+  "file:saveProjectV2",
+  async (
+    _,
+    filePath: string,
+    images: Array<{ id: string; fileName: string; data: ArrayBuffer }>,
+    manifestJson: string,
+    annotationsJson: string,
+  ) => {
+    const success = await saveProjectToPath(
+      filePath,
+      images,
+      manifestJson,
+      annotationsJson,
+    );
+    return { success, filePath: success ? filePath : undefined };
+  },
+);
 
 // V2 Load project with support for both V1 and V2 formats
-ipcMain.handle('dialog:loadProjectV2', async () => {
+ipcMain.handle("dialog:loadProjectV2", async () => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return null;
 
   const result = await dialog.showOpenDialog(window, {
-    properties: ['openFile'],
-    filters: [
-      { name: 'Follicle Project', extensions: ['fol'] }
-    ]
+    properties: ["openFile"],
+    filters: [{ name: "Follicle Project", extensions: ["fol"] }],
   });
 
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -287,36 +327,37 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
     const zip = await JSZip.loadAsync(data);
 
     // Check if this is V2 (has manifest.json)
-    const hasManifest = 'manifest.json' in zip.files;
+    const hasManifest = "manifest.json" in zip.files;
 
     if (hasManifest) {
       // V2 format
-      const manifest = await zip.files['manifest.json'].async('string');
-      const annotations = await zip.files['annotations.json'].async('string');
+      const manifest = await zip.files["manifest.json"].async("string");
+      const annotations = await zip.files["annotations.json"].async("string");
 
       // Load all images from images/ folder
-      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
-      const imagesFolder = zip.folder('images');
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> =
+        [];
+      const imagesFolder = zip.folder("images");
 
       if (imagesFolder) {
         for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
           if (file.dir) continue;
 
           // Extract filename from path (remove 'images/' prefix)
-          const archiveFileName = relativePath.replace('images/', '');
+          const archiveFileName = relativePath.replace("images/", "");
           if (!archiveFileName) continue;
 
           // Parse id and fileName from archiveFileName (format: {id}-{fileName})
-          const dashIndex = archiveFileName.indexOf('-');
+          const dashIndex = archiveFileName.indexOf("-");
           if (dashIndex === -1) continue;
 
           const id = archiveFileName.substring(0, dashIndex);
           const fileName = archiveFileName.substring(dashIndex + 1);
 
-          const imageBuffer = await file.async('nodebuffer');
+          const imageBuffer = await file.async("nodebuffer");
           const imageData = imageBuffer.buffer.slice(
             imageBuffer.byteOffset,
-            imageBuffer.byteOffset + imageBuffer.byteLength
+            imageBuffer.byteOffset + imageBuffer.byteLength,
           );
 
           images.push({ id, fileName, data: imageData });
@@ -324,7 +365,7 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
       }
 
       return {
-        version: '2.0' as const,
+        version: "2.0" as const,
         filePath,
         manifest,
         images,
@@ -332,29 +373,29 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
       };
     } else {
       // V1 format - return in V1 structure for migration
-      let imageFileName = '';
+      let imageFileName = "";
       let imageData: ArrayBuffer | null = null;
-      let jsonData = '';
+      let jsonData = "";
 
       for (const fileName of Object.keys(zip.files)) {
-        if (fileName === 'annotations.json') {
-          jsonData = await zip.files[fileName].async('string');
+        if (fileName === "annotations.json") {
+          jsonData = await zip.files[fileName].async("string");
         } else if (!zip.files[fileName].dir) {
           imageFileName = fileName;
-          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          const imageBuffer = await zip.files[fileName].async("nodebuffer");
           imageData = imageBuffer.buffer.slice(
             imageBuffer.byteOffset,
-            imageBuffer.byteOffset + imageBuffer.byteLength
+            imageBuffer.byteOffset + imageBuffer.byteLength,
           );
         }
       }
 
       if (!imageData || !jsonData) {
-        throw new Error('Invalid .fol file: missing image or annotations');
+        throw new Error("Invalid .fol file: missing image or annotations");
       }
 
       return {
-        version: '1.0' as const,
+        version: "1.0" as const,
         filePath,
         imageFileName,
         imageData,
@@ -362,13 +403,13 @@ ipcMain.handle('dialog:loadProjectV2', async () => {
       };
     }
   } catch (error) {
-    console.error('Failed to load project:', error);
+    console.error("Failed to load project:", error);
     return null;
   }
 });
 
 // Load project from specific file path (for file association)
-ipcMain.handle('file:loadProject', async (_, filePath: string) => {
+ipcMain.handle("file:loadProject", async (_, filePath: string) => {
   try {
     if (!fs.existsSync(filePath)) {
       return null;
@@ -378,34 +419,35 @@ ipcMain.handle('file:loadProject', async (_, filePath: string) => {
     const zip = await JSZip.loadAsync(data);
 
     // Check if this is V2 (has manifest.json)
-    const hasManifest = 'manifest.json' in zip.files;
+    const hasManifest = "manifest.json" in zip.files;
 
     if (hasManifest) {
       // V2 format
-      const manifest = await zip.files['manifest.json'].async('string');
-      const annotations = await zip.files['annotations.json'].async('string');
+      const manifest = await zip.files["manifest.json"].async("string");
+      const annotations = await zip.files["annotations.json"].async("string");
 
       // Load all images from images/ folder
-      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> = [];
-      const imagesFolder = zip.folder('images');
+      const images: Array<{ id: string; fileName: string; data: ArrayBuffer }> =
+        [];
+      const imagesFolder = zip.folder("images");
 
       if (imagesFolder) {
         for (const [relativePath, file] of Object.entries(imagesFolder.files)) {
           if (file.dir) continue;
 
-          const archiveFileName = relativePath.replace('images/', '');
+          const archiveFileName = relativePath.replace("images/", "");
           if (!archiveFileName) continue;
 
-          const dashIndex = archiveFileName.indexOf('-');
+          const dashIndex = archiveFileName.indexOf("-");
           if (dashIndex === -1) continue;
 
           const id = archiveFileName.substring(0, dashIndex);
           const fileName = archiveFileName.substring(dashIndex + 1);
 
-          const imageBuffer = await file.async('nodebuffer');
+          const imageBuffer = await file.async("nodebuffer");
           const imageData = imageBuffer.buffer.slice(
             imageBuffer.byteOffset,
-            imageBuffer.byteOffset + imageBuffer.byteLength
+            imageBuffer.byteOffset + imageBuffer.byteLength,
           );
 
           images.push({ id, fileName, data: imageData });
@@ -413,7 +455,7 @@ ipcMain.handle('file:loadProject', async (_, filePath: string) => {
       }
 
       return {
-        version: '2.0' as const,
+        version: "2.0" as const,
         filePath,
         manifest,
         images,
@@ -421,29 +463,29 @@ ipcMain.handle('file:loadProject', async (_, filePath: string) => {
       };
     } else {
       // V1 format
-      let imageFileName = '';
+      let imageFileName = "";
       let imageData: ArrayBuffer | null = null;
-      let jsonData = '';
+      let jsonData = "";
 
       for (const fileName of Object.keys(zip.files)) {
-        if (fileName === 'annotations.json') {
-          jsonData = await zip.files[fileName].async('string');
+        if (fileName === "annotations.json") {
+          jsonData = await zip.files[fileName].async("string");
         } else if (!zip.files[fileName].dir) {
           imageFileName = fileName;
-          const imageBuffer = await zip.files[fileName].async('nodebuffer');
+          const imageBuffer = await zip.files[fileName].async("nodebuffer");
           imageData = imageBuffer.buffer.slice(
             imageBuffer.byteOffset,
-            imageBuffer.byteOffset + imageBuffer.byteLength
+            imageBuffer.byteOffset + imageBuffer.byteLength,
           );
         }
       }
 
       if (!imageData || !jsonData) {
-        throw new Error('Invalid .fol file: missing image or annotations');
+        throw new Error("Invalid .fol file: missing image or annotations");
       }
 
       return {
-        version: '1.0' as const,
+        version: "1.0" as const,
         filePath,
         imageFileName,
         imageData,
@@ -451,7 +493,7 @@ ipcMain.handle('file:loadProject', async (_, filePath: string) => {
       };
     }
   } catch (error) {
-    console.error('Failed to load project from path:', error);
+    console.error("Failed to load project from path:", error);
     return null;
   }
 });
@@ -462,7 +504,7 @@ let saveAsMenuItem: Electron.MenuItem | null = null;
 let closeProjectMenuItem: Electron.MenuItem | null = null;
 
 // Update menu items based on project state
-ipcMain.on('menu:setProjectState', (_, hasProject: boolean) => {
+ipcMain.on("menu:setProjectState", (_, hasProject: boolean) => {
   if (saveMenuItem) saveMenuItem.enabled = hasProject;
   if (saveAsMenuItem) saveAsMenuItem.enabled = hasProject;
   if (closeProjectMenuItem) closeProjectMenuItem.enabled = hasProject;
@@ -470,140 +512,144 @@ ipcMain.on('menu:setProjectState', (_, hasProject: boolean) => {
 
 // Create application menu
 function createMenu(): void {
-  const isMac = process.platform === 'darwin';
+  const isMac = process.platform === "darwin";
 
   const template: MenuItemConstructorOptions[] = [
     // macOS app menu
-    ...(isMac ? [{
-      label: app.name,
-      submenu: [
-        { role: 'about' as const },
-        { type: 'separator' as const },
-        { role: 'quit' as const },
-      ]
-    }] : []),
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" as const },
+              { type: "separator" as const },
+              { role: "quit" as const },
+            ],
+          },
+        ]
+      : []),
 
     // File menu
     {
-      label: 'File',
+      label: "File",
       submenu: [
         {
-          label: 'Open Image...',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => mainWindow?.webContents.send('menu:openImage'),
+          label: "Open Image...",
+          accelerator: "CmdOrCtrl+O",
+          click: () => mainWindow?.webContents.send("menu:openImage"),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'Load Project...',
-          accelerator: 'CmdOrCtrl+Shift+O',
-          click: () => mainWindow?.webContents.send('menu:loadProject'),
+          label: "Load Project...",
+          accelerator: "CmdOrCtrl+Shift+O",
+          click: () => mainWindow?.webContents.send("menu:loadProject"),
         },
         {
-          id: 'save-project',
-          label: 'Save Project',
-          accelerator: 'CmdOrCtrl+S',
+          id: "save-project",
+          label: "Save Project",
+          accelerator: "CmdOrCtrl+S",
           enabled: false,
-          click: () => mainWindow?.webContents.send('menu:saveProject'),
+          click: () => mainWindow?.webContents.send("menu:saveProject"),
         },
         {
-          id: 'save-project-as',
-          label: 'Save Project As...',
-          accelerator: 'CmdOrCtrl+Shift+S',
+          id: "save-project-as",
+          label: "Save Project As...",
+          accelerator: "CmdOrCtrl+Shift+S",
           enabled: false,
-          click: () => mainWindow?.webContents.send('menu:saveProjectAs'),
+          click: () => mainWindow?.webContents.send("menu:saveProjectAs"),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          id: 'close-project',
-          label: 'Close Project',
-          accelerator: 'CmdOrCtrl+W',
+          id: "close-project",
+          label: "Close Project",
+          accelerator: "CmdOrCtrl+W",
           enabled: false,
-          click: () => mainWindow?.webContents.send('menu:closeProject'),
+          click: () => mainWindow?.webContents.send("menu:closeProject"),
         },
-        { type: 'separator' },
-        isMac ? { role: 'close' as const } : { role: 'quit' as const },
+        { type: "separator" },
+        isMac ? { role: "close" as const } : { role: "quit" as const },
       ],
     },
 
     // Edit menu
     {
-      label: 'Edit',
+      label: "Edit",
       submenu: [
         {
-          label: 'Undo',
-          accelerator: 'CmdOrCtrl+Z',
-          click: () => mainWindow?.webContents.send('menu:undo'),
+          label: "Undo",
+          accelerator: "CmdOrCtrl+Z",
+          click: () => mainWindow?.webContents.send("menu:undo"),
         },
         {
-          label: 'Redo',
-          accelerator: 'CmdOrCtrl+Shift+Z',
-          click: () => mainWindow?.webContents.send('menu:redo'),
+          label: "Redo",
+          accelerator: "CmdOrCtrl+Shift+Z",
+          click: () => mainWindow?.webContents.send("menu:redo"),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'Clear All Annotations',
-          click: () => mainWindow?.webContents.send('menu:clearAll'),
+          label: "Clear All Annotations",
+          click: () => mainWindow?.webContents.send("menu:clearAll"),
         },
       ],
     },
 
     // View menu
     {
-      label: 'View',
+      label: "View",
       submenu: [
         {
-          label: 'Toggle Shapes (O)',
-          click: () => mainWindow?.webContents.send('menu:toggleShapes'),
+          label: "Toggle Shapes (O)",
+          click: () => mainWindow?.webContents.send("menu:toggleShapes"),
         },
         {
-          label: 'Toggle Labels (L)',
-          click: () => mainWindow?.webContents.send('menu:toggleLabels'),
+          label: "Toggle Labels (L)",
+          click: () => mainWindow?.webContents.send("menu:toggleLabels"),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'Zoom In',
-          accelerator: 'CmdOrCtrl+=',
-          click: () => mainWindow?.webContents.send('menu:zoomIn'),
-        },
-        {
-          label: 'Zoom Out',
-          accelerator: 'CmdOrCtrl+-',
-          click: () => mainWindow?.webContents.send('menu:zoomOut'),
+          label: "Zoom In",
+          accelerator: "CmdOrCtrl+=",
+          click: () => mainWindow?.webContents.send("menu:zoomIn"),
         },
         {
-          label: 'Reset Zoom',
-          accelerator: 'CmdOrCtrl+0',
-          click: () => mainWindow?.webContents.send('menu:resetZoom'),
+          label: "Zoom Out",
+          accelerator: "CmdOrCtrl+-",
+          click: () => mainWindow?.webContents.send("menu:zoomOut"),
         },
-        { type: 'separator' },
-        { role: 'toggleDevTools' },
+        {
+          label: "Reset Zoom",
+          accelerator: "CmdOrCtrl+0",
+          click: () => mainWindow?.webContents.send("menu:resetZoom"),
+        },
+        { type: "separator" },
+        { role: "toggleDevTools" },
       ],
     },
 
     // Help menu
     {
-      label: 'Help',
+      label: "Help",
       submenu: [
         {
-          label: 'User Guide',
-          accelerator: 'F1',
-          click: () => mainWindow?.webContents.send('menu:showHelp'),
+          label: "User Guide",
+          accelerator: "F1",
+          click: () => mainWindow?.webContents.send("menu:showHelp"),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'Check for Updates...',
+          label: "Check for Updates...",
           click: () => checkForUpdates(),
         },
-        { type: 'separator' },
+        { type: "separator" },
         {
-          label: 'About Follicle Labeller',
+          label: "About Follicle Labeller",
           click: () => {
             if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: 'About Follicle Labeller',
+                type: "info",
+                title: "About Follicle Labeller",
                 message: `Follicle Labeller v${app.getVersion()}`,
-                detail: 'Medical image annotation tool for follicle labeling.',
+                detail: "Medical image annotation tool for follicle labeling.",
               });
             }
           },
@@ -616,116 +662,144 @@ function createMenu(): void {
   Menu.setApplicationMenu(menu);
 
   // Store references to menu items for dynamic enable/disable
-  saveMenuItem = menu.getMenuItemById('save-project');
-  saveAsMenuItem = menu.getMenuItemById('save-project-as');
-  closeProjectMenuItem = menu.getMenuItemById('close-project');
+  saveMenuItem = menu.getMenuItemById("save-project");
+  saveAsMenuItem = menu.getMenuItemById("save-project-as");
+  closeProjectMenuItem = menu.getMenuItemById("close-project");
 }
 
 // Show download options dialog when there's an active selection
 // Returns: 'all' | 'currentImage' | 'selected' | 'cancel'
-ipcMain.handle('dialog:downloadOptions', async (_, selectedCount: number, currentImageCount: number, totalCount: number) => {
-  const window = BrowserWindow.getFocusedWindow();
-  if (!window) return 'cancel';
+ipcMain.handle(
+  "dialog:downloadOptions",
+  async (
+    _,
+    selectedCount: number,
+    currentImageCount: number,
+    totalCount: number,
+  ) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return "cancel";
 
-  const result = await dialog.showMessageBox(window, {
-    type: 'question',
-    title: 'Download Follicle Images',
-    message: 'What would you like to download?',
-    buttons: [
-      `Selected Only (${selectedCount})`,
-      `Current Image (${currentImageCount})`,
-      `All Follicles (${totalCount})`,
-      'Cancel'
-    ],
-    defaultId: 0,
-    cancelId: 3,
-  });
+    const result = await dialog.showMessageBox(window, {
+      type: "question",
+      title: "Download Follicle Images",
+      message: "What would you like to download?",
+      buttons: [
+        `Selected Only (${selectedCount})`,
+        `Current Image (${currentImageCount})`,
+        `All Follicles (${totalCount})`,
+        "Cancel",
+      ],
+      defaultId: 0,
+      cancelId: 3,
+    });
 
-  switch (result.response) {
-    case 0: return 'selected';
-    case 1: return 'currentImage';
-    case 2: return 'all';
-    default: return 'cancel';
-  }
-});
+    switch (result.response) {
+      case 0:
+        return "selected";
+      case 1:
+        return "currentImage";
+      case 2:
+        return "all";
+      default:
+        return "cancel";
+    }
+  },
+);
 
 // Show unsaved changes dialog
 // Returns: 'save' | 'discard' | 'cancel'
-ipcMain.handle('dialog:unsavedChanges', async () => {
+ipcMain.handle("dialog:unsavedChanges", async () => {
   const window = BrowserWindow.getFocusedWindow();
-  if (!window) return 'discard';
+  if (!window) return "discard";
 
   const result = await dialog.showMessageBox(window, {
-    type: 'warning',
-    title: 'Unsaved Changes',
-    message: 'You have unsaved changes. Do you want to save before closing?',
-    buttons: ['Save', "Don't Save", 'Cancel'],
+    type: "warning",
+    title: "Unsaved Changes",
+    message: "You have unsaved changes. Do you want to save before closing?",
+    buttons: ["Save", "Don't Save", "Cancel"],
     defaultId: 0,
     cancelId: 2,
   });
 
   switch (result.response) {
-    case 0: return 'save';
-    case 1: return 'discard';
-    default: return 'cancel';
+    case 0:
+      return "save";
+    case 1:
+      return "discard";
+    default:
+      return "cancel";
   }
 });
 
 // ============================================
-// SAM 2 Server Management
+// BLOB Detection Server Management
 // ============================================
 
 /**
- * Get the path to the SAM server Python script.
+ * Get the path to the BLOB server Python script.
  */
-function getSAMServerPath(): string {
+function getBlobServerPath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'python', 'sam_server.py');
+    return path.join(process.resourcesPath, "python", "blob_server.py");
   }
-  return path.join(__dirname, 'python', 'sam_server.py');
+  // In dev mode, __dirname is dist-electron/, so go up one level to find electron/python/
+  return path.join(__dirname, "..", "electron", "python", "blob_server.py");
 }
 
 /**
  * Check if Python is available.
  */
-async function checkPythonAvailable(): Promise<{ available: boolean; version?: string; error?: string }> {
+async function checkPythonAvailable(): Promise<{
+  available: boolean;
+  version?: string;
+  error?: string;
+}> {
   return new Promise((resolve) => {
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-    const proc = spawn(pythonCmd, ['--version']);
+    // Use 'python' on all platforms - conda environments use 'python' not 'python3'
+    const pythonCmd = "python";
+    const proc = spawn(pythonCmd, ["--version"]);
 
-    let stdout = '';
-    let stderr = '';
+    let stdout = "";
+    let stderr = "";
 
-    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+    proc.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+    proc.stderr?.on("data", (data) => {
+      stderr += data.toString();
+    });
 
-    proc.on('close', (code) => {
+    proc.on("close", (code) => {
       if (code === 0) {
         const version = stdout.trim() || stderr.trim();
         resolve({ available: true, version });
       } else {
-        resolve({ available: false, error: 'Python not found' });
+        resolve({ available: false, error: "Python not found" });
       }
     });
 
-    proc.on('error', () => {
-      resolve({ available: false, error: 'Python not found' });
+    proc.on("error", () => {
+      resolve({ available: false, error: "Python not found" });
     });
 
     // Timeout after 5 seconds
     setTimeout(() => {
       proc.kill();
-      resolve({ available: false, error: 'Python check timed out' });
+      resolve({ available: false, error: "Python check timed out" });
     }, 5000);
   });
 }
 
 /**
- * Start the SAM server process.
+ * Start the BLOB detection server process.
  */
-async function startSAMServer(modelSize: string = 'small'): Promise<{ success: boolean; error?: string }> {
+async function startBlobServer(): Promise<{
+  success: boolean;
+  error?: string;
+}> {
   // Check if already running
-  if (samServerProcess && !samServerProcess.killed) {
+  if (blobServerProcess && !blobServerProcess.killed) {
     return { success: true };
   }
 
@@ -736,93 +810,118 @@ async function startSAMServer(modelSize: string = 'small'): Promise<{ success: b
   }
 
   // Check if server script exists
-  const serverPath = getSAMServerPath();
+  const serverPath = getBlobServerPath();
   if (!fs.existsSync(serverPath)) {
-    return { success: false, error: 'SAM server script not found' };
+    return { success: false, error: "BLOB server script not found" };
   }
 
   return new Promise((resolve) => {
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    // Use 'python' on all platforms - conda environments use 'python' not 'python3'
+    const pythonCmd = "python";
 
-    samServerProcess = spawn(pythonCmd, [
-      serverPath,
-      '--port', SAM_SERVER_PORT.toString(),
-      '--model', modelSize,
-    ], {
-      cwd: path.dirname(serverPath),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    console.log("[BLOB Server] Starting server...");
+    console.log("[BLOB Server] Python command:", pythonCmd);
+    console.log("[BLOB Server] Script path:", serverPath);
+    console.log("[BLOB Server] CWD:", path.dirname(serverPath));
+
+    // Quote the path to handle spaces in directory names
+    const quotedServerPath = `"${serverPath}"`;
+
+    blobServerProcess = spawn(
+      pythonCmd,
+      [quotedServerPath, "--port", BLOB_SERVER_PORT.toString()],
+      {
+        cwd: path.dirname(serverPath),
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true, // Use shell to inherit conda/virtualenv from user's shell config
+      },
+    );
 
     let resolved = false;
-    let errorOutput = '';
+    let errorOutput = "";
 
-    samServerProcess.stdout?.on('data', (data) => {
+    blobServerProcess.stdout?.on("data", (data) => {
       const output = data.toString();
-      console.log('[SAM Server]', output);
+      console.log("[BLOB Server]", output);
 
       // Check for successful startup
-      if (!resolved && output.includes('Running on')) {
+      if (!resolved && output.includes("Running on")) {
         resolved = true;
         resolve({ success: true });
       }
     });
 
-    samServerProcess.stderr?.on('data', (data) => {
+    blobServerProcess.stderr?.on("data", (data) => {
       const output = data.toString();
-      console.error('[SAM Server Error]', output);
+      // Flask/werkzeug outputs "Running on" to stderr, not stdout
+      console.log("[BLOB Server stderr]", output);
+
+      // Check for successful startup in stderr (where Flask outputs it)
+      if (!resolved && output.includes("Running on")) {
+        resolved = true;
+        resolve({ success: true });
+      }
+
+      // Accumulate all stderr for debugging
       errorOutput += output;
     });
 
-    samServerProcess.on('close', (code) => {
-      console.log(`SAM server exited with code ${code}`);
-      samServerProcess = null;
+    blobServerProcess.on("close", (code) => {
+      console.log(`BLOB server exited with code ${code}`);
+      blobServerProcess = null;
       if (!resolved) {
         resolved = true;
-        resolve({ success: false, error: errorOutput || `Process exited with code ${code}` });
+        resolve({
+          success: false,
+          error: errorOutput || `Process exited with code ${code}`,
+        });
       }
     });
 
-    samServerProcess.on('error', (err) => {
-      console.error('Failed to start SAM server:', err);
+    blobServerProcess.on("error", (err) => {
+      console.error("Failed to start BLOB server:", err);
       if (!resolved) {
         resolved = true;
         resolve({ success: false, error: err.message });
       }
     });
 
-    // Timeout after 60 seconds (model loading can take time)
+    // Timeout after 30 seconds (no model loading needed, should be fast)
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        resolve({ success: false, error: 'Server startup timed out' });
+        resolve({ success: false, error: "Server startup timed out" });
       }
-    }, 60000);
+    }, 30000);
   });
 }
 
 /**
- * Stop the SAM server process.
+ * Stop the BLOB detection server process.
  */
-function stopSAMServer(): void {
-  if (samServerProcess && !samServerProcess.killed) {
-    console.log('Stopping SAM server...');
+function stopBlobServer(): void {
+  if (blobServerProcess && !blobServerProcess.killed) {
+    console.log("Stopping BLOB server...");
 
     // Try graceful shutdown first via HTTP
-    const http = require('http');
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: SAM_SERVER_PORT,
-      path: '/shutdown',
-      method: 'POST',
-      timeout: 2000,
-    }, () => {
-      // Response received, server is shutting down
-    });
+    const http = require("http");
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BLOB_SERVER_PORT,
+        path: "/shutdown",
+        method: "POST",
+        timeout: 2000,
+      },
+      () => {
+        // Response received, server is shutting down
+      },
+    );
 
-    req.on('error', () => {
+    req.on("error", () => {
       // If HTTP fails, kill the process
-      if (samServerProcess && !samServerProcess.killed) {
-        samServerProcess.kill();
+      if (blobServerProcess && !blobServerProcess.killed) {
+        blobServerProcess.kill();
       }
     });
 
@@ -830,35 +929,38 @@ function stopSAMServer(): void {
 
     // Force kill after timeout if still running
     setTimeout(() => {
-      if (samServerProcess && !samServerProcess.killed) {
-        samServerProcess.kill('SIGKILL');
+      if (blobServerProcess && !blobServerProcess.killed) {
+        blobServerProcess.kill("SIGKILL");
       }
-      samServerProcess = null;
+      blobServerProcess = null;
     }, 3000);
   }
 }
 
 /**
- * Check if SAM server is running.
+ * Check if BLOB server is running.
  */
-async function isSAMServerRunning(): Promise<boolean> {
+async function isBlobServerRunning(): Promise<boolean> {
   return new Promise((resolve) => {
-    const http = require('http');
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: SAM_SERVER_PORT,
-      path: '/health',
-      method: 'GET',
-      timeout: 2000,
-    }, (res: any) => {
-      resolve(res.statusCode === 200);
-    });
+    const http = require("http");
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BLOB_SERVER_PORT,
+        path: "/health",
+        method: "GET",
+        timeout: 2000,
+      },
+      (res: any) => {
+        resolve(res.statusCode === 200);
+      },
+    );
 
-    req.on('error', () => {
+    req.on("error", () => {
       resolve(false);
     });
 
-    req.on('timeout', () => {
+    req.on("timeout", () => {
       req.destroy();
       resolve(false);
     });
@@ -867,29 +969,29 @@ async function isSAMServerRunning(): Promise<boolean> {
   });
 }
 
-// SAM IPC Handlers
-ipcMain.handle('sam:startServer', async (_, modelSize?: string) => {
-  return startSAMServer(modelSize || 'small');
+// BLOB Detection IPC Handlers
+ipcMain.handle("blob:startServer", async () => {
+  return startBlobServer();
 });
 
-ipcMain.handle('sam:stopServer', async () => {
-  stopSAMServer();
+ipcMain.handle("blob:stopServer", async () => {
+  stopBlobServer();
   return { success: true };
 });
 
-ipcMain.handle('sam:isAvailable', async () => {
-  return isSAMServerRunning();
+ipcMain.handle("blob:isAvailable", async () => {
+  return isBlobServerRunning();
 });
 
-ipcMain.handle('sam:checkPython', async () => {
+ipcMain.handle("blob:checkPython", async () => {
   return checkPythonAvailable();
 });
 
-ipcMain.handle('sam:getServerInfo', async () => {
+ipcMain.handle("blob:getServerInfo", async () => {
   return {
-    port: SAM_SERVER_PORT,
-    running: await isSAMServerRunning(),
-    scriptPath: getSAMServerPath(),
+    port: BLOB_SERVER_PORT,
+    running: await isBlobServerRunning(),
+    scriptPath: getBlobServerPath(),
   };
 });
 
@@ -902,7 +1004,7 @@ function getFileFromArgs(args: string[]): string | null {
   // Skip the first arg (executable path) and look for .fol files
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
-    if (arg && arg.endsWith('.fol') && fs.existsSync(arg)) {
+    if (arg && arg.endsWith(".fol") && fs.existsSync(arg)) {
       return arg;
     }
   }
@@ -910,12 +1012,12 @@ function getFileFromArgs(args: string[]): string | null {
 }
 
 // macOS: Handle file open before app is ready
-app.on('open-file', (event, filePath) => {
+app.on("open-file", (event, filePath) => {
   event.preventDefault();
-  if (filePath.endsWith('.fol')) {
+  if (filePath.endsWith(".fol")) {
     if (mainWindow) {
       // App is already running, send to renderer
-      mainWindow.webContents.send('file:open', filePath);
+      mainWindow.webContents.send("file:open", filePath);
     } else {
       // App is starting, store for later
       fileToOpen = filePath;
@@ -924,7 +1026,7 @@ app.on('open-file', (event, filePath) => {
 });
 
 // IPC handler for renderer to request file to open on startup
-ipcMain.handle('app:getFileToOpen', () => {
+ipcMain.handle("app:getFileToOpen", () => {
   const file = fileToOpen;
   fileToOpen = null; // Clear after returning
   return file;
@@ -933,7 +1035,7 @@ ipcMain.handle('app:getFileToOpen', () => {
 // App lifecycle
 app.whenReady().then(() => {
   // Check for file in command line args (Windows/Linux)
-  if (process.platform !== 'darwin') {
+  if (process.platform !== "darwin") {
     fileToOpen = getFileFromArgs(process.argv);
   }
 
@@ -946,17 +1048,17 @@ app.whenReady().then(() => {
   }
 
   // Listen for system suspend (sleep/hibernate) to auto-save before sleep
-  powerMonitor.on('suspend', () => {
-    console.log('System suspending - triggering auto-save');
-    mainWindow?.webContents.send('system:suspend');
+  powerMonitor.on("suspend", () => {
+    console.log("System suspending - triggering auto-save");
+    mainWindow?.webContents.send("system:suspend");
   });
 
   // Log when system resumes (for debugging)
-  powerMonitor.on('resume', () => {
-    console.log('System resumed from sleep');
+  powerMonitor.on("resume", () => {
+    console.log("System resumed from sleep");
   });
 
-  app.on('activate', () => {
+  app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
@@ -965,16 +1067,16 @@ app.whenReady().then(() => {
 
 // Allow multiple instances - each double-clicked file opens a new window
 
-app.on('window-all-closed', () => {
-  // Stop SAM server before quitting
-  stopSAMServer();
+app.on("window-all-closed", () => {
+  // Stop BLOB server before quitting
+  stopBlobServer();
 
-  if (process.platform !== 'darwin') {
+  if (process.platform !== "darwin") {
     app.quit();
   }
 });
 
-// Ensure SAM server is stopped on app quit
-app.on('will-quit', () => {
-  stopSAMServer();
+// Ensure BLOB server is stopped on app quit
+app.on("will-quit", () => {
+  stopBlobServer();
 });
