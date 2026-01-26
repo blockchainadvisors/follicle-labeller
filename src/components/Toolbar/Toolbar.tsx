@@ -23,6 +23,8 @@ import {
   Flame,
   BarChart3,
   Settings,
+  GraduationCap,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -45,6 +47,11 @@ import {
   DetectionSettings,
   DEFAULT_DETECTION_SETTINGS,
 } from "../DetectionSettingsDialog/DetectionSettingsDialog";
+import {
+  LearnedDetectionDialog,
+  LearnedDetectionSettings,
+  DEFAULT_LEARNED_SETTINGS,
+} from "../LearnedDetectionDialog/LearnedDetectionDialog";
 import { ExportMenu, ExportType } from "../ExportMenu/ExportMenu";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
 import { ProjectImage, RectangleAnnotation } from "../../types";
@@ -153,11 +160,17 @@ export const Toolbar: React.FC = () => {
   const isSyncingAnnotations = useRef(false);
   const lastSessionImageId = useRef<string | null>(null);
 
-  // State for detection settings dialog
+  // State for detection settings dialog (manual settings mode)
   const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>(
     DEFAULT_DETECTION_SETTINGS,
   );
   const [showDetectionSettings, setShowDetectionSettings] = useState(false);
+
+  // State for learned detection dialog
+  const [learnedSettings, setLearnedSettings] =
+    useState<LearnedDetectionSettings>(DEFAULT_LEARNED_SETTINGS);
+  const [showLearnedDetection, setShowLearnedDetection] = useState(false);
+  const [isLearnedDetecting, setIsLearnedDetecting] = useState(false);
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -765,8 +778,8 @@ export const Toolbar: React.FC = () => {
     "#00CEC9",
   ];
 
-  // Auto-detect follicles using BLOB detection server
-  const handleAutoDetect = useCallback(async () => {
+  // Auto-detect follicles using manual settings
+  const handleSettingsDetect = useCallback(async () => {
     if (!activeImage || !activeImageId || isDetecting) return;
 
     // Check if server is connected
@@ -777,25 +790,30 @@ export const Toolbar: React.FC = () => {
       return;
     }
 
-    // Check if enough annotations for learning
-    if (!canDetect) {
-      alert(
-        `Please draw at least ${MIN_ANNOTATIONS} annotations first so the detector can learn follicle size.`,
-      );
+    // Check if manual settings are configured
+    if (!(detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0)) {
+      alert("Please configure size settings in Detection Settings first.");
       return;
     }
 
     setIsDetecting(true);
 
     try {
-      // Call the BLOB detection server
-      const result = await blobService.blobDetect(blobSessionId);
+      // Call the BLOB detection server with manual settings
+      const result = await blobService.blobDetect(blobSessionId, {
+        minWidth: detectionSettings.minWidth,
+        maxWidth: detectionSettings.maxWidth,
+        minHeight: detectionSettings.minHeight,
+        maxHeight: detectionSettings.maxHeight,
+        darkBlobs: detectionSettings.darkBlobs,
+        useCLAHE: detectionSettings.useCLAHE,
+        claheClipLimit: detectionSettings.claheClipLimit,
+        claheTileSize: detectionSettings.claheTileSize,
+      });
 
       if (result.count === 0) {
         console.log("No follicles detected");
-        alert(
-          "No follicles detected. Try adjusting your annotations or the detection settings.",
-        );
+        alert("No follicles detected. Try adjusting the detection settings.");
         setIsDetecting(false);
         return;
       }
@@ -815,7 +833,7 @@ export const Toolbar: React.FC = () => {
           y: detection.y,
           width: detection.width,
           height: detection.height,
-          label: `Auto ${existingCount + i + 1}`,
+          label: `Settings ${existingCount + i + 1}`,
           notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
           color:
             ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
@@ -828,9 +846,7 @@ export const Toolbar: React.FC = () => {
       const allFollicles = [...follicles, ...newFollicles];
       importFollicles(allFollicles);
 
-      console.log(
-        `Detected ${result.count} follicles (learned size: ${result.learnedSize}px)`,
-      );
+      console.log(`Detected ${result.count} follicles using manual settings`);
     } catch (error) {
       console.error("Failed to detect follicles:", error);
       alert(
@@ -847,17 +863,139 @@ export const Toolbar: React.FC = () => {
     importFollicles,
     blobServerConnected,
     blobSessionId,
-    canDetect,
+    detectionSettings,
   ]);
 
+  // Handle learned detection (from annotations)
+  const handleLearnedDetect = useCallback(
+    async (settings: LearnedDetectionSettings) => {
+      if (!activeImage || !activeImageId || isLearnedDetecting) return;
+
+      // Check if server is connected
+      if (!blobServerConnected || !blobSessionId) {
+        alert(
+          "BLOB detection server is not connected. Please wait for it to start.",
+        );
+        return;
+      }
+
+      // Check if we have enough annotations
+      if (!canDetect) {
+        alert(
+          `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
+        );
+        return;
+      }
+
+      setShowLearnedDetection(false);
+      setIsLearnedDetecting(true);
+      setLearnedSettings(settings);
+
+      try {
+        // Call the BLOB detection server with useLearnedStats mode
+        // The server will calculate stats from annotations and apply tolerance
+        const result = await blobService.blobDetect(blobSessionId, {
+          useLearnedStats: true,
+          tolerance: settings.tolerance,
+          darkBlobs: settings.darkBlobs,
+          useCLAHE: true,
+          claheClipLimit: 3.0,
+          claheTileSize: 8,
+        });
+
+        if (result.count === 0) {
+          console.log("No follicles detected");
+          alert(
+            "No follicles detected. Try adjusting the tolerance or drawing more diverse annotations.",
+          );
+          setIsLearnedDetecting(false);
+          return;
+        }
+
+        // Convert detected blobs to RECTANGLE annotations
+        const existingCount = follicles.filter(
+          (f) => f.imageId === activeImageId,
+        ).length;
+        const now = Date.now();
+
+        const newFollicles: RectangleAnnotation[] = result.detections.map(
+          (detection, i) => ({
+            id: generateId(),
+            imageId: activeImageId,
+            shape: "rectangle" as const,
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+            label: `Learned ${existingCount + i + 1}`,
+            notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+            color:
+              ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+            createdAt: now,
+            updatedAt: now,
+          }),
+        );
+
+        // Import all at once (supports undo as single action)
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+
+        console.log(
+          `Detected ${result.count} follicles using learned settings (tolerance: ${settings.tolerance}%)`,
+        );
+      } catch (error) {
+        console.error("Failed to detect follicles:", error);
+        alert(
+          `Failed to detect follicles: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
+      } finally {
+        setIsLearnedDetecting(false);
+      }
+    },
+    [
+      activeImage,
+      activeImageId,
+      isLearnedDetecting,
+      follicles,
+      importFollicles,
+      blobServerConnected,
+      blobSessionId,
+      canDetect,
+    ],
+  );
+
+  // Open learned detection dialog
+  const handleOpenLearnedDetection = useCallback(() => {
+    if (!canDetect) {
+      alert(
+        `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
+      );
+      return;
+    }
+    setShowLearnedDetection(true);
+  }, [canDetect]);
+
   // Listen for auto-detect trigger from ImageCanvas keyboard shortcut
+  // Use learned detection if we have annotations, otherwise settings-based
   useEffect(() => {
     const handler = () => {
-      handleAutoDetect();
+      if (canDetect) {
+        handleOpenLearnedDetection();
+      } else if (
+        detectionSettings.minWidth > 0 &&
+        detectionSettings.maxWidth > 0
+      ) {
+        handleSettingsDetect();
+      }
     };
     window.addEventListener("triggerAutoDetect", handler);
     return () => window.removeEventListener("triggerAutoDetect", handler);
-  }, [handleAutoDetect]);
+  }, [
+    canDetect,
+    handleOpenLearnedDetection,
+    handleSettingsDetect,
+    detectionSettings,
+  ]);
 
   // Register menu event listeners
   useEffect(() => {
@@ -1090,56 +1228,58 @@ export const Toolbar: React.FC = () => {
         </>
       )}
 
-      {/* Auto Detect */}
-      <div className="toolbar-group" role="group" aria-label="Auto detect">
+      {/* Detection Tools - Learn from annotations or use manual settings */}
+      <div className="toolbar-group" role="group" aria-label="Detection tools">
         <IconButton
           icon={
-            isDetecting || serverStarting ? (
+            isLearnedDetecting || serverStarting ? (
               <Loader2 size={18} className="animate-spin" />
             ) : (
-              <Sparkles size={18} />
+              <GraduationCap size={18} />
             )
           }
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
               : !canDetect
-                ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable`
-                : "Auto Detect Follicles"
+                ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable learning`
+                : "Learn from Selection"
           }
-          shortcut="D"
-          onClick={handleAutoDetect}
+          shortcut="L"
+          onClick={handleOpenLearnedDetection}
           disabled={
             !imageLoaded ||
-            isDetecting ||
+            isLearnedDetecting ||
             serverStarting ||
             !blobServerConnected ||
             !canDetect
           }
         />
-        {imageLoaded && blobServerConnected && (
-          <span
-            className="annotation-count"
-            title={
-              canDetect
-                ? "Ready to detect"
-                : `${annotationCount}/${MIN_ANNOTATIONS} annotations needed`
-            }
-            style={{
-              fontSize: "11px",
-              padding: "2px 6px",
-              borderRadius: "4px",
-              backgroundColor: canDetect
-                ? "var(--success-bg, #dcfce7)"
-                : "var(--warning-bg, #fef3c7)",
-              color: canDetect
-                ? "var(--success-text, #166534)"
-                : "var(--warning-text, #92400e)",
-            }}
-          >
-            {annotationCount}/{MIN_ANNOTATIONS}
-          </span>
-        )}
+        <IconButton
+          icon={
+            isDetecting || serverStarting ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <SlidersHorizontal size={18} />
+            )
+          }
+          tooltip={
+            !blobServerConnected
+              ? "Starting detection server..."
+              : detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0
+                ? "Detect with Manual Settings"
+                : "Configure settings first"
+          }
+          shortcut="D"
+          onClick={handleSettingsDetect}
+          disabled={
+            !imageLoaded ||
+            isDetecting ||
+            serverStarting ||
+            !blobServerConnected ||
+            !(detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0)
+          }
+        />
         <IconButton
           icon={<Settings size={18} />}
           tooltip="Detection Settings"
@@ -1262,7 +1402,7 @@ export const Toolbar: React.FC = () => {
         )}
       </div>
 
-      {/* Detection Settings Dialog */}
+      {/* Detection Settings Dialog (Manual Settings) */}
       {showDetectionSettings && (
         <DetectionSettingsDialog
           settings={detectionSettings}
@@ -1271,6 +1411,16 @@ export const Toolbar: React.FC = () => {
             setShowDetectionSettings(false);
           }}
           onCancel={() => setShowDetectionSettings(false)}
+        />
+      )}
+
+      {/* Learned Detection Dialog */}
+      {showLearnedDetection && blobSessionId && (
+        <LearnedDetectionDialog
+          sessionId={blobSessionId}
+          settings={learnedSettings}
+          onRun={handleLearnedDetect}
+          onCancel={() => setShowLearnedDetection(false)}
         />
       )}
     </div>
