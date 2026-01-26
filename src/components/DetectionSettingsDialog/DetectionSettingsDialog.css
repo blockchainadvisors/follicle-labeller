@@ -15,7 +15,7 @@
   background: var(--bg-primary, #ffffff);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
-  width: 500px;
+  width: 480px;
   max-width: 90vw;
   max-height: 85vh;
   display: flex;
@@ -62,8 +62,8 @@
 }
 
 .settings-section {
-  margin-bottom: 24px;
-  padding-bottom: 20px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
   border-bottom: 1px solid var(--border-color, #e0e0e0);
 }
 
@@ -74,81 +74,85 @@
 }
 
 .settings-section h3 {
-  margin: 0 0 8px 0;
+  margin: 0 0 12px 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary, #333);
 }
 
-.section-toggle {
+/* Info box for automatic learning message */
+.info-box {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
+  gap: 12px;
+  padding: 14px;
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  border-radius: 8px;
+  border: 1px solid var(--accent-color, #3b82f6);
 }
 
-.section-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+.info-box svg {
+  flex-shrink: 0;
+  color: var(--accent-color, #3b82f6);
 }
 
-.section-description {
-  margin: 0 0 12px 0;
-  font-size: 12px;
+.info-box h3 {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+}
+
+.info-box p {
+  margin: 0;
+  font-size: 13px;
   color: var(--text-secondary, #666);
   line-height: 1.5;
 }
 
-.settings-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.settings-row:last-child {
-  margin-bottom: 0;
-}
-
-.settings-row label {
-  min-width: 100px;
+/* How it works list */
+.how-it-works-list {
+  margin: 0;
+  padding-left: 20px;
   font-size: 13px;
+  color: var(--text-secondary, #666);
+  line-height: 1.8;
+}
+
+.how-it-works-list li {
+  margin-bottom: 4px;
+}
+
+/* Parameter info display */
+.param-info {
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.param-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 13px;
+}
+
+.param-row:not(:last-child) {
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.param-label {
   color: var(--text-secondary, #666);
 }
 
-.settings-row input[type="number"] {
-  width: 100px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-color, #e0e0e0);
-  border-radius: 4px;
-  font-size: 13px;
-  background: var(--bg-primary, #ffffff);
+.param-value {
+  font-weight: 500;
   color: var(--text-primary, #333);
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+  font-size: 12px;
 }
 
-.settings-row input[type="number"]:focus {
-  outline: none;
-  border-color: var(--accent-color, #3b82f6);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-}
-
-.settings-row.checkbox {
-  margin-top: 12px;
-}
-
-.settings-row.checkbox label {
-  min-width: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.settings-row.checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
+cursor: pointer;
 }
 
 .settings-row .hint {
