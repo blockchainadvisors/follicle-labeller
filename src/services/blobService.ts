@@ -219,9 +219,7 @@ export class BlobService {
    * @param sessionId - Session ID from setImage
    * @returns Annotation count and whether detection is available
    */
-  async getAnnotationCount(
-    sessionId: string,
-  ): Promise<{
+  async getAnnotationCount(sessionId: string): Promise<{
     annotationCount: number;
     canDetect: boolean;
     minRequired: number;
@@ -241,14 +239,64 @@ export class BlobService {
   }
 
   /**
-   * Run BLOB detection on the session image.
-   * Requires at least 3 annotations to have been synced.
+   * Get learned statistics from annotations for the Learn from Selection dialog.
    *
    * @param sessionId - Session ID from setImage
+   * @returns Learned stats and whether detection is available
+   */
+  async getLearnedStats(sessionId: string): Promise<{
+    stats: {
+      examplesAnalyzed: number;
+      minWidth: number;
+      maxWidth: number;
+      minHeight: number;
+      maxHeight: number;
+      minAspectRatio: number;
+      maxAspectRatio: number;
+      meanIntensity: number;
+    };
+    canDetect: boolean;
+    minRequired: number;
+  }> {
+    const response = await fetch(`${this.baseUrl}/get-learned-stats`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to get learned stats");
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Run BLOB detection on the session image.
+   * Works with either annotations (for size learning) or manual settings.
+   *
+   * @param sessionId - Session ID from setImage
+   * @param settings - Optional detection settings
    * @returns Array of detected follicles
    */
   async blobDetect(
     sessionId: string,
+    settings?: {
+      // Manual size settings
+      minWidth?: number;
+      maxWidth?: number;
+      minHeight?: number;
+      maxHeight?: number;
+      // Learned mode settings
+      useLearnedStats?: boolean;
+      tolerance?: number;
+      // Common settings
+      darkBlobs?: boolean;
+      useCLAHE?: boolean;
+      claheClipLimit?: number;
+      claheTileSize?: number;
+    },
   ): Promise<{
     detections: BlobDetection[];
     count: number;
@@ -257,7 +305,7 @@ export class BlobService {
     const response = await fetch(`${this.baseUrl}/blob-detect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId }),
+      body: JSON.stringify({ sessionId, settings }),
     });
 
     if (!response.ok) {
