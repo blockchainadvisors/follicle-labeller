@@ -384,6 +384,61 @@ declare global {
         installPackages: () => Promise<{ success: boolean; error?: string }>;
         onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
       };
+      // YOLO Keypoint Training API
+      yoloKeypoint: {
+        getStatus: () => Promise<YoloKeypointStatus>;
+        getSystemInfo: () => Promise<{
+          python_version: string;
+          platform: string;
+          cpu_count: number;
+          cpu_percent: number;
+          memory_total_gb: number;
+          memory_used_gb: number;
+          memory_percent: number;
+          device: string;
+          device_name: string;
+          cuda_available: boolean;
+          mps_available: boolean;
+          torch_version: string | null;
+          gpu_memory_total_gb: number | null;
+          gpu_memory_used_gb: number | null;
+        }>;
+        checkDependencies: () => Promise<YoloDependenciesInfo>;
+        installDependencies: () => Promise<{ success: boolean; error?: string }>;
+        upgradeToCUDA: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+        validateDataset: (datasetPath: string) => Promise<DatasetValidation>;
+        writeDatasetToTemp: (
+          files: Array<{ path: string; content: ArrayBuffer | string }>
+        ) => Promise<{ success: boolean; datasetPath?: string; error?: string }>;
+        startTraining: (
+          datasetPath: string,
+          config: TrainingConfig,
+          modelName?: string
+        ) => Promise<{ jobId: string; status: string }>;
+        stopTraining: (jobId: string) => Promise<{ success: boolean }>;
+        subscribeProgress: (
+          jobId: string,
+          onProgress: (progress: TrainingProgress) => void,
+          onError: (error: string) => void,
+          onComplete: () => void
+        ) => () => void;
+        listModels: () => Promise<{ models: ModelInfo[] }>;
+        loadModel: (modelPath: string) => Promise<{ success: boolean }>;
+        predict: (imageData: string) => Promise<{
+          success: boolean;
+          prediction?: KeypointPrediction;
+          message?: string;
+        }>;
+        showExportDialog: (
+          defaultFileName: string
+        ) => Promise<{ canceled: boolean; filePath?: string }>;
+        exportONNX: (
+          modelPath: string,
+          outputPath: string
+        ) => Promise<{ success: boolean; outputPath?: string }>;
+        deleteModel: (modelId: string) => Promise<{ success: boolean }>;
+      };
     };
   }
 }
@@ -408,4 +463,144 @@ export interface GPUHardwareInfo {
   packages: { cupy: boolean; torch: boolean };
   canEnableGpu: boolean;
   gpuEnabled: boolean;
+}
+
+// ============================================
+// YOLO Keypoint Training Types
+// ============================================
+
+/**
+ * Configuration for YOLO keypoint model training.
+ */
+export interface TrainingConfig {
+  /** Model size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large) */
+  modelSize: 'n' | 's' | 'm' | 'l';
+  /** Number of training epochs */
+  epochs: number;
+  /** Input image size */
+  imgSize: number;
+  /** Batch size */
+  batchSize: number;
+  /** Early stopping patience */
+  patience: number;
+  /** Training device: 'auto', 'cuda', 'mps', 'cpu' */
+  device: 'auto' | 'cuda' | 'mps' | 'cpu';
+}
+
+/**
+ * Default training configuration.
+ */
+export const DEFAULT_TRAINING_CONFIG: TrainingConfig = {
+  modelSize: 'n',
+  epochs: 100,
+  imgSize: 640,
+  batchSize: 16,
+  patience: 50,
+  device: 'auto',
+};
+
+/**
+ * Training progress update.
+ */
+export interface TrainingProgress {
+  /** Current status */
+  status: 'preparing' | 'training' | 'completed' | 'failed' | 'stopped';
+  /** Current epoch */
+  epoch: number;
+  /** Total epochs */
+  totalEpochs: number;
+  /** Total loss */
+  loss: number;
+  /** Box loss */
+  boxLoss: number;
+  /** Pose/keypoint loss */
+  poseLoss: number;
+  /** Keypoint objectness loss */
+  kobjLoss: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Estimated time remaining */
+  eta: string;
+  /** Status message */
+  message: string;
+}
+
+/**
+ * Keypoint prediction result.
+ */
+export interface KeypointPrediction {
+  /** Origin point (where follicle enters skin) */
+  origin: Point;
+  /** Direction endpoint (indicates growth direction) */
+  directionEndpoint: Point;
+  /** Prediction confidence */
+  confidence: number;
+}
+
+/**
+ * Information about a trained model.
+ */
+export interface ModelInfo {
+  /** Model ID (unique identifier) */
+  id: string;
+  /** Model name */
+  name: string;
+  /** Path to model file */
+  path: string;
+  /** Creation timestamp (ISO string) */
+  createdAt: string;
+  /** Number of epochs trained */
+  epochsTrained: number;
+  /** Training image size */
+  imgSize: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+}
+
+/**
+ * Dataset validation result.
+ */
+export interface DatasetValidation {
+  /** Whether the dataset is valid */
+  valid: boolean;
+  /** Number of training images */
+  trainImages: number;
+  /** Number of validation images */
+  valImages: number;
+  /** Number of training labels */
+  trainLabels: number;
+  /** Number of validation labels */
+  valLabels: number;
+  /** Validation errors */
+  errors: string[];
+  /** Validation warnings */
+  warnings: string[];
+}
+
+/**
+ * YOLO dependencies installation status.
+ */
+export interface YoloDependenciesInfo {
+  /** Whether all dependencies are installed */
+  installed: boolean;
+  /** List of missing packages */
+  missing: string[];
+  /** Estimated download size */
+  estimatedSize: string;
+}
+
+/**
+ * YOLO Keypoint service status.
+ */
+export interface YoloKeypointStatus {
+  /** Whether the service is available */
+  available: boolean;
+  /** Whether SSE streaming is available */
+  sseAvailable: boolean;
+  /** Number of active training jobs */
+  activeTrainingJobs: number;
 }

@@ -9,6 +9,14 @@ opencv-python>=4.8.0
 # Web server (FastAPI for async support)
 fastapi>=0.109.0
 uvicorn>=0.27.0
+sse-starlette>=1.6.0
+
+# YOLO Training (for keypoint/pose model training)
+ultralytics>=8.3.0
+
+# ONNX Export (for model deployment)
+onnx>=1.15.0
+onnxruntime>=1.16.0
 
 # ==============================================
 # GPU Acceleration (Optional)

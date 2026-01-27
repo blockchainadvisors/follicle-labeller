@@ -10,7 +10,8 @@
  * Requires minimum 3 user annotations before auto-detection can run.
  */
 
-import type { DetectedBlob, GPUInfo } from "../types";
+import type { DetectedBlob, GPUInfo, FollicleOrigin, KeypointPrediction } from "../types";
+import { yoloKeypointService } from "./yoloKeypointService";
 
 export interface BlobServerConfig {
   host: string;
@@ -426,6 +427,241 @@ export class BlobService {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+  }
+
+  /**
+   * Run combined blob detection with keypoint prediction.
+   * First detects blobs using OpenCV, then runs YOLO keypoint inference on each crop.
+   *
+   * @param sessionId - Session ID from setImage
+   * @param settings - Detection settings
+   * @param keypointModel - Optional path to YOLO keypoint model (uses loaded model if not specified)
+   * @returns Detections and predicted follicle origins
+   */
+  async detectWithKeypoints(
+    sessionId: string,
+    settings?: {
+      minWidth?: number;
+      maxWidth?: number;
+      minHeight?: number;
+      maxHeight?: number;
+      useLearnedStats?: boolean;
+      tolerance?: number;
+      darkBlobs?: boolean;
+      useCLAHE?: boolean;
+      claheClipLimit?: number;
+      claheTileSize?: number;
+      forceCPU?: boolean;
+    },
+    keypointModel?: string,
+  ): Promise<{
+    detections: BlobDetection[];
+    origins: Map<string, FollicleOrigin>;
+    count: number;
+  }> {
+    // First, run blob detection
+    const blobResult = await this.blobDetect(sessionId, settings);
+    const origins = new Map<string, FollicleOrigin>();
+
+    // Check if YOLO keypoint service is available
+    const keypointStatus = await yoloKeypointService.getStatus();
+    if (!keypointStatus.available) {
+      // Return detections without keypoint predictions
+      return {
+        detections: blobResult.detections,
+        origins,
+        count: blobResult.count,
+      };
+    }
+
+    // Load model if specified, or auto-load first available model
+    if (keypointModel) {
+      await yoloKeypointService.loadModel(keypointModel);
+    } else {
+      // Try to auto-load the first available model if none specified
+      const models = await yoloKeypointService.listModels();
+      if (models.length > 0) {
+        const loaded = await yoloKeypointService.loadModel(models[0].path);
+        if (!loaded) {
+          console.warn('Failed to auto-load keypoint model');
+          return {
+            detections: blobResult.detections,
+            origins,
+            count: blobResult.count,
+          };
+        }
+      } else {
+        console.warn('No keypoint models available for inference');
+        return {
+          detections: blobResult.detections,
+          origins,
+          count: blobResult.count,
+        };
+      }
+    }
+
+    // For each detection, crop and predict keypoints
+    for (let i = 0; i < blobResult.detections.length; i++) {
+      const detection = blobResult.detections[i];
+      const detectionId = `det_${i}_${detection.x}_${detection.y}`;
+
+      try {
+        // Crop the detection region and get base64
+        const cropBase64 = await this.getCropBase64(sessionId, detection);
+        if (!cropBase64) continue;
+
+        // Run keypoint prediction
+        const prediction = await yoloKeypointService.predict(cropBase64);
+        if (!prediction || prediction.confidence < 0.3) continue;
+
+        // Transform keypoints from normalized crop coords to image coords
+        const origin = this.transformKeypointPrediction(prediction, detection);
+        origins.set(detectionId, origin);
+      } catch (error) {
+        console.warn(`Keypoint prediction failed for detection ${i}:`, error);
+      }
+    }
+
+    return {
+      detections: blobResult.detections,
+      origins,
+      count: blobResult.count,
+    };
+  }
+
+  /**
+   * Get a cropped region as base64 for keypoint prediction.
+   *
+   * @param sessionId - Session ID
+   * @param detection - Detection bounding box
+   * @returns Base64 encoded crop image
+   */
+  private async getCropBase64(
+    sessionId: string,
+    detection: BlobDetection,
+  ): Promise<string | null> {
+    try {
+      const response = await fetch(`${this.baseUrl}/crop-region`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          x: detection.x,
+          y: detection.y,
+          width: detection.width,
+          height: detection.height,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      return data.image;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Transform keypoint prediction from normalized crop coordinates to image coordinates.
+   *
+   * @param prediction - Keypoint prediction in normalized crop space
+   * @param detection - Detection bounding box in image space
+   * @returns FollicleOrigin in image coordinates
+   */
+  private transformKeypointPrediction(
+    prediction: KeypointPrediction,
+    detection: BlobDetection,
+  ): FollicleOrigin {
+    // Transform origin point from normalized (0-1) to image coordinates
+    const originX = detection.x + prediction.origin.x * detection.width;
+    const originY = detection.y + prediction.origin.y * detection.height;
+
+    // Transform direction endpoint
+    const dirEndX = detection.x + prediction.directionEndpoint.x * detection.width;
+    const dirEndY = detection.y + prediction.directionEndpoint.y * detection.height;
+
+    // Calculate direction angle and length
+    const dx = dirEndX - originX;
+    const dy = dirEndY - originY;
+    const directionAngle = Math.atan2(dy, dx);
+    const directionLength = Math.sqrt(dx * dx + dy * dy);
+
+    return {
+      originPoint: { x: originX, y: originY },
+      directionAngle,
+      directionLength,
+    };
+  }
+
+  /**
+   * Predict origins for specific rectangle annotations.
+   * Only predicts for rectangles that don't already have origins.
+   *
+   * @param sessionId - Session ID from setImage
+   * @param rectangles - Array of rectangle annotations to predict origins for
+   * @returns Map of annotation ID to predicted FollicleOrigin
+   */
+  async predictOriginsForRectangles(
+    sessionId: string,
+    rectangles: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+  ): Promise<Map<string, FollicleOrigin>> {
+    const origins = new Map<string, FollicleOrigin>();
+
+    // Check if YOLO keypoint service is available
+    const keypointStatus = await yoloKeypointService.getStatus();
+    if (!keypointStatus.available) {
+      console.warn('YOLO keypoint service not available');
+      return origins;
+    }
+
+    // Try to auto-load the first available model if needed
+    const models = await yoloKeypointService.listModels();
+    if (models.length === 0) {
+      console.warn('No keypoint models available for inference');
+      return origins;
+    }
+
+    const loaded = await yoloKeypointService.loadModel(models[0].path);
+    if (!loaded) {
+      console.warn('Failed to load keypoint model');
+      return origins;
+    }
+
+    // For each rectangle, crop and predict keypoints
+    for (const rect of rectangles) {
+      try {
+        // Crop the region and get base64
+        const cropBase64 = await this.getCropBase64(sessionId, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          confidence: 1,
+          method: 'blob',
+        });
+        if (!cropBase64) continue;
+
+        // Run keypoint prediction
+        const prediction = await yoloKeypointService.predict(cropBase64);
+        if (!prediction || prediction.confidence < 0.3) continue;
+
+        // Transform keypoints from normalized crop coords to image coords
+        const origin = this.transformKeypointPrediction(prediction, {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          confidence: 1,
+          method: 'blob',
+        });
+        origins.set(rect.id, origin);
+      } catch (error) {
+        console.warn(`Keypoint prediction failed for rectangle ${rect.id}:`, error);
+      }
+    }
+
+    return origins;
   }
 
   /**

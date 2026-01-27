@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle } from 'lucide-react';
-import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo } from '../../types';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair } from 'lucide-react';
+import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo } from '../../types';
 import { blobService } from '../../services/blobService';
+import { yoloKeypointService } from '../../services/yoloKeypointService';
 import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
@@ -50,6 +51,9 @@ export interface DetectionSettings {
   useSoftNMS: boolean;
   softNMSSigma: number;
   softNMSThreshold: number;
+
+  // YOLO Keypoint prediction (auto-predict origins for detected follicles)
+  useKeypointPrediction: boolean;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -88,6 +92,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   useSoftNMS: true,
   softNMSSigma: 0.5,
   softNMSThreshold: 0.1,
+  // YOLO Keypoint prediction (disabled by default - requires loaded model)
+  useKeypointPrediction: false,
 };
 
 // Install state that can be managed by parent for persistence
@@ -120,6 +126,8 @@ export function DetectionSettingsDialog({
   const [localSettings, setLocalSettings] = useState<DetectionSettings>({ ...settings });
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
+  const [loadedKeypointModel, setLoadedKeypointModel] = useState<ModelInfo | null>(null);
+  const [keypointModelsAvailable, setKeypointModelsAvailable] = useState(false);
 
   // Draggable dialog state
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -229,6 +237,27 @@ export function DetectionSettingsDialog({
 
     return cleanup;
   }, [installState, onInstallStateChange]);
+
+  // Check for available YOLO keypoint models
+  useEffect(() => {
+    const checkKeypointModels = async () => {
+      try {
+        const status = await yoloKeypointService.getStatus();
+        if (status.available) {
+          const models = await yoloKeypointService.listModels();
+          setKeypointModelsAvailable(models.length > 0);
+          // Check if any model is currently loaded by finding one marked as loaded
+          // For now, we just show if models are available
+          if (models.length > 0) {
+            setLoadedKeypointModel(models[0]); // Show first model as available
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check keypoint models:', error);
+      }
+    };
+    checkKeypointModels();
+  }, []);
 
   // Handle GPU package installation
   const handleInstallGPU = async () => {
@@ -753,6 +782,36 @@ export function DetectionSettingsDialog({
                   <span className="hint">Min confidence to keep</span>
                 </div>
               </>
+            )}
+          </section>
+
+          {/* YOLO Keypoint Prediction */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useKeypointPrediction}
+                  onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
+                  disabled={!keypointModelsAvailable}
+                />
+                <Crosshair size={16} style={{ marginRight: '6px' }} />
+                Auto-Predict Origins
+              </label>
+            </h3>
+            <p className="section-description">
+              Automatically predict follicle origin points and growth direction using YOLO keypoint model.
+              {!keypointModelsAvailable && (
+                <span className="warning-text"> No trained models available. Train a model first using the YOLO Training dialog.</span>
+              )}
+            </p>
+            {localSettings.useKeypointPrediction && keypointModelsAvailable && loadedKeypointModel && (
+              <div className="keypoint-model-info">
+                <span className="model-name">Using: {loadedKeypointModel.name}</span>
+                <span className="model-meta">
+                  {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
+                </span>
+              </div>
             )}
           </section>
         </div>

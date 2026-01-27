@@ -1,0 +1,906 @@
+.yolo-training-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.yolo-training-dialog {
+  background: var(--color-surface, #1e1e1e);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  width: 600px;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.yolo-training-dialog .dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border, #333);
+  background: var(--color-surface, #1e1e1e);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.yolo-training-dialog .dialog-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+}
+
+.yolo-training-dialog .close-button {
+  background: none;
+  border: none;
+  color: var(--color-text-muted, #888);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.yolo-training-dialog .close-button:hover:not(:disabled) {
+  color: var(--color-text, #fff);
+  background: var(--color-hover, #333);
+}
+
+.yolo-training-dialog .close-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.yolo-training-dialog .dialog-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--color-surface, #1e1e1e);
+}
+
+.yolo-training-dialog .service-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-warning-bg, #3d3000);
+  color: var(--color-warning, #ffd700);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+
+/* Dependencies Installation Section */
+.yolo-training-dialog .dependencies-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--color-hover, #2a2a2a);
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #333);
+}
+
+.dependencies-warning {
+  display: flex;
+  gap: 12px;
+  color: var(--color-warning);
+}
+
+.dependencies-warning > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.dependencies-info {
+  flex: 1;
+}
+
+.dependencies-info h4 {
+  margin: 0 0 8px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.dependencies-info p {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.missing-packages {
+  margin: 8px 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.missing-packages li {
+  margin-bottom: 4px;
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.size-warning {
+  margin-top: 12px !important;
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.install-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.install-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--color-surface);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.install-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--color-accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.2s;
+}
+
+.install-button:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.install-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.yolo-training-dialog .loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  color: var(--color-text-muted);
+}
+
+.yolo-training-dialog .config-section {
+  margin-bottom: 24px;
+}
+
+.yolo-training-dialog .config-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dataset-input {
+  display: flex;
+  gap: 8px;
+}
+
+.dataset-input input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.dataset-input input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.validate-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--color-button-secondary);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.validate-button:hover:not(:disabled) {
+  background: var(--color-hover);
+}
+
+.validate-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.validation-result {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.validation-result.valid {
+  background: var(--color-success-bg);
+  border: 1px solid var(--color-success);
+}
+
+.validation-result.invalid {
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error);
+}
+
+.validation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.validation-result.valid .validation-header {
+  color: var(--color-success);
+}
+
+.validation-result.invalid .validation-header {
+  color: var(--color-error);
+}
+
+.validation-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-muted);
+}
+
+.validation-errors,
+.validation-warnings {
+  margin: 8px 0 0 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+
+.validation-errors li {
+  color: var(--color-error);
+}
+
+.validation-warnings li {
+  color: var(--color-warning);
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.config-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.config-grid label span {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.config-grid select,
+.config-grid input {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.config-grid select:focus,
+.config-grid input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.model-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.model-name-label span {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.model-name-label input {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.model-name-label input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.yolo-training-dialog .progress-section {
+  margin-bottom: 16px;
+}
+
+.yolo-training-dialog .progress-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.yolo-training-dialog .progress-bar {
+  height: 8px;
+  background: var(--color-border, #333);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.yolo-training-dialog .progress-fill {
+  height: 100%;
+  background: var(--color-accent, #0078d4);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.yolo-training-dialog .progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-text-muted, #888);
+  margin-bottom: 12px;
+}
+
+.yolo-training-dialog .metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.yolo-training-dialog .metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--color-hover, #2a2a2a);
+  border-radius: 6px;
+}
+
+.yolo-training-dialog .metric-label {
+  font-size: 11px;
+  color: var(--color-text-muted, #888);
+  text-transform: uppercase;
+}
+
+.yolo-training-dialog .metric-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.yolo-training-dialog .progress-message {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--color-text-muted, #888);
+}
+
+.yolo-training-dialog .status-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.yolo-training-dialog .status-message.success {
+  background: var(--color-success-bg, #0d3d0d);
+  color: var(--color-success, #4caf50);
+}
+
+.yolo-training-dialog .status-message.error {
+  background: var(--color-error-bg, #3d0d0d);
+  color: var(--color-error, #f44336);
+}
+
+.yolo-training-dialog .dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--color-border, #333);
+  background: var(--color-surface, #1e1e1e);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.yolo-training-dialog .cancel-button,
+.yolo-training-dialog .start-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.yolo-training-dialog .cancel-button {
+  background: var(--color-button-secondary, #2d2d2d);
+  color: var(--color-text, #fff);
+  border: 1px solid var(--color-border, #333);
+}
+
+.yolo-training-dialog .cancel-button:hover {
+  background: var(--color-hover, #333);
+}
+
+.yolo-training-dialog .start-button {
+  background: var(--color-accent, #0078d4);
+  color: white;
+  border: none;
+}
+
+.yolo-training-dialog .start-button:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.yolo-training-dialog .start-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Dataset Source Tabs */
+.source-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.source-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--color-button-secondary);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.source-tab:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.source-tab.active {
+  background: var(--color-accent);
+  color: white;
+  border-color: var(--color-accent);
+}
+
+.source-tab:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Project Stats */
+.project-stats {
+  padding: 16px;
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.project-stats.valid {
+  background: var(--color-success-bg);
+  border: 1px solid var(--color-success);
+}
+
+.project-stats.invalid {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+}
+
+.stats-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.project-stats.valid .stats-header {
+  color: var(--color-success);
+}
+
+.project-stats.invalid .stats-header {
+  color: var(--color-warning);
+}
+
+.stats-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.stat-label {
+  color: var(--color-text-muted);
+}
+
+.stat-value {
+  font-weight: 500;
+  font-family: 'SF Mono', 'Monaco', monospace;
+  color: var(--color-text);
+}
+
+.stat-value.good {
+  color: var(--color-success);
+}
+
+.stat-value.warning {
+  color: var(--color-warning);
+}
+
+.stats-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* Preparing Section */
+.preparing-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  background: var(--color-hover);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+/* System Info Section */
+.system-info-section {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: var(--color-hover);
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+}
+
+.system-info-section h3 {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.system-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.system-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.info-label {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.info-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.info-value .info-sub {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+.info-value.truncate {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* GPU Status Indicators */
+.yolo-training-dialog .gpu-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.yolo-training-dialog .gpu-status-cuda {
+  background: linear-gradient(135deg, rgba(118, 185, 0, 0.15), rgba(118, 185, 0, 0.05));
+  border: 1px solid rgba(118, 185, 0, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-mps {
+  background: linear-gradient(135deg, rgba(147, 112, 219, 0.15), rgba(147, 112, 219, 0.05));
+  border: 1px solid rgba(147, 112, 219, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-available {
+  background: linear-gradient(135deg, rgba(255, 193, 7, 0.15), rgba(255, 193, 7, 0.05));
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-upgrade {
+  background: linear-gradient(135deg, rgba(255, 152, 0, 0.15), rgba(255, 152, 0, 0.05));
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-installing {
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.15), rgba(33, 150, 243, 0.05));
+  border: 1px solid rgba(33, 150, 243, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-error {
+  background: linear-gradient(135deg, rgba(244, 67, 54, 0.15), rgba(244, 67, 54, 0.05));
+  border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+.yolo-training-dialog .gpu-status-cpu {
+  background: var(--color-hover, #2a2a2a);
+  border: 1px solid var(--color-border, #333);
+}
+
+.yolo-training-dialog .gpu-status > svg {
+  flex-shrink: 0;
+}
+
+.yolo-training-dialog .gpu-status-cuda > svg {
+  color: #76b900;
+}
+
+.yolo-training-dialog .gpu-status-mps > svg {
+  color: #9370db;
+}
+
+.yolo-training-dialog .gpu-status-available > svg {
+  color: #ffc107;
+}
+
+.yolo-training-dialog .gpu-status-installing > svg {
+  color: #2196f3;
+}
+
+.yolo-training-dialog .gpu-status-error > svg {
+  color: #f44336;
+}
+
+.yolo-training-dialog .gpu-status-cpu > svg {
+  color: var(--color-text-muted, #888);
+}
+
+.yolo-training-dialog .gpu-status-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.yolo-training-dialog .gpu-status-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+}
+
+.yolo-training-dialog .gpu-status-device {
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.yolo-training-dialog .gpu-status-progress {
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+}
+
+.yolo-training-dialog .gpu-status-error-msg {
+  font-size: 12px;
+  color: #f44336;
+}
+
+.yolo-training-dialog .gpu-status-memory {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted, #888);
+  font-family: 'SF Mono', 'Monaco', monospace;
+}
+
+.yolo-training-dialog .gpu-install-btn,
+.yolo-training-dialog .gpu-retry-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--color-accent, #0078d4);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.2s;
+}
+
+.yolo-training-dialog .gpu-install-btn:hover:not(:disabled),
+.yolo-training-dialog .gpu-retry-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.yolo-training-dialog .gpu-install-btn:disabled,
+.yolo-training-dialog .gpu-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Backend Selection */
+.yolo-training-dialog .backend-selection {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: var(--color-hover, #2a2a2a);
+  border-radius: 8px;
+  border: 1px solid var(--color-border, #333);
+}
+
+.yolo-training-dialog .backend-selection h3 {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text, #fff);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.yolo-training-dialog .backend-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.yolo-training-dialog .backend-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--color-surface, #1e1e1e);
+  color: var(--color-text-muted, #888);
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.yolo-training-dialog .backend-btn:hover:not(:disabled) {
+  background: var(--color-hover, #333);
+  color: var(--color-text, #fff);
+}
+
+.yolo-training-dialog .backend-btn.active {
+  background: var(--color-accent, #0078d4);
+  color: white;
+  border-color: var(--color-accent, #0078d4);
+}
+
+.yolo-training-dialog .backend-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.yolo-training-dialog .backend-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted, #888);
+}

@@ -116,6 +116,32 @@
   line-height: 1.5;
 }
 
+.section-description .warning-text {
+  color: var(--warning-color, #f59e0b);
+  font-style: italic;
+}
+
+.keypoint-model-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--bg-success, rgba(16, 185, 129, 0.1));
+  border-radius: 6px;
+  border: 1px solid var(--border-success, rgba(16, 185, 129, 0.2));
+}
+
+.keypoint-model-info .model-name {
+  font-weight: 500;
+  color: var(--text-success, #10b981);
+  font-size: 13px;
+}
+
+.keypoint-model-info .model-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #666);
+}
+
 .section-header {
   margin-bottom: 4px;
 }

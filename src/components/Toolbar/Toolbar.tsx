@@ -24,6 +24,8 @@ import {
   BarChart3,
   Settings,
   GraduationCap,
+  Brain,
+  Database,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -33,6 +35,7 @@ import {
   parseImportV2,
   exportYOLODataset,
   exportToCSV,
+  exportYOLOKeypointDatasetZip,
 } from "../../utils/export-utils";
 import {
   extractAllFolliclesToZip,
@@ -54,7 +57,10 @@ import {
 } from "../LearnedDetectionDialog/LearnedDetectionDialog";
 import { ExportMenu, ExportType } from "../ExportMenu/ExportMenu";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
-import { ProjectImage, RectangleAnnotation } from "../../types";
+import { YOLOTrainingDialog } from "../YOLOTrainingDialog";
+import { YOLOModelManager } from "../YOLOModelManager";
+import { ProjectImage, RectangleAnnotation, FollicleOrigin } from "../../types";
+import type { BlobDetection } from "../../services/blobService";
 import { generateId } from "../../utils/id-generator";
 
 // Reusable icon button component
@@ -188,6 +194,10 @@ export const Toolbar: React.FC = () => {
     progress: '',
     error: null,
   });
+
+  // State for YOLO training dialogs
+  const [showYOLOTraining, setShowYOLOTraining] = useState(false);
+  const [showYOLOModelManager, setShowYOLOModelManager] = useState(false);
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -774,6 +784,41 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, currentProjectPath]);
 
+  // Export to YOLO Keypoint dataset format (for pose/keypoint training)
+  const handleExportYOLOKeypoint = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      const { blob, stats } = await exportYOLOKeypointDatasetZip(
+        images,
+        follicles
+      );
+
+      if (stats.annotationsWithOrigin === 0) {
+        alert(
+          "No annotations with origin data found. Please set follicle origins (entry point and direction) before exporting the keypoint dataset."
+        );
+        return;
+      }
+
+      // Download the ZIP file
+      const baseName = currentProjectPath
+        ? currentProjectPath
+            .replace(/\.[^/.]+$/, "")
+            .split(/[/\\]/)
+            .pop()
+        : "yolo_keypoint_dataset";
+      downloadBlob(blob, `${baseName}_keypoint.zip`);
+
+      console.log(
+        `Exported YOLO Keypoint dataset: ${stats.trainCount} train, ${stats.valCount} val (${stats.skippedNoOrigin} skipped without origin)`
+      );
+    } catch (error) {
+      console.error("Failed to export YOLO Keypoint dataset:", error);
+      alert("Failed to export YOLO Keypoint dataset. Please try again.");
+    }
+  }, [images, follicles, currentProjectPath]);
+
   // Handle export menu selection
   const handleExport = useCallback(
     (type: ExportType) => {
@@ -784,12 +829,15 @@ export const Toolbar: React.FC = () => {
         case "yolo":
           handleExportYOLO();
           break;
+        case "yolo-keypoint":
+          handleExportYOLOKeypoint();
+          break;
         case "csv":
           handleExportCSV();
           break;
       }
     },
-    [handleDownloadFollicles, handleExportYOLO, handleExportCSV],
+    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV],
   );
 
   // Colors for auto-detected annotations (cycles through)
@@ -829,8 +877,7 @@ export const Toolbar: React.FC = () => {
     setIsDetecting(true);
 
     try {
-      // Call the BLOB detection server with manual settings
-      const result = await blobService.blobDetect(blobSessionId, {
+      const detectSettings = {
         minWidth: detectionSettings.minWidth,
         maxWidth: detectionSettings.maxWidth,
         minHeight: detectionSettings.minHeight,
@@ -840,9 +887,25 @@ export const Toolbar: React.FC = () => {
         claheClipLimit: detectionSettings.claheClipLimit,
         claheTileSize: detectionSettings.claheTileSize,
         forceCPU: detectionSettings.forceCPU,
-      });
+      };
 
-      if (result.count === 0) {
+      // Use detectWithKeypoints if keypoint prediction is enabled
+      let detections: BlobDetection[];
+      let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+      let count = 0;
+
+      if (detectionSettings.useKeypointPrediction) {
+        const result = await blobService.detectWithKeypoints(blobSessionId, detectSettings);
+        detections = result.detections;
+        predictedOrigins = result.origins;
+        count = result.count;
+      } else {
+        const result = await blobService.blobDetect(blobSessionId, detectSettings);
+        detections = result.detections;
+        count = result.count;
+      }
+
+      if (count === 0) {
         console.log("No follicles detected");
         alert("No follicles detected. Try adjusting the detection settings.");
         setIsDetecting(false);
@@ -855,29 +918,38 @@ export const Toolbar: React.FC = () => {
       ).length;
       const now = Date.now();
 
-      const newFollicles: RectangleAnnotation[] = result.detections.map(
-        (detection, i) => ({
-          id: generateId(),
-          imageId: activeImageId,
-          shape: "rectangle" as const,
-          x: detection.x,
-          y: detection.y,
-          width: detection.width,
-          height: detection.height,
-          label: `Settings ${existingCount + i + 1}`,
-          notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
-          color:
-            ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
-          createdAt: now,
-          updatedAt: now,
-        }),
+      const newFollicles: RectangleAnnotation[] = detections.map(
+        (detection, i) => {
+          const detectionId = `det_${i}_${detection.x}_${detection.y}`;
+          const origin = predictedOrigins?.get(detectionId);
+
+          return {
+            id: generateId(),
+            imageId: activeImageId,
+            shape: "rectangle" as const,
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+            label: `Settings ${existingCount + i + 1}`,
+            notes: origin
+              ? `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%) + origin predicted`
+              : `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+            color:
+              ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+            createdAt: now,
+            updatedAt: now,
+            origin, // Include predicted origin if available
+          };
+        },
       );
 
       // Import all at once (supports undo as single action)
       const allFollicles = [...follicles, ...newFollicles];
       importFollicles(allFollicles);
 
-      console.log(`Detected ${result.count} follicles using manual settings`);
+      const originsCount = predictedOrigins?.size ?? 0;
+      console.log(`Detected ${count} follicles using manual settings${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
     } catch (error) {
       console.error("Failed to detect follicles:", error);
       alert(
@@ -923,9 +995,7 @@ export const Toolbar: React.FC = () => {
       setLearnedSettings(settings);
 
       try {
-        // Call the BLOB detection server with useLearnedStats mode
-        // The server will calculate stats from annotations and apply tolerance
-        const result = await blobService.blobDetect(blobSessionId, {
+        const learnedDetectSettings = {
           useLearnedStats: true,
           tolerance: settings.tolerance,
           darkBlobs: settings.darkBlobs,
@@ -933,9 +1003,25 @@ export const Toolbar: React.FC = () => {
           claheClipLimit: 3.0,
           claheTileSize: 8,
           forceCPU: detectionSettings.forceCPU,
-        });
+        };
 
-        if (result.count === 0) {
+        // Use detectWithKeypoints if keypoint prediction is enabled
+        let detections: BlobDetection[];
+        let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+        let count = 0;
+
+        if (detectionSettings.useKeypointPrediction) {
+          const result = await blobService.detectWithKeypoints(blobSessionId, learnedDetectSettings);
+          detections = result.detections;
+          predictedOrigins = result.origins;
+          count = result.count;
+        } else {
+          const result = await blobService.blobDetect(blobSessionId, learnedDetectSettings);
+          detections = result.detections;
+          count = result.count;
+        }
+
+        if (count === 0) {
           console.log("No follicles detected");
           alert(
             "No follicles detected. Try adjusting the tolerance or drawing more diverse annotations.",
@@ -950,30 +1036,39 @@ export const Toolbar: React.FC = () => {
         ).length;
         const now = Date.now();
 
-        const newFollicles: RectangleAnnotation[] = result.detections.map(
-          (detection, i) => ({
-            id: generateId(),
-            imageId: activeImageId,
-            shape: "rectangle" as const,
-            x: detection.x,
-            y: detection.y,
-            width: detection.width,
-            height: detection.height,
-            label: `Learned ${existingCount + i + 1}`,
-            notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
-            color:
-              ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
-            createdAt: now,
-            updatedAt: now,
-          }),
+        const newFollicles: RectangleAnnotation[] = detections.map(
+          (detection, i) => {
+            const detectionId = `det_${i}_${detection.x}_${detection.y}`;
+            const origin = predictedOrigins?.get(detectionId);
+
+            return {
+              id: generateId(),
+              imageId: activeImageId,
+              shape: "rectangle" as const,
+              x: detection.x,
+              y: detection.y,
+              width: detection.width,
+              height: detection.height,
+              label: `Learned ${existingCount + i + 1}`,
+              notes: origin
+                ? `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%) + origin predicted`
+                : `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+              color:
+                ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+              createdAt: now,
+              updatedAt: now,
+              origin, // Include predicted origin if available
+            };
+          },
         );
 
         // Import all at once (supports undo as single action)
         const allFollicles = [...follicles, ...newFollicles];
         importFollicles(allFollicles);
 
+        const originsCount = predictedOrigins?.size ?? 0;
         console.log(
-          `Detected ${result.count} follicles using learned settings (tolerance: ${settings.tolerance}%)`,
+          `Detected ${count} follicles using learned settings (tolerance: ${settings.tolerance}%)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`,
         );
       } catch (error) {
         console.error("Failed to detect follicles:", error);
@@ -993,6 +1088,7 @@ export const Toolbar: React.FC = () => {
       blobServerConnected,
       blobSessionId,
       canDetect,
+      detectionSettings,
     ],
   );
 
@@ -1322,6 +1418,22 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
+      {/* YOLO Training controls */}
+      <div className="toolbar-group" role="group" aria-label="YOLO Training">
+        <IconButton
+          icon={<Brain size={18} />}
+          tooltip="YOLO Keypoint Training"
+          onClick={() => setShowYOLOTraining(true)}
+        />
+        <IconButton
+          icon={<Database size={18} />}
+          tooltip="Manage YOLO Models"
+          onClick={() => setShowYOLOModelManager(true)}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
       {/* Zoom controls */}
       <div className="toolbar-group" role="group" aria-label="Zoom controls">
         <IconButton
@@ -1459,6 +1571,22 @@ export const Toolbar: React.FC = () => {
           settings={learnedSettings}
           onRun={handleLearnedDetect}
           onCancel={() => setShowLearnedDetection(false)}
+        />
+      )}
+
+      {/* YOLO Training Dialog */}
+      {showYOLOTraining && (
+        <YOLOTrainingDialog onClose={() => setShowYOLOTraining(false)} />
+      )}
+
+      {/* YOLO Model Manager Dialog */}
+      {showYOLOModelManager && (
+        <YOLOModelManager
+          onClose={() => setShowYOLOModelManager(false)}
+          onModelLoaded={(modelPath) => {
+            console.log('Model loaded:', modelPath);
+            setShowYOLOModelManager(false);
+          }}
         />
       )}
     </div>

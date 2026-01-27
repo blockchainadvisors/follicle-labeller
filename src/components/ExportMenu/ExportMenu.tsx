@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Download, FileText, Table, Image, ChevronDown } from 'lucide-react';
+import { Download, FileText, Table, Image, ChevronDown, Target } from 'lucide-react';
 import './ExportMenu.css';
 
-export type ExportType = 'images' | 'yolo' | 'csv';
+export type ExportType = 'images' | 'yolo' | 'yolo-keypoint' | 'csv';
 
 interface ExportMenuProps {
   onExport: (type: ExportType) => void;
@@ -73,6 +73,17 @@ export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps
             <div className="option-text">
               <span className="option-label">YOLO Dataset</span>
               <span className="option-description">Images + labels for training</span>
+            </div>
+          </button>
+
+          <button
+            className="export-option"
+            onClick={() => handleExport('yolo-keypoint')}
+          >
+            <Target size={16} />
+            <div className="option-text">
+              <span className="option-label">YOLO Keypoint Dataset</span>
+              <span className="option-description">Origin + direction for pose training</span>
             </div>
           </button>
 

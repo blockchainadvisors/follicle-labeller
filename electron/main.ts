@@ -19,6 +19,9 @@ import {
   getSetupStatus,
   getGPUHardwareInfo,
   installGPUPackages,
+  checkYOLODependencies,
+  installYOLODependencies,
+  upgradePyTorchToCUDA,
 } from "./python-env";
 
 // Set Windows AppUserModelId for proper notifications (must be early)
@@ -1123,6 +1126,411 @@ ipcMain.handle("blob:restartServer", async () => {
   await stopBlobServer();
   return startBlobServer();
 });
+
+// Check YOLO training dependencies
+ipcMain.handle("yolo:checkDependencies", async () => {
+  return checkYOLODependencies();
+});
+
+// Install YOLO training dependencies
+ipcMain.handle("yolo:installDependencies", async () => {
+  return installYOLODependencies((message, percent) => {
+    mainWindow?.webContents.send("yolo:installProgress", { message, percent });
+  });
+});
+
+// Upgrade PyTorch to CUDA version for GPU training
+ipcMain.handle("yolo:upgradeToCUDA", async () => {
+  return upgradePyTorchToCUDA((message, percent) => {
+    mainWindow?.webContents.send("yolo:installProgress", { message, percent });
+  });
+});
+
+// ============================================
+// YOLO Keypoint Training API
+// ============================================
+
+// Helper for making HTTP requests to the blob server
+function makeBlobServerRequest(
+  path: string,
+  method: string,
+  body?: any,
+  timeoutMs: number = 30000
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const http = require("http");
+    const postData = body ? JSON.stringify(body) : "";
+
+    const options = {
+      hostname: "127.0.0.1",
+      port: BLOB_SERVER_PORT,
+      path,
+      method,
+      timeout: timeoutMs,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData),
+      },
+    };
+
+    const req = http.request(options, (res: any) => {
+      let data = "";
+      res.on("data", (chunk: string) => {
+        data += chunk;
+      });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 400) {
+            reject(new Error(parsed.detail || `HTTP ${res.statusCode}`));
+          } else {
+            resolve(parsed);
+          }
+        } catch {
+          if (res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          } else {
+            resolve(data);
+          }
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Request timed out"));
+    });
+
+    if (postData) {
+      req.write(postData);
+    }
+    req.end();
+  });
+}
+
+// Get YOLO keypoint service status
+ipcMain.handle("yolo-keypoint:getStatus", async () => {
+  try {
+    return await makeBlobServerRequest("/yolo-keypoint/status", "GET");
+  } catch (error) {
+    return {
+      available: false,
+      sseAvailable: false,
+      activeTrainingJobs: 0,
+    };
+  }
+});
+
+// Get system info for training (CPU/GPU, memory)
+ipcMain.handle("yolo-keypoint:getSystemInfo", async () => {
+  try {
+    return await makeBlobServerRequest("/yolo-keypoint/system-info", "GET");
+  } catch (error) {
+    return {
+      device: "unknown",
+      device_name: "Unknown",
+      error: error instanceof Error ? error.message : "Failed to get system info",
+    };
+  }
+});
+
+// Validate dataset
+ipcMain.handle("yolo-keypoint:validateDataset", async (_, datasetPath: string) => {
+  return makeBlobServerRequest("/yolo-keypoint/validate-dataset", "POST", {
+    datasetPath,
+  });
+});
+
+// Start training
+ipcMain.handle(
+  "yolo-keypoint:startTraining",
+  async (_, datasetPath: string, config: any, modelName?: string) => {
+    return makeBlobServerRequest("/yolo-keypoint/train/start", "POST", {
+      datasetPath,
+      config,
+      modelName,
+    });
+  }
+);
+
+// Stop training
+ipcMain.handle("yolo-keypoint:stopTraining", async (_, jobId: string) => {
+  return makeBlobServerRequest(`/yolo-keypoint/train/stop/${jobId}`, "POST");
+});
+
+// Active SSE connections for training progress
+const activeSseConnections: Map<string, { request: any; closed: boolean }> =
+  new Map();
+
+// Subscribe to training progress via SSE (proxied through main process)
+ipcMain.handle(
+  "yolo-keypoint:subscribeProgress",
+  async (event, jobId: string) => {
+    const http = require("http");
+
+    // Close any existing connection for this job
+    const existing = activeSseConnections.get(jobId);
+    if (existing && !existing.closed) {
+      existing.request.destroy();
+      existing.closed = true;
+    }
+
+    return new Promise<void>((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: BLOB_SERVER_PORT,
+          path: `/yolo-keypoint/train/progress/${jobId}`,
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        },
+        (res: any) => {
+          if (res.statusCode !== 200) {
+            console.error(`SSE connection failed with status ${res.statusCode}`);
+            event.sender.send("yolo-keypoint:progress-error", jobId, `HTTP ${res.statusCode}`);
+            resolve();
+            return;
+          }
+
+          res.setEncoding("utf8");
+          let buffer = "";
+
+          res.on("data", (chunk: string) => {
+            buffer += chunk;
+
+            // Normalize line endings (SSE can use \r\n or \n)
+            buffer = buffer.replace(/\r\n/g, "\n");
+
+            // Parse SSE events (format: "event: name\ndata: json\n\n")
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || ""; // Keep incomplete event in buffer
+
+            for (const eventBlock of events) {
+              if (!eventBlock.trim()) continue;
+
+              const lines = eventBlock.split("\n");
+              let eventType = "message";
+              let eventData = "";
+
+              for (const line of lines) {
+                if (line.startsWith("event:")) {
+                  eventType = line.slice(6).trim();
+                } else if (line.startsWith("data:")) {
+                  eventData = line.slice(5).trim();
+                }
+              }
+
+              if (eventType === "progress" && eventData) {
+                try {
+                  const progress = JSON.parse(eventData);
+                  event.sender.send("yolo-keypoint:progress", jobId, progress);
+
+                  // Check if training is done
+                  if (
+                    ["completed", "failed", "stopped"].includes(progress.status)
+                  ) {
+                    event.sender.send("yolo-keypoint:progress-complete", jobId);
+                    req.destroy();
+                    activeSseConnections.delete(jobId);
+                  }
+                } catch (e) {
+                  console.error("Failed to parse SSE progress:", e);
+                }
+              }
+            }
+          });
+
+          res.on("end", () => {
+            activeSseConnections.delete(jobId);
+            event.sender.send("yolo-keypoint:progress-complete", jobId);
+          });
+
+          res.on("error", (err: Error) => {
+            console.error("SSE response error:", err);
+            event.sender.send("yolo-keypoint:progress-error", jobId, err.message);
+            activeSseConnections.delete(jobId);
+          });
+
+          resolve();
+        }
+      );
+
+      req.on("error", (err: Error) => {
+        console.error("SSE request error:", err);
+        event.sender.send("yolo-keypoint:progress-error", jobId, err.message);
+        activeSseConnections.delete(jobId);
+        resolve();
+      });
+
+      activeSseConnections.set(jobId, { request: req, closed: false });
+      req.end();
+    });
+  }
+);
+
+// Unsubscribe from training progress
+ipcMain.handle("yolo-keypoint:unsubscribeProgress", async (_, jobId: string) => {
+  const connection = activeSseConnections.get(jobId);
+  if (connection && !connection.closed) {
+    connection.request.destroy();
+    connection.closed = true;
+  }
+  activeSseConnections.delete(jobId);
+});
+
+// List models
+ipcMain.handle("yolo-keypoint:listModels", async () => {
+  return makeBlobServerRequest("/yolo-keypoint/models", "GET");
+});
+
+// Load model
+ipcMain.handle("yolo-keypoint:loadModel", async (_, modelPath: string) => {
+  return makeBlobServerRequest("/yolo-keypoint/load-model", "POST", {
+    modelPath,
+  });
+});
+
+// Predict
+ipcMain.handle("yolo-keypoint:predict", async (_, imageData: string) => {
+  return makeBlobServerRequest("/yolo-keypoint/predict", "POST", {
+    imageData,
+  });
+});
+
+// Show save dialog for ONNX export
+ipcMain.handle(
+  "yolo-keypoint:showExportDialog",
+  async (_, defaultFileName: string) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return { canceled: true };
+
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: defaultFileName,
+      filters: [{ name: "ONNX Model", extensions: ["onnx"] }],
+    });
+
+    return {
+      canceled: result.canceled,
+      filePath: result.filePath,
+    };
+  }
+);
+
+// Export ONNX - use longer timeout (5 min) since it may install dependencies
+ipcMain.handle(
+  "yolo-keypoint:exportONNX",
+  async (_, modelPath: string, outputPath: string) => {
+    return makeBlobServerRequest(
+      "/yolo-keypoint/export-onnx",
+      "POST",
+      {
+        modelPath,
+        outputPath,
+      },
+      300000 // 5 minute timeout for ONNX export
+    );
+  }
+);
+
+// Delete model
+ipcMain.handle("yolo-keypoint:deleteModel", async (_, modelId: string) => {
+  const http = require("http");
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BLOB_SERVER_PORT,
+        path: `/yolo-keypoint/models/${modelId}`,
+        method: "DELETE",
+        timeout: 10000,
+      },
+      (res: any) => {
+        let data = "";
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            resolve({ success: res.statusCode < 400 });
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Request timed out"));
+    });
+    req.end();
+  });
+});
+
+// Write dataset files to temp directory (for training from current project)
+ipcMain.handle(
+  "yolo-keypoint:writeDatasetToTemp",
+  async (
+    _,
+    files: Array<{ path: string; content: ArrayBuffer | string }>
+  ) => {
+    try {
+      const os = require("os");
+      const crypto = require("crypto");
+      const fsPromises = require("fs").promises;
+
+      // Create unique temp directory
+      const tempId = crypto.randomBytes(8).toString("hex");
+      const datasetPath = path.join(
+        os.tmpdir(),
+        "follicle-labeller-datasets",
+        `dataset_${tempId}`
+      );
+
+      // Create base directory
+      await fsPromises.mkdir(datasetPath, { recursive: true });
+
+      // Write all files
+      for (const file of files) {
+        const filePath = path.join(datasetPath, file.path);
+        const fileDir = path.dirname(filePath);
+
+        // Ensure directory exists
+        await fsPromises.mkdir(fileDir, { recursive: true });
+
+        // Write file content - fix data.yaml to use absolute path
+        if (typeof file.content === "string") {
+          let content = file.content;
+          // Fix data.yaml to use absolute path instead of relative "."
+          if (file.path === "data.yaml") {
+            // Replace "path: ." with absolute path (use forward slashes for YOLO compatibility)
+            const absolutePath = datasetPath.replace(/\\/g, "/");
+            content = content.replace(/^path:\s*\.?\s*$/m, `path: ${absolutePath}`);
+          }
+          await fsPromises.writeFile(filePath, content, "utf8");
+        } else {
+          // ArrayBuffer - convert to Buffer
+          await fsPromises.writeFile(filePath, Buffer.from(file.content));
+        }
+      }
+
+      console.log(`[YOLO Dataset] Written ${files.length} files to ${datasetPath}`);
+
+      return { success: true, datasetPath };
+    } catch (error) {
+      console.error("[YOLO Dataset] Error writing dataset:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to write dataset",
+      };
+    }
+  }
+);
 
 // ============================================
 // File Handling

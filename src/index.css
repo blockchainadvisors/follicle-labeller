@@ -549,6 +549,69 @@ body {
   padding: 8px;
 }
 
+/* Origin actions group */
+.origin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.origin-actions .hint-text {
+  margin: 0;
+  padding: 4px 0;
+}
+
+/* Predict Origins Button */
+.predict-origins-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid #4ECDC4;
+  border-radius: 6px;
+  background-color: rgba(78, 205, 196, 0.1);
+  color: #4ECDC4;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.predict-origins-button:hover:not(:disabled) {
+  background-color: rgba(78, 205, 196, 0.2);
+  border-color: #4ECDC4;
+}
+
+.predict-origins-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.predict-origins-button.small {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.predict-origins-button .spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.prediction-error {
+  display: block;
+  color: var(--warning-color, #f59e0b);
+  font-size: 11px;
+  text-align: center;
+  padding: 4px;
+}
+
 /* Unlock warning dialog */
 .unlock-warning-overlay {
   position: fixed;

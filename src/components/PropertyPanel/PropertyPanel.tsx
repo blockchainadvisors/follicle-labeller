@@ -1,11 +1,15 @@
-import React, { useState } from 'react';
-import { Lock, Unlock, AlertTriangle } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { Lock, Unlock, AlertTriangle, Crosshair, Loader2 } from 'lucide-react';
 import { useFollicleStore } from '../../store/follicleStore';
 import { useProjectStore } from '../../store/projectStore';
-import { isCircle, isRectangle, isLinear } from '../../types';
+import { isCircle, isRectangle, isLinear, RectangleAnnotation } from '../../types';
+import { blobService } from '../../services/blobService';
+import { yoloKeypointService } from '../../services/yoloKeypointService';
 
 export const PropertyPanel: React.FC = () => {
   const [showUnlockWarning, setShowUnlockWarning] = useState(false);
+  const [isPredicting, setIsPredicting] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
 
   const selectedIds = useFollicleStore(state => state.selectedIds);
   const follicles = useFollicleStore(state => state.follicles);
@@ -19,6 +23,64 @@ export const PropertyPanel: React.FC = () => {
 
   // Get selected annotations that belong to the active image
   const selectedFollicles = follicles.filter(f => selectedIds.has(f.id) && f.imageId === activeImageId);
+
+  // Get rectangles without origins (eligible for prediction)
+  const rectanglesWithoutOrigins = selectedFollicles.filter(
+    (f): f is RectangleAnnotation => isRectangle(f) && !f.origin
+  );
+
+  // Handle prediction for selected rectangles
+  const handlePredictOrigins = useCallback(async () => {
+    if (rectanglesWithoutOrigins.length === 0) return;
+
+    const sessionId = blobService.getSessionId();
+    if (!sessionId) {
+      setPredictionError('No image session. Please load an image first.');
+      return;
+    }
+
+    setIsPredicting(true);
+    setPredictionError(null);
+
+    try {
+      // Check if models are available
+      const models = await yoloKeypointService.listModels();
+      if (models.length === 0) {
+        setPredictionError('No trained YOLO models available. Train a model first.');
+        return;
+      }
+
+      // Predict origins for rectangles without them
+      const predictions = await blobService.predictOriginsForRectangles(
+        sessionId,
+        rectanglesWithoutOrigins.map(r => ({
+          id: r.id,
+          x: r.x,
+          y: r.y,
+          width: r.width,
+          height: r.height,
+        }))
+      );
+
+      // Update annotations with predicted origins
+      let successCount = 0;
+      for (const [id, origin] of predictions) {
+        updateFollicle(id, { origin });
+        successCount++;
+      }
+
+      if (successCount === 0) {
+        setPredictionError('No origins could be predicted. Try with different annotations.');
+      } else if (successCount < rectanglesWithoutOrigins.length) {
+        setPredictionError(`Predicted ${successCount}/${rectanglesWithoutOrigins.length} origins.`);
+      }
+    } catch (error) {
+      console.error('Failed to predict origins:', error);
+      setPredictionError(error instanceof Error ? error.message : 'Prediction failed');
+    } finally {
+      setIsPredicting(false);
+    }
+  }, [rectanglesWithoutOrigins, updateFollicle]);
 
   // No selection
   if (selectedFollicles.length === 0) {
@@ -94,6 +156,33 @@ export const PropertyPanel: React.FC = () => {
             <span className="color-hint">Apply to all selected</span>
           </div>
         </div>
+
+        {/* Predict Origins button for unlocked rectangles */}
+        {rectanglesWithoutOrigins.length > 0 && (
+          <div className="property-group">
+            <label>Origin Prediction</label>
+            <button
+              className="predict-origins-button"
+              onClick={handlePredictOrigins}
+              disabled={isPredicting}
+            >
+              {isPredicting ? (
+                <>
+                  <Loader2 size={14} className="spin" />
+                  Predicting...
+                </>
+              ) : (
+                <>
+                  <Crosshair size={14} />
+                  Predict Origins ({rectanglesWithoutOrigins.length})
+                </>
+              )}
+            </button>
+            {predictionError && (
+              <span className="prediction-error">{predictionError}</span>
+            )}
+          </div>
+        )}
 
         <div className="property-actions">
           <button
@@ -211,8 +300,28 @@ export const PropertyPanel: React.FC = () => {
               </div>
             </>
           ) : (
-            <div className="property-group hint-text">
-              <span>Double-click to set origin point</span>
+            <div className="property-group origin-actions">
+              <span className="hint-text">Double-click to set origin manually</span>
+              <button
+                className="predict-origins-button small"
+                onClick={handlePredictOrigins}
+                disabled={isPredicting}
+              >
+                {isPredicting ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    Predicting...
+                  </>
+                ) : (
+                  <>
+                    <Crosshair size={14} />
+                    Predict Origin
+                  </>
+                )}
+              </button>
+              {predictionError && (
+                <span className="prediction-error">{predictionError}</span>
+              )}
             </div>
           )}
         </>

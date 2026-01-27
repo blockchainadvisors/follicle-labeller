@@ -13,6 +13,13 @@ import {
   isLinear
 } from '../types';
 import { generateImageId } from '../store/projectStore';
+import {
+  exportYOLOKeypointDataset,
+  createKeypointDatasetZip,
+  KeypointExportConfig,
+  DEFAULT_KEYPOINT_EXPORT_CONFIG,
+  KeypointDatasetStats,
+} from './yolo-keypoint-export';
 
 /**
  * Enhanced annotation export with additional fields for ML training.
@@ -669,3 +676,32 @@ export function exportToCSV(
 
   return rows.join('\n');
 }
+
+// ============================================
+// YOLO Keypoint Export Functions
+// ============================================
+
+/**
+ * Export annotations with follicle origin data as YOLO keypoint dataset ZIP.
+ *
+ * This creates a dataset for training YOLO11-pose models to detect
+ * follicle origin points and growth directions.
+ *
+ * @param images Map of project images
+ * @param follicles All annotations
+ * @param config Export configuration (optional)
+ * @returns Promise resolving to ZIP blob and statistics
+ */
+export async function exportYOLOKeypointDatasetZip(
+  images: Map<string, ProjectImage>,
+  follicles: Follicle[],
+  config: KeypointExportConfig = DEFAULT_KEYPOINT_EXPORT_CONFIG
+): Promise<{ blob: Blob; stats: KeypointDatasetStats }> {
+  const { files, stats } = await exportYOLOKeypointDataset(images, follicles, config);
+  const blob = await createKeypointDatasetZip(files);
+  return { blob, stats };
+}
+
+// Re-export types for convenience
+export type { KeypointExportConfig, KeypointDatasetStats };
+export { DEFAULT_KEYPOINT_EXPORT_CONFIG };

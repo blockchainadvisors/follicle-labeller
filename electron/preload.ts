@@ -314,6 +314,227 @@ const electronAPI = {
       return () => ipcRenderer.removeListener("gpu:installProgress", handler);
     },
   },
+
+  // YOLO Keypoint Training API
+  yoloKeypoint: {
+    // Check if YOLO dependencies are installed
+    checkDependencies: (): Promise<{
+      installed: boolean;
+      missing: string[];
+      estimatedSize: string;
+    }> => ipcRenderer.invoke("yolo:checkDependencies"),
+
+    // Install YOLO dependencies
+    installDependencies: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("yolo:installDependencies"),
+
+    // Upgrade PyTorch to CUDA version for GPU training
+    upgradeToCUDA: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("yolo:upgradeToCUDA"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("yolo:installProgress", handler);
+      return () => ipcRenderer.removeListener("yolo:installProgress", handler);
+    },
+
+    // Get service status
+    getStatus: (): Promise<{
+      available: boolean;
+      sseAvailable: boolean;
+      activeTrainingJobs: number;
+    }> => ipcRenderer.invoke("yolo-keypoint:getStatus"),
+
+    // Get system info (CPU/GPU, memory)
+    getSystemInfo: (): Promise<{
+      python_version: string;
+      platform: string;
+      cpu_count: number;
+      cpu_percent: number;
+      memory_total_gb: number;
+      memory_used_gb: number;
+      memory_percent: number;
+      device: string;
+      device_name: string;
+      cuda_available: boolean;
+      mps_available: boolean;
+      torch_version: string | null;
+      gpu_memory_total_gb: number | null;
+      gpu_memory_used_gb: number | null;
+    }> => ipcRenderer.invoke("yolo-keypoint:getSystemInfo"),
+
+    // Validate dataset
+    validateDataset: (
+      datasetPath: string
+    ): Promise<{
+      valid: boolean;
+      trainImages: number;
+      valImages: number;
+      trainLabels: number;
+      valLabels: number;
+      errors: string[];
+      warnings: string[];
+    }> => ipcRenderer.invoke("yolo-keypoint:validateDataset", datasetPath),
+
+    // Start training
+    startTraining: (
+      datasetPath: string,
+      config: {
+        modelSize?: string;
+        epochs?: number;
+        imgSize?: number;
+        batchSize?: number;
+        patience?: number;
+        device?: string;
+      },
+      modelName?: string
+    ): Promise<{ jobId: string; status: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:startTraining", datasetPath, config, modelName),
+
+    // Stop training
+    stopTraining: (jobId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:stopTraining", jobId),
+
+    // Subscribe to training progress via IPC (main process proxies SSE)
+    subscribeProgress: (
+      jobId: string,
+      onProgress: (progress: {
+        status: string;
+        epoch: number;
+        totalEpochs: number;
+        loss: number;
+        boxLoss: number;
+        poseLoss: number;
+        kobjLoss: number;
+        metrics: Record<string, number>;
+        eta: string;
+        message: string;
+      }) => void,
+      onError: (error: string) => void,
+      onComplete: () => void
+    ): (() => void) => {
+      // Set up IPC listeners for progress events from main process
+      const progressHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        progress: any
+      ) => {
+        if (receivedJobId !== jobId) return;
+        // Map snake_case to camelCase
+        onProgress({
+          status: progress.status || "",
+          epoch: progress.epoch || 0,
+          totalEpochs: progress.total_epochs || 0,
+          loss: progress.loss || 0,
+          boxLoss: progress.box_loss || 0,
+          poseLoss: progress.pose_loss || 0,
+          kobjLoss: progress.kobj_loss || 0,
+          metrics: progress.metrics || {},
+          eta: progress.eta || "",
+          message: progress.message || "",
+        });
+      };
+
+      const errorHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        error: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        onError(error);
+      };
+
+      const completeHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        cleanup();
+        onComplete();
+      };
+
+      // Register listeners
+      ipcRenderer.on("yolo-keypoint:progress", progressHandler);
+      ipcRenderer.on("yolo-keypoint:progress-error", errorHandler);
+      ipcRenderer.on("yolo-keypoint:progress-complete", completeHandler);
+
+      // Start the SSE subscription in main process
+      ipcRenderer.invoke("yolo-keypoint:subscribeProgress", jobId);
+
+      // Cleanup function
+      const cleanup = () => {
+        ipcRenderer.removeListener("yolo-keypoint:progress", progressHandler);
+        ipcRenderer.removeListener(
+          "yolo-keypoint:progress-error",
+          errorHandler
+        );
+        ipcRenderer.removeListener(
+          "yolo-keypoint:progress-complete",
+          completeHandler
+        );
+        ipcRenderer.invoke("yolo-keypoint:unsubscribeProgress", jobId);
+      };
+
+      return cleanup;
+    },
+
+    // List trained models
+    listModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+      }>;
+    }> => ipcRenderer.invoke("yolo-keypoint:listModels"),
+
+    // Load model for inference
+    loadModel: (modelPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:loadModel", modelPath),
+
+    // Run prediction
+    predict: (
+      imageData: string
+    ): Promise<{
+      success: boolean;
+      prediction?: {
+        origin: { x: number; y: number };
+        directionEndpoint: { x: number; y: number };
+        confidence: number;
+      };
+      message?: string;
+    }> => ipcRenderer.invoke("yolo-keypoint:predict", imageData),
+
+    // Show save dialog for ONNX export
+    showExportDialog: (
+      defaultFileName: string
+    ): Promise<{ canceled: boolean; filePath?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:showExportDialog", defaultFileName),
+
+    // Export to ONNX
+    exportONNX: (
+      modelPath: string,
+      outputPath: string
+    ): Promise<{ success: boolean; outputPath?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:exportONNX", modelPath, outputPath),
+
+    // Delete model
+    deleteModel: (modelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:deleteModel", modelId),
+
+    // Write dataset files to temp directory (for training from current project)
+    writeDatasetToTemp: (
+      files: Array<{ path: string; content: ArrayBuffer | string }>
+    ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:writeDatasetToTemp", files),
+  },
 };
 
 // Expose the API to the renderer process

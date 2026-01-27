@@ -19,8 +19,10 @@ Usage:
 """
 
 import argparse
+import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import signal
@@ -143,6 +145,13 @@ class SyncAnnotationsRequest(BaseModel):
 class BlobDetectRequest(BaseModel):
     sessionId: str
     settings: Optional[Dict[str, Any]] = None
+
+class CropRegionRequest(BaseModel):
+    sessionId: str
+    x: float
+    y: float
+    width: float
+    height: float
 
 class SessionRequest(BaseModel):
     sessionId: str
@@ -1016,6 +1025,47 @@ async def blob_detect(req: BlobDetectRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post('/crop-region')
+async def crop_region(req: CropRegionRequest):
+    """
+    Extract a cropped region from the session image as base64.
+    Used for YOLO keypoint inference on detected blobs.
+
+    Returns:
+        - image: Base64 encoded crop image
+        - width: Crop width
+        - height: Crop height
+    """
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
+
+    session = sessions[req.sessionId]
+    image = session['image']
+    img_height, img_width = image.shape[:2]
+
+    # Ensure coordinates are within image bounds
+    x = max(0, int(req.x))
+    y = max(0, int(req.y))
+    width = min(int(req.width), img_width - x)
+    height = min(int(req.height), img_height - y)
+
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail='Invalid crop region')
+
+    # Extract crop
+    crop = image[y:y+height, x:x+width]
+
+    # Encode as base64 PNG
+    _, buffer = cv2.imencode('.png', crop)
+    crop_base64 = base64.b64encode(buffer).decode('utf-8')
+
+    return {
+        'image': crop_base64,
+        'width': width,
+        'height': height
+    }
+
+
 @app.post('/clear-session')
 async def clear_session(req: SessionRequest):
     """
@@ -1045,6 +1095,364 @@ async def shutdown():
         server_instance.should_exit = True
 
     return {'status': 'shutting down'}
+
+
+# ============================================
+# YOLO Keypoint Training Endpoints
+# ============================================
+
+# Import YOLO keypoint service
+try:
+    from yolo_keypoint_service import (
+        get_yolo_keypoint_service,
+        TrainingConfig,
+        TrainingProgress,
+        YOLO_AVAILABLE as YOLO_KEYPOINT_AVAILABLE
+    )
+except ImportError:
+    YOLO_KEYPOINT_AVAILABLE = False
+    get_yolo_keypoint_service = None
+    TrainingConfig = None
+    TrainingProgress = None
+    logger.warning("YOLO keypoint service not available")
+
+# SSE support for training progress
+try:
+    from sse_starlette.sse import EventSourceResponse
+    SSE_AVAILABLE = True
+except ImportError:
+    SSE_AVAILABLE = False
+    EventSourceResponse = None
+    logger.warning("sse-starlette not installed. Training progress streaming will not be available.")
+
+# Training progress queues (for SSE)
+training_progress_queues: Dict[str, asyncio.Queue] = {}
+
+
+class ValidateDatasetRequest(BaseModel):
+    datasetPath: str
+
+
+class StartTrainingRequest(BaseModel):
+    datasetPath: str
+    config: Optional[Dict[str, Any]] = None
+    modelName: Optional[str] = None
+
+
+class LoadModelRequest(BaseModel):
+    modelPath: str
+
+
+class PredictRequest(BaseModel):
+    imageData: str  # base64 encoded
+
+
+class ExportONNXRequest(BaseModel):
+    modelPath: str
+    outputPath: str
+
+
+@app.post('/yolo-keypoint/validate-dataset')
+async def yolo_validate_dataset(req: ValidateDatasetRequest):
+    """
+    Validate a YOLO keypoint dataset structure.
+
+    Returns validation result with image/label counts and any errors.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    result = service.validate_dataset(req.datasetPath)
+
+    return result.to_dict()
+
+
+@app.post('/yolo-keypoint/train/start')
+async def yolo_start_training(req: StartTrainingRequest):
+    """
+    Start YOLO keypoint model training.
+
+    Returns job_id for progress tracking.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+
+    # Parse config
+    config_dict = req.config or {}
+    config = TrainingConfig(
+        model_size=config_dict.get('modelSize', 'n'),
+        epochs=config_dict.get('epochs', 100),
+        img_size=config_dict.get('imgSize', 640),
+        batch_size=config_dict.get('batchSize', 16),
+        patience=config_dict.get('patience', 50),
+        device=config_dict.get('device', 'auto'),
+    )
+
+    # Create progress queue for this job
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    # Capture the event loop BEFORE starting the training thread
+    # This allows the callback to safely post updates from the training thread
+    main_loop = asyncio.get_running_loop()
+
+    def progress_callback(progress: TrainingProgress):
+        # Put progress in queue (non-blocking) using the captured main loop
+        try:
+            logger.info(f"Progress callback: epoch {progress.epoch}/{progress.total_epochs}, status={progress.status}")
+            asyncio.run_coroutine_threadsafe(
+                progress_queue.put(progress.to_dict()),
+                main_loop
+            )
+            logger.info(f"Progress queued successfully, queue size now: {progress_queue.qsize()}")
+        except Exception as e:
+            logger.warning(f"Failed to queue progress update: {e}")
+
+    # Start training
+    job_id, _ = await service.train(
+        dataset_path=req.datasetPath,
+        config=config,
+        progress_callback=progress_callback,
+        model_name=req.modelName
+    )
+
+    if job_id:
+        training_progress_queues[job_id] = progress_queue
+
+    return {
+        'jobId': job_id,
+        'status': 'started',
+        'config': config_dict
+    }
+
+
+@app.get('/yolo-keypoint/train/progress/{job_id}')
+async def yolo_training_progress(job_id: str):
+    """
+    Stream training progress via Server-Sent Events.
+    """
+    if not SSE_AVAILABLE:
+        raise HTTPException(status_code=503, detail='SSE not available. Install sse-starlette.')
+
+    if job_id not in training_progress_queues:
+        raise HTTPException(status_code=404, detail='Training job not found')
+
+    queue = training_progress_queues[job_id]
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    # Wait for progress update with timeout
+                    progress = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield {
+                        'event': 'progress',
+                        'data': json.dumps(progress)
+                    }
+
+                    # Check if training is done
+                    status = progress.get('status', '')
+                    if status in ('completed', 'failed', 'stopped'):
+                        break
+
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield {
+                        'event': 'heartbeat',
+                        'data': json.dumps({'status': 'alive'})
+                    }
+
+        finally:
+            # Cleanup queue
+            if job_id in training_progress_queues:
+                del training_progress_queues[job_id]
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post('/yolo-keypoint/train/stop/{job_id}')
+async def yolo_stop_training(job_id: str):
+    """
+    Stop a running training job.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    success = service.stop_training(job_id)
+
+    return {
+        'success': success,
+        'jobId': job_id
+    }
+
+
+@app.get('/yolo-keypoint/models')
+async def yolo_list_models():
+    """
+    List all trained YOLO keypoint models.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    models = service.list_models()
+
+    return {
+        'models': [m.to_dict() for m in models]
+    }
+
+
+@app.post('/yolo-keypoint/load-model')
+async def yolo_load_model(req: LoadModelRequest):
+    """
+    Load a trained model for inference.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    success = service.load_model(req.modelPath)
+
+    return {
+        'success': success,
+        'modelPath': req.modelPath
+    }
+
+
+@app.post('/yolo-keypoint/predict')
+async def yolo_predict(req: PredictRequest):
+    """
+    Run keypoint prediction on a cropped follicle image.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+
+    # Decode base64 image
+    try:
+        image_data = req.imageData
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+        image_bytes = base64.b64decode(image_data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f'Failed to decode image: {e}')
+
+    # Run prediction
+    result = service.predict(image_bytes)
+
+    if result is None:
+        return {
+            'success': False,
+            'prediction': None,
+            'message': 'No keypoints detected'
+        }
+
+    return {
+        'success': True,
+        'prediction': result.to_dict()
+    }
+
+
+@app.post('/yolo-keypoint/export-onnx')
+async def yolo_export_onnx(req: ExportONNXRequest):
+    """
+    Export a trained model to ONNX format.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    output_path = service.export_onnx(req.modelPath, req.outputPath)
+
+    return {
+        'success': output_path is not None,
+        'outputPath': output_path
+    }
+
+
+@app.delete('/yolo-keypoint/models/{model_id}')
+async def yolo_delete_model(model_id: str):
+    """
+    Delete a trained model.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    success = service.delete_model(model_id)
+
+    return {
+        'success': success,
+        'modelId': model_id
+    }
+
+
+@app.get('/yolo-keypoint/status')
+async def yolo_keypoint_status():
+    """
+    Get YOLO keypoint service status.
+    """
+    return {
+        'available': YOLO_KEYPOINT_AVAILABLE,
+        'sseAvailable': SSE_AVAILABLE,
+        'activeTrainingJobs': len(training_progress_queues),
+        'jobIds': list(training_progress_queues.keys()),
+        'queueSizes': {k: v.qsize() for k, v in training_progress_queues.items()}
+    }
+
+
+@app.get('/yolo-keypoint/system-info')
+async def yolo_system_info():
+    """
+    Get system information for training (CPU/GPU, memory, etc.)
+    """
+    import platform
+    import psutil
+
+    info = {
+        'python_version': platform.python_version(),
+        'platform': platform.system(),
+        'cpu_count': psutil.cpu_count(),
+        'cpu_percent': psutil.cpu_percent(interval=0.1),
+        'memory_total_gb': round(psutil.virtual_memory().total / (1024**3), 2),
+        'memory_used_gb': round(psutil.virtual_memory().used / (1024**3), 2),
+        'memory_percent': psutil.virtual_memory().percent,
+        'device': 'cpu',
+        'device_name': platform.processor() or 'Unknown CPU',
+        'cuda_available': False,
+        'mps_available': False,
+        'torch_version': None,
+        'gpu_memory_total_gb': None,
+        'gpu_memory_used_gb': None,
+    }
+
+    try:
+        import torch
+        info['torch_version'] = torch.__version__
+
+        if torch.cuda.is_available():
+            info['cuda_available'] = True
+            info['device'] = 'cuda'
+            info['device_name'] = torch.cuda.get_device_name(0)
+            # Get GPU memory
+            gpu_props = torch.cuda.get_device_properties(0)
+            info['gpu_memory_total_gb'] = round(gpu_props.total_memory / (1024**3), 2)
+            # Current memory usage
+            info['gpu_memory_used_gb'] = round(torch.cuda.memory_allocated(0) / (1024**3), 2)
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            info['mps_available'] = True
+            info['device'] = 'mps'
+            info['device_name'] = 'Apple Silicon GPU'
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning(f"Error getting torch info: {e}")
+
+    return info
 
 
 # ============================================

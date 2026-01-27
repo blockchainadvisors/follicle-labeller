@@ -271,10 +271,12 @@ export async function checkDependencies(): Promise<{
   if (!fs.existsSync(pythonPath)) {
     return {
       installed: false,
-      missing: ["opencv-python", "numpy", "pillow", "flask"]
+      missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
     };
   }
 
+  // Note: sse-starlette, ultralytics, onnx, onnxruntime are installed on-demand
+  // when the user wants to use YOLO training features (see installYOLODependencies)
   const checkCode = `
 import sys
 missing = []
@@ -291,13 +293,13 @@ try:
 except ImportError:
     missing.append('pillow')
 try:
-    import flask
+    import fastapi
 except ImportError:
-    missing.append('flask')
+    missing.append('fastapi')
 try:
-    from flask_cors import CORS
+    import uvicorn
 except ImportError:
-    missing.append('flask-cors')
+    missing.append('uvicorn')
 print(','.join(missing) if missing else 'OK')
 `;
 
@@ -327,7 +329,7 @@ print(','.join(missing) if missing else 'OK')
       } else {
         resolve({
           installed: false,
-          missing: ["opencv-python", "numpy", "pillow", "flask", "flask-cors"]
+          missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
         });
       }
     });
@@ -335,7 +337,7 @@ print(','.join(missing) if missing else 'OK')
     proc.on("error", () => {
       resolve({
         installed: false,
-        missing: ["opencv-python", "numpy", "pillow", "flask", "flask-cors"]
+        missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
       });
     });
   });
@@ -543,4 +545,403 @@ export async function installGPUPackages(
       resolve({ success: false, error: `Failed to start pip: ${err.message}` });
     });
   });
+}
+
+/**
+ * YOLO Dependencies Info type
+ */
+export interface YOLODependenciesInfo {
+  installed: boolean;
+  missing: string[];
+  estimatedSize: string;
+}
+
+/**
+ * Check if YOLO training dependencies are installed.
+ * These are large packages installed on-demand when the user wants to use training.
+ */
+export async function checkYOLODependencies(): Promise<YOLODependenciesInfo> {
+  const pythonPath = getVenvPythonPath();
+
+  if (!fs.existsSync(pythonPath)) {
+    return {
+      installed: false,
+      missing: ["ultralytics", "sse-starlette", "onnx", "onnxruntime"],
+      estimatedSize: "~2GB"
+    };
+  }
+
+  const checkCode = `
+import sys
+missing = []
+try:
+    import ultralytics
+except ImportError:
+    missing.append('ultralytics')
+try:
+    from sse_starlette.sse import EventSourceResponse
+except ImportError:
+    missing.append('sse-starlette')
+try:
+    import onnx
+except ImportError:
+    missing.append('onnx')
+try:
+    import onnxruntime
+except ImportError:
+    missing.append('onnxruntime')
+print(','.join(missing) if missing else 'OK')
+`;
+
+  return new Promise((resolve) => {
+    const proc = spawn(pythonPath, ["-c", checkCode], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
+    });
+
+    let stdout = "";
+
+    proc.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        const result = stdout.trim();
+        if (result === "OK") {
+          resolve({ installed: true, missing: [], estimatedSize: "0" });
+        } else {
+          const missing = result.split(",").filter(s => s);
+          // Estimate size based on what's missing
+          const hasUltralytics = missing.includes("ultralytics");
+          const estimatedSize = hasUltralytics ? "~2GB" : "~50MB";
+          resolve({ installed: false, missing, estimatedSize });
+        }
+      } else {
+        resolve({
+          installed: false,
+          missing: ["ultralytics", "sse-starlette", "onnx", "onnxruntime"],
+          estimatedSize: "~2GB"
+        });
+      }
+    });
+
+    proc.on("error", () => {
+      resolve({
+        installed: false,
+        missing: ["ultralytics", "sse-starlette", "onnx", "onnxruntime"],
+        estimatedSize: "~2GB"
+      });
+    });
+  });
+}
+
+/**
+ * Install YOLO training dependencies.
+ * This installs ultralytics (YOLO), sse-starlette (progress streaming), onnx and onnxruntime.
+ * If GPU hardware is detected, it installs PyTorch with CUDA/MPS support first.
+ */
+export async function installYOLODependencies(
+  onProgress?: (message: string, percent?: number) => void
+): Promise<{ success: boolean; error?: string }> {
+  const pythonPath = getVenvPythonPath();
+
+  if (!fs.existsSync(pythonPath)) {
+    return { success: false, error: "Python virtual environment not found" };
+  }
+
+  // First, check for GPU hardware and install appropriate PyTorch version
+  const gpuInfo = await getGPUHardwareInfo();
+
+  if (gpuInfo.hardware.nvidia.found) {
+    // Install PyTorch with CUDA support first (before ultralytics)
+    // Python 3.13+ requires CUDA 12.4 wheels, earlier versions use CUDA 12.1
+    onProgress?.("Installing PyTorch with CUDA support (~2.5GB)...", 0);
+
+    // Detect Python minor version to choose correct CUDA version
+    let pythonMinor = 12; // Default to 3.12
+    try {
+      const versionOutput = execSync(`"${pythonPath}" -c "import sys; print(sys.version_info.minor)"`, {
+        encoding: "utf-8",
+        timeout: 5000,
+      }).trim();
+      pythonMinor = parseInt(versionOutput) || 12;
+    } catch {
+      // Default to 3.12 if detection fails
+    }
+
+    // Python 3.13+ needs cu124 (CUDA 12.4), earlier versions use cu121 (CUDA 12.1)
+    const cudaVersion = pythonMinor >= 13 ? "cu124" : "cu121";
+    const torchVersion = pythonMinor >= 13 ? "2.6.0" : "2.5.1";
+    const torchvisionVersion = pythonMinor >= 13 ? "0.21.0" : "0.20.1";
+
+    const torchResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+      // Must specify exact version with +cuXXX suffix to get CUDA wheels
+      const proc = spawn(pythonPath, [
+        "-m", "pip", "install",
+        "--force-reinstall",
+        "--no-cache-dir",
+        `torch==${torchVersion}+${cudaVersion}`,
+        `torchvision==${torchvisionVersion}+${cudaVersion}`,
+        "--index-url", `https://download.pytorch.org/whl/${cudaVersion}`,
+        "--extra-index-url", "https://pypi.org/simple"
+      ], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 1200000,
+      });
+
+      let stderr = "";
+
+      proc.stdout?.on("data", (data) => {
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve({ success: true });
+        } else {
+          resolve({ success: false, error: `PyTorch CUDA installation failed: ${stderr.substring(0, 500)}` });
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve({ success: false, error: `Failed to install PyTorch: ${err.message}` });
+      });
+    });
+
+    if (!torchResult.success) {
+      return torchResult;
+    }
+  } else if (gpuInfo.hardware.apple_silicon.found) {
+    // For Apple Silicon, install PyTorch which automatically supports MPS
+    onProgress?.("Installing PyTorch with Metal support (~1GB)...", 0);
+
+    const torchResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+      const proc = spawn(pythonPath, ["-m", "pip", "install", "torch", "torchvision"], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 1200000,
+      });
+
+      let stderr = "";
+
+      proc.stdout?.on("data", (data) => {
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve({ success: true });
+        } else {
+          resolve({ success: false, error: `PyTorch installation failed: ${stderr.substring(0, 500)}` });
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve({ success: false, error: `Failed to install PyTorch: ${err.message}` });
+      });
+    });
+
+    if (!torchResult.success) {
+      return torchResult;
+    }
+  }
+
+  // Now install ultralytics and other dependencies
+  // ultralytics will use the already-installed GPU-enabled PyTorch
+  const packages = ["ultralytics>=8.3.0", "sse-starlette>=1.6.0", "onnx>=1.15.0", "onnxruntime>=1.16.0"];
+  onProgress?.("Installing YOLO training dependencies...", 50);
+
+  return new Promise((resolve) => {
+    const proc = spawn(pythonPath, ["-m", "pip", "install", ...packages], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 1200000, // 20 minute timeout for large packages
+    });
+
+    let stderr = "";
+
+    proc.stdout?.on("data", (data) => {
+      const line = data.toString();
+      // Parse pip output for progress
+      if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+        onProgress?.(line.trim().substring(0, 100), undefined);
+      }
+    });
+
+    proc.stderr?.on("data", (data) => {
+      stderr += data.toString();
+      const line = data.toString();
+      // pip often writes progress to stderr
+      if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+        onProgress?.(line.trim().substring(0, 100), undefined);
+      }
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        onProgress?.("YOLO dependencies installed!", 100);
+        resolve({ success: true });
+      } else {
+        resolve({ success: false, error: `Installation failed with code ${code}: ${stderr.substring(0, 500)}` });
+      }
+    });
+
+    proc.on("error", (err) => {
+      resolve({ success: false, error: `Failed to start pip: ${err.message}` });
+    });
+  });
+}
+
+/**
+ * Upgrade PyTorch to CUDA version for GPU training.
+ * This is for users who already have YOLO dependencies installed with CPU-only PyTorch.
+ */
+export async function upgradePyTorchToCUDA(
+  onProgress?: (message: string, percent?: number) => void
+): Promise<{ success: boolean; error?: string }> {
+  const pythonPath = getVenvPythonPath();
+
+  if (!fs.existsSync(pythonPath)) {
+    return { success: false, error: "Python virtual environment not found" };
+  }
+
+  const gpuInfo = await getGPUHardwareInfo();
+
+  if (!gpuInfo.hardware.nvidia.found && !gpuInfo.hardware.apple_silicon.found) {
+    return { success: false, error: "No GPU hardware detected" };
+  }
+
+  if (gpuInfo.hardware.nvidia.found) {
+    onProgress?.("Upgrading PyTorch to CUDA version (~2.5GB)...", 0);
+
+    // Detect Python minor version to choose correct CUDA version
+    let pythonMinor = 12; // Default to 3.12
+    try {
+      const versionOutput = execSync(`"${pythonPath}" -c "import sys; print(sys.version_info.minor)"`, {
+        encoding: "utf-8",
+        timeout: 5000,
+      }).trim();
+      pythonMinor = parseInt(versionOutput) || 12;
+    } catch {
+      // Default to 3.12 if detection fails
+    }
+
+    // Python 3.13+ needs cu124 (CUDA 12.4), earlier versions use cu121 (CUDA 12.1)
+    const cudaVersion = pythonMinor >= 13 ? "cu124" : "cu121";
+    const torchVersion = pythonMinor >= 13 ? "2.6.0" : "2.5.1";
+    const torchvisionVersion = pythonMinor >= 13 ? "0.21.0" : "0.20.1";
+
+    return new Promise((resolve) => {
+      // Must specify exact version with +cuXXX suffix to get CUDA wheels
+      const proc = spawn(pythonPath, [
+        "-m", "pip", "install",
+        "--force-reinstall",
+        "--no-cache-dir",
+        `torch==${torchVersion}+${cudaVersion}`,
+        `torchvision==${torchvisionVersion}+${cudaVersion}`,
+        "--index-url", `https://download.pytorch.org/whl/${cudaVersion}`,
+        "--extra-index-url", "https://pypi.org/simple"
+      ], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 1200000,
+      });
+
+      let stderr = "";
+
+      proc.stdout?.on("data", (data) => {
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          onProgress?.("PyTorch CUDA upgrade complete!", 100);
+          resolve({ success: true });
+        } else {
+          resolve({ success: false, error: `PyTorch CUDA upgrade failed: ${stderr.substring(0, 500)}` });
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve({ success: false, error: `Failed to upgrade PyTorch: ${err.message}` });
+      });
+    });
+  } else if (gpuInfo.hardware.apple_silicon.found) {
+    // For Apple Silicon, reinstall PyTorch (should automatically support MPS)
+    onProgress?.("Reinstalling PyTorch for Metal support...", 0);
+
+    return new Promise((resolve) => {
+      const proc = spawn(pythonPath, [
+        "-m", "pip", "install",
+        "--force-reinstall",
+        "torch", "torchvision"
+      ], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 1200000,
+      });
+
+      let stderr = "";
+
+      proc.stdout?.on("data", (data) => {
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+        const line = data.toString();
+        if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+          onProgress?.(line.trim().substring(0, 100), undefined);
+        }
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          onProgress?.("PyTorch upgrade complete!", 100);
+          resolve({ success: true });
+        } else {
+          resolve({ success: false, error: `PyTorch upgrade failed: ${stderr.substring(0, 500)}` });
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve({ success: false, error: `Failed to upgrade PyTorch: ${err.message}` });
+      });
+    });
+  }
+
+  return { success: false, error: "No supported GPU found" };
 }
