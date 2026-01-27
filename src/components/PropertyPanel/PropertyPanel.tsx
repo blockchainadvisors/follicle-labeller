@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { Lock, Unlock, AlertTriangle } from 'lucide-react';
 import { useFollicleStore } from '../../store/follicleStore';
 import { useProjectStore } from '../../store/projectStore';
 import { isCircle, isRectangle, isLinear } from '../../types';
 
 export const PropertyPanel: React.FC = () => {
+  const [showUnlockWarning, setShowUnlockWarning] = useState(false);
+
   const selectedIds = useFollicleStore(state => state.selectedIds);
   const follicles = useFollicleStore(state => state.follicles);
   const setLabel = useFollicleStore(state => state.setLabel);
@@ -174,6 +177,44 @@ export const PropertyPanel: React.FC = () => {
               <span>H: {Math.round(selected.height)} px</span>
             </div>
           </div>
+
+          {/* Lock status and origin info */}
+          {selected.origin ? (
+            <>
+              <div className="property-group lock-status">
+                <div className="lock-info">
+                  <Lock size={14} />
+                  <span>Locked (origin set)</span>
+                </div>
+                <button
+                  className="unlock-button"
+                  onClick={() => setShowUnlockWarning(true)}
+                >
+                  <Unlock size={14} />
+                  Unlock
+                </button>
+              </div>
+
+              <div className="property-group readonly">
+                <label>Origin Point</label>
+                <div className="coordinate-display">
+                  <span>X: {selected.origin.originPoint.x.toFixed(1)}</span>
+                  <span>Y: {selected.origin.originPoint.y.toFixed(1)}</span>
+                </div>
+              </div>
+
+              <div className="property-group readonly">
+                <label>Direction</label>
+                <span className="radius-display">
+                  {(selected.origin.directionAngle * 180 / Math.PI).toFixed(0)}°
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="property-group hint-text">
+              <span>Double-click to set origin point</span>
+            </div>
+          )}
         </>
       )}
 
@@ -239,6 +280,37 @@ export const PropertyPanel: React.FC = () => {
           Delete {shapeLabel}
         </button>
       </div>
+
+      {/* Unlock confirmation dialog */}
+      {showUnlockWarning && isRectangle(selected) && (
+        <div className="unlock-warning-overlay">
+          <div className="unlock-warning-dialog">
+            <AlertTriangle size={24} className="warning-icon" />
+            <p className="warning-title">Unlock Rectangle?</p>
+            <p className="warning-text">
+              Unlocking will delete the origin point and direction data.
+              You will need to set them again.
+            </p>
+            <div className="warning-actions">
+              <button
+                className="cancel-button"
+                onClick={() => setShowUnlockWarning(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-button"
+                onClick={() => {
+                  updateFollicle(selected.id, { origin: undefined });
+                  setShowUnlockWarning(false);
+                }}
+              >
+                Unlock & Delete Origin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

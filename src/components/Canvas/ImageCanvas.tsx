@@ -6,11 +6,14 @@ import { useProjectStore, generateImageId } from "../../store/projectStore";
 import { useThemeStore } from "../../store/themeStore";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { HeatmapOverlay } from "../HeatmapOverlay/HeatmapOverlay";
+import { FollicleOriginDialog } from "../FollicleOriginDialog";
 import {
   DragState,
   Point,
   Follicle,
   LinearAnnotation,
+  RectangleAnnotation,
+  FollicleOrigin,
   ProjectImage,
   isCircle,
   isRectangle,
@@ -183,6 +186,9 @@ export const ImageCanvas: React.FC = () => {
 
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
 
+  // Origin dialog state
+  const [originDialogAnnotation, setOriginDialogAnnotation] = useState<RectangleAnnotation | null>(null);
+
   // Store subscriptions
   const allFollicles = useFollicleStore((state) => state.follicles);
   const selectedIds = useFollicleStore((state) => state.selectedIds);
@@ -194,9 +200,8 @@ export const ImageCanvas: React.FC = () => {
   const selectMultiple = useFollicleStore((state) => state.selectMultiple);
   const clearSelection = useFollicleStore((state) => state.clearSelection);
   const selectAll = useFollicleStore((state) => state.selectAll);
-  const moveSelected = useFollicleStore((state) => state.moveSelected);
   const deleteSelected = useFollicleStore((state) => state.deleteSelected);
-  const moveAnnotation = useFollicleStore((state) => state.moveAnnotation);
+  const updateFollicle = useFollicleStore((state) => state.updateFollicle);
   const resizeCircle = useFollicleStore((state) => state.resizeCircle);
   const resizeRectangle = useFollicleStore((state) => state.resizeRectangle);
   const resizeLinear = useFollicleStore((state) => state.resizeLinear);
@@ -423,24 +428,30 @@ export const ImageCanvas: React.FC = () => {
                 return;
               }
             } else if (isRectangle(selected)) {
-              const handle = getRectangleResizeHandle(
-                point,
-                selected.x,
-                selected.y,
-                selected.width,
-                selected.height,
-                10 / viewport.scale,
-              );
-              if (handle) {
-                setDragState({
-                  isDragging: true,
-                  startPoint: point,
-                  currentPoint: point,
-                  dragType: "resize",
-                  targetId: selected.id,
-                  resizeHandle: handle,
-                });
-                return;
+              // Block resize for locked rectangles (with origin set)
+              if (selected.origin) {
+                // Rectangle is locked - don't allow resize
+                // Fall through to selection handling
+              } else {
+                const handle = getRectangleResizeHandle(
+                  point,
+                  selected.x,
+                  selected.y,
+                  selected.width,
+                  selected.height,
+                  10 / viewport.scale,
+                );
+                if (handle) {
+                  setDragState({
+                    isDragging: true,
+                    startPoint: point,
+                    currentPoint: point,
+                    dragType: "resize",
+                    targetId: selected.id,
+                    resizeHandle: handle,
+                  });
+                  return;
+                }
               }
             } else if (isLinear(selected)) {
               const handle = getLinearResizeHandle(
@@ -483,16 +494,8 @@ export const ImageCanvas: React.FC = () => {
           if (isCtrlPressed) {
             // Ctrl+click on selected item: remove from selection
             toggleSelection(clickedSelected.id);
-          } else {
-            // Clicking on an already selected item - start move (for all selected)
-            setDragState({
-              isDragging: true,
-              startPoint: point,
-              currentPoint: point,
-              dragType: "move",
-              targetId: null, // null indicates moving all selected
-            });
           }
+          // Removed: don't start move - just keep selection
           return;
         }
 
@@ -503,15 +506,8 @@ export const ImageCanvas: React.FC = () => {
             // Ctrl+click: add to selection
             toggleSelection(clicked.id);
           } else {
-            // Regular click: select only this one and start move
+            // Regular click: select only this one (no move)
             selectFollicle(clicked.id);
-            setDragState({
-              isDragging: true,
-              startPoint: point,
-              currentPoint: point,
-              dragType: "move",
-              targetId: clicked.id,
-            });
           }
           return;
         }
@@ -821,29 +817,7 @@ export const ImageCanvas: React.FC = () => {
       }
     }
 
-    // Handle multi-selection move (targetId is null)
-    if (
-      dragState.dragType === "move" &&
-      dragState.targetId === null &&
-      dragState.currentPoint &&
-      dragState.startPoint
-    ) {
-      const deltaX = dragState.currentPoint.x - dragState.startPoint.x;
-      const deltaY = dragState.currentPoint.y - dragState.startPoint.y;
-      moveSelected(deltaX, deltaY);
-    }
-
-    // Handle single annotation move (targetId is set)
-    if (
-      dragState.dragType === "move" &&
-      dragState.targetId &&
-      dragState.currentPoint &&
-      dragState.startPoint
-    ) {
-      const deltaX = dragState.currentPoint.x - dragState.startPoint.x;
-      const deltaY = dragState.currentPoint.y - dragState.startPoint.y;
-      moveAnnotation(dragState.targetId, deltaX, deltaY);
-    }
+    // Move functionality removed - rectangles are now positioned via create only
 
     if (
       dragState.dragType === "resize" &&
@@ -930,14 +904,11 @@ export const ImageCanvas: React.FC = () => {
     });
   }, [
     dragState,
-    moveAnnotation,
-    moveSelected,
     resizeCircle,
     resizeRectangle,
     resizeLinear,
     follicles,
     selectMultiple,
-    clearSelection,
   ]);
 
   // Document-level mouse handlers for selections that extend outside canvas
@@ -977,7 +948,6 @@ export const ImageCanvas: React.FC = () => {
       if (
         dragState.isDragging &&
         (dragState.dragType === "lasso" ||
-          dragState.dragType === "move" ||
           dragState.dragType === "resize")
       ) {
         handleMouseUp();
@@ -1115,6 +1085,23 @@ export const ImageCanvas: React.FC = () => {
   const triggerAutoDetect = useCallback(() => {
     window.dispatchEvent(new CustomEvent("triggerAutoDetect"));
   }, []);
+
+  // Double-click handler to open origin annotation dialog
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    const point = getImagePoint(e);
+    const clicked = findAnnotationAtPoint(point);
+    if (clicked && isRectangle(clicked)) {
+      setOriginDialogAnnotation(clicked);
+    }
+  }, [getImagePoint, findAnnotationAtPoint]);
+
+  // Handle saving origin from dialog
+  const handleSaveOrigin = useCallback((origin: FollicleOrigin) => {
+    if (originDialogAnnotation) {
+      updateFollicle(originDialogAnnotation.id, { origin });
+      setOriginDialogAnnotation(null);
+    }
+  }, [originDialogAnnotation, updateFollicle]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1303,6 +1290,7 @@ export const ImageCanvas: React.FC = () => {
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
+        onDoubleClick={handleDoubleClick}
         onAuxClick={(e) => e.preventDefault()}
         onContextMenu={(e) => e.preventDefault()}
         style={{ cursor: hasImage ? getCursor() : "pointer" }}
@@ -1324,6 +1312,14 @@ export const ImageCanvas: React.FC = () => {
           </div>
           <span>or use File → Open Image (Ctrl+O)</span>
         </div>
+      )}
+      {originDialogAnnotation && imageBitmap && (
+        <FollicleOriginDialog
+          annotation={originDialogAnnotation}
+          imageBitmap={imageBitmap}
+          onSave={handleSaveOrigin}
+          onCancel={() => setOriginDialogAnnotation(null)}
+        />
       )}
     </div>
   );

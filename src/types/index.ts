@@ -113,6 +113,13 @@ export interface CircleAnnotation extends BaseAnnotation {
   radius: number;
 }
 
+// Follicle origin data (where follicle enters skin and growth direction)
+export interface FollicleOrigin {
+  originPoint: Point;      // Where follicle enters skin (image coordinates)
+  directionAngle: number;  // Direction in radians
+  directionLength: number; // Arrow length in pixels
+}
+
 // Rectangle annotation
 export interface RectangleAnnotation extends BaseAnnotation {
   shape: 'rectangle';
@@ -120,6 +127,7 @@ export interface RectangleAnnotation extends BaseAnnotation {
   y: number;           // Top-left y
   width: number;
   height: number;
+  origin?: FollicleOrigin;  // When set, rectangle is "locked" (no resize)
 }
 
 // Linear annotation (rotated rectangle defined by centerline + half-width)
@@ -214,6 +222,11 @@ export interface AnnotationExport {
   y?: number;
   width?: number;
   height?: number;
+  // Rectangle origin properties (follicle entry point and direction)
+  originX?: number;
+  originY?: number;
+  directionAngle?: number;
+  directionLength?: number;
   // Linear properties
   startX?: number;
   startY?: number;

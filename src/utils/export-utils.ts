@@ -93,6 +93,13 @@ export function generateExport(
           y: Math.round(f.y * 100) / 100,
           width: Math.round(f.width * 100) / 100,
           height: Math.round(f.height * 100) / 100,
+          // Include origin data if set
+          ...(f.origin && {
+            originX: Math.round(f.origin.originPoint.x * 100) / 100,
+            originY: Math.round(f.origin.originPoint.y * 100) / 100,
+            directionAngle: Math.round(f.origin.directionAngle * 10000) / 10000,
+            directionLength: Math.round(f.origin.directionLength * 100) / 100,
+          }),
         };
       } else {
         // Linear shape
@@ -169,6 +176,13 @@ export function generateExportV2(
           y: Math.round(f.y * 100) / 100,
           width: Math.round(f.width * 100) / 100,
           height: Math.round(f.height * 100) / 100,
+          // Include origin data if set
+          ...(f.origin && {
+            originX: Math.round(f.origin.originPoint.x * 100) / 100,
+            originY: Math.round(f.origin.originPoint.y * 100) / 100,
+            directionAngle: Math.round(f.origin.directionAngle * 10000) / 10000,
+            directionLength: Math.round(f.origin.directionLength * 100) / 100,
+          }),
         } as AnnotationExportV2;
       } else {
         return {
@@ -215,6 +229,15 @@ export function parseImport(json: string, imageId?: string): Follicle[] {
     };
 
     if (f.shape === 'rectangle' && f.x !== undefined && f.y !== undefined && f.width !== undefined && f.height !== undefined) {
+      // Parse origin data if present
+      const origin = (f.originX !== undefined && f.originY !== undefined)
+        ? {
+            originPoint: { x: f.originX, y: f.originY },
+            directionAngle: f.directionAngle ?? 0,
+            directionLength: f.directionLength ?? 30,
+          }
+        : undefined;
+
       return {
         ...base,
         shape: 'rectangle' as const,
@@ -222,6 +245,7 @@ export function parseImport(json: string, imageId?: string): Follicle[] {
         y: f.y,
         width: f.width,
         height: f.height,
+        origin,
       } as RectangleAnnotation;
     } else if (f.shape === 'linear' && f.startX !== undefined && f.startY !== undefined && f.endX !== undefined && f.endY !== undefined && f.halfWidth !== undefined) {
       return {
@@ -335,6 +359,15 @@ export async function parseImportV2(result: {
       };
 
       if (f.shape === 'rectangle' && f.x !== undefined && f.y !== undefined && f.width !== undefined && f.height !== undefined) {
+        // Parse origin data if present
+        const origin = (f.originX !== undefined && f.originY !== undefined)
+          ? {
+              originPoint: { x: f.originX, y: f.originY },
+              directionAngle: f.directionAngle ?? 0,
+              directionLength: f.directionLength ?? 30,
+            }
+          : undefined;
+
         return {
           ...base,
           shape: 'rectangle' as const,
@@ -342,6 +375,7 @@ export async function parseImportV2(result: {
           y: f.y,
           width: f.width,
           height: f.height,
+          origin,
         } as RectangleAnnotation;
       } else if (f.shape === 'linear' && f.startX !== undefined && f.startY !== undefined && f.endX !== undefined && f.endY !== undefined && f.halfWidth !== undefined) {
         return {

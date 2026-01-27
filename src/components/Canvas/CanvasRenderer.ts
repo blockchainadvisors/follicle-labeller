@@ -1,4 +1,4 @@
-import { Follicle, Viewport, DragState, ShapeType, isCircle, isRectangle, isLinear, CircleAnnotation, RectangleAnnotation, LinearAnnotation, Point } from '../../types';
+import { Follicle, Viewport, DragState, ShapeType, isCircle, isRectangle, isLinear, CircleAnnotation, RectangleAnnotation, LinearAnnotation, Point, FollicleOrigin } from '../../types';
 
 // Helper function to calculate distance from point to line segment
 function pointToLineDistance(point: Point, lineStart: Point, lineEnd: Point): number {
@@ -181,14 +181,15 @@ export class CanvasRenderer {
     showLabels: boolean,
     showShapes: boolean
   ): void {
-    const { x, y, width, height, color, label } = rect;
+    const { x, y, width, height, color, label, origin } = rect;
+    const isLocked = !!origin;
 
     if (showShapes) {
       // Fill with semi-transparent color (slightly more opaque when selected)
       this.ctx.fillStyle = this.hexToRgba(color, isSelected ? 0.35 : 0.25);
       this.ctx.fillRect(x, y, width, height);
 
-      // Stroke - different style based on selection state
+      // Stroke - different style based on selection and lock state
       if (isSelected && isMultiSelect) {
         // Multi-selected: dashed blue border, no resize handles
         this.ctx.strokeStyle = '#4A90D9';
@@ -196,15 +197,20 @@ export class CanvasRenderer {
         this.ctx.setLineDash([6 / scale, 4 / scale]);
         this.ctx.strokeRect(x, y, width, height);
         this.ctx.setLineDash([]);
+      } else if (isLocked) {
+        // Locked: teal border to indicate locked state
+        this.ctx.strokeStyle = '#4ECDC4';
+        this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
+        this.ctx.strokeRect(x, y, width, height);
       } else {
-        // Single selected or not selected: solid border
+        // Normal: solid border with annotation color
         this.ctx.strokeStyle = color;
         this.ctx.lineWidth = isSelected ? 3 / scale : 2 / scale;
         this.ctx.strokeRect(x, y, width, height);
       }
 
-      // Selection indicator - corner handles (only for single selection)
-      if (isSelected && !isMultiSelect) {
+      // Selection indicator - corner handles (only for single selection, not locked)
+      if (isSelected && !isMultiSelect && !isLocked) {
         const handleRadius = 6 / scale;
         const corners = [
           { x: x, y: y },                    // top-left
@@ -229,12 +235,61 @@ export class CanvasRenderer {
         this.ctx.fillStyle = color;
         this.ctx.fill();
       }
+
+      // Draw origin arrow for locked rectangles
+      if (origin) {
+        this.drawOriginArrow(origin, scale);
+      }
     }
 
     // Draw label above the rectangle
     if (showShapes && showLabels) {
       this.drawLabel(label, x + width / 2, y - 8 / scale, color, scale);
     }
+  }
+
+  private drawOriginArrow(
+    origin: FollicleOrigin,
+    scale: number
+  ): void {
+    const { originPoint, directionAngle, directionLength } = origin;
+
+    // Origin dot
+    this.ctx.beginPath();
+    this.ctx.arc(originPoint.x, originPoint.y, 5 / scale, 0, Math.PI * 2);
+    this.ctx.fillStyle = '#FF6B6B';
+    this.ctx.fill();
+    this.ctx.strokeStyle = '#ffffff';
+    this.ctx.lineWidth = 1.5 / scale;
+    this.ctx.stroke();
+
+    // Arrow line
+    const len = Math.min(directionLength, 40);
+    const endX = originPoint.x + Math.cos(directionAngle) * len;
+    const endY = originPoint.y + Math.sin(directionAngle) * len;
+
+    this.ctx.strokeStyle = '#4ECDC4';
+    this.ctx.lineWidth = 2.5 / scale;
+    this.ctx.beginPath();
+    this.ctx.moveTo(originPoint.x, originPoint.y);
+    this.ctx.lineTo(endX, endY);
+    this.ctx.stroke();
+
+    // Arrow head
+    const headLen = 8 / scale;
+    this.ctx.beginPath();
+    this.ctx.moveTo(endX, endY);
+    this.ctx.lineTo(
+      endX - headLen * Math.cos(directionAngle - Math.PI / 6),
+      endY - headLen * Math.sin(directionAngle - Math.PI / 6)
+    );
+    this.ctx.lineTo(
+      endX - headLen * Math.cos(directionAngle + Math.PI / 6),
+      endY - headLen * Math.sin(directionAngle + Math.PI / 6)
+    );
+    this.ctx.closePath();
+    this.ctx.fillStyle = '#4ECDC4';
+    this.ctx.fill();
   }
 
   private drawLinear(
