@@ -40,8 +40,8 @@
 
 .dialog-header h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #333);
 }
 
@@ -104,16 +104,16 @@
 
 .settings-section h3 {
   margin: 0 0 8px 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #333);
 }
 
 .section-description {
   margin: 0 0 12px 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary, #666);
-  line-height: 1.5;
+  line-height: var(--leading-normal);
 }
 
 .section-description .warning-text {
@@ -132,13 +132,13 @@
 }
 
 .keypoint-model-info .model-name {
-  font-weight: 500;
+  font-weight: var(--font-medium);
   color: var(--text-success, #10b981);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .keypoint-model-info .model-meta {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-secondary, #666);
 }
 
@@ -156,7 +156,7 @@
 
 .settings-row label {
   min-width: 100px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary, #666);
   flex-shrink: 0;
 }
@@ -166,7 +166,7 @@
   padding: 6px 10px;
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   background: var(--bg-primary, #ffffff);
   color: var(--text-primary, #333);
 }
@@ -181,7 +181,7 @@
   padding: 6px 10px;
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   background: var(--bg-primary, #ffffff);
   color: var(--text-primary, #333);
   cursor: pointer;
@@ -195,7 +195,7 @@
 }
 
 .settings-row .hint {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-tertiary, #999);
   margin-left: 8px;
 }
@@ -210,7 +210,7 @@
   align-items: center;
   gap: 8px;
   min-width: auto;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-primary, #333);
   cursor: pointer;
 }
@@ -228,7 +228,7 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: var(--font-semibold);
 }
 
 .section-toggle input[type="checkbox"] {
@@ -252,8 +252,8 @@
 }
 
 .coming-soon {
-  font-size: 11px;
-  font-weight: 400;
+  font-size: var(--text-xs);
+  font-weight: var(--font-normal);
   color: var(--text-tertiary, #999);
   background: var(--bg-secondary, #f5f5f5);
   padding: 2px 6px;
@@ -283,8 +283,8 @@
   gap: 6px;
   padding: 8px 16px;
   border-radius: 6px;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
@@ -363,7 +363,7 @@
   padding: 10px 14px;
   border-radius: 8px;
   margin-bottom: 16px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .gpu-status svg {
@@ -378,12 +378,12 @@
 }
 
 .gpu-status-label {
-  font-weight: 600;
+  font-weight: var(--font-semibold);
 }
 
 .gpu-status-device {
   color: var(--text-secondary, #666);
-  font-size: 12px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -391,13 +391,13 @@
 
 .gpu-status-memory {
   color: var(--text-tertiary, #999);
-  font-size: 12px;
+  font-size: var(--text-sm);
   flex-shrink: 0;
 }
 
 .gpu-status-progress {
   color: var(--text-secondary, #666);
-  font-size: 11px;
+  font-size: var(--text-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -405,7 +405,7 @@
 
 .gpu-status-error-msg {
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--text-xs);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -530,8 +530,8 @@
   color: white;
   border: none;
   border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s ease;
@@ -555,8 +555,8 @@
   color: white;
   border: none;
   border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.15s ease;
@@ -631,8 +631,8 @@
   border: none;
   background: transparent;
   color: var(--text-secondary, #666);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -649,7 +649,7 @@
 
 .backend-hint {
   margin: 8px 0 0 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-tertiary, #999);
   text-align: center;
 }

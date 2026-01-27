@@ -36,8 +36,8 @@
 
 .yolo-training-dialog .dialog-header h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
 }
 
@@ -81,7 +81,7 @@
   color: var(--warning, #ffd700);
   border-radius: 6px;
   margin-bottom: 16px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* Dependencies Installation Section */
@@ -112,27 +112,27 @@
 
 .dependencies-info h4 {
   margin: 0 0 8px 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
   color: var(--text-primary);
 }
 
 .dependencies-info p {
   margin: 0 0 8px 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
 .missing-packages {
   margin: 8px 0;
   padding-left: 20px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-primary);
 }
 
 .missing-packages li {
   margin-bottom: 4px;
-  font-family: 'SF Mono', 'Monaco', monospace;
+  font-family: var(--font-mono);
 }
 
 .size-warning {
@@ -140,7 +140,7 @@
   padding: 8px 12px;
   background: var(--bg-secondary);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .install-error {
@@ -151,7 +151,7 @@
   background: var(--danger-bg);
   color: var(--danger);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .install-progress {
@@ -161,7 +161,7 @@
   padding: 12px;
   background: var(--bg-secondary);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
@@ -175,8 +175,8 @@
   color: white;
   border: none;
   border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
   cursor: pointer;
   transition: filter 0.15s ease;
 }
@@ -206,11 +206,11 @@
 
 .yolo-training-dialog .config-section h3 {
   margin: 0 0 12px 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-wide);
 }
 
 .dataset-input {
@@ -225,7 +225,7 @@
   border-radius: 6px;
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .dataset-input input:focus {
@@ -243,7 +243,7 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .validate-button:hover:not(:disabled) {
@@ -259,7 +259,7 @@
   margin-top: 12px;
   padding: 12px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .validation-result.valid {
@@ -277,7 +277,7 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 8px;
-  font-weight: 500;
+  font-weight: var(--font-medium);
 }
 
 .validation-result.valid .validation-header {
@@ -323,9 +323,9 @@
 }
 
 .config-grid label span {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: var(--font-medium);
 }
 
 .config-grid select,
@@ -335,7 +335,7 @@
   border-radius: 6px;
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .config-grid select:focus,
@@ -352,9 +352,9 @@
 }
 
 .model-name-label span {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: var(--font-medium);
 }
 
 .model-name-label input {
@@ -363,7 +363,7 @@
   border-radius: 6px;
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--text-md);
 }
 
 .model-name-label input:focus {
@@ -377,11 +377,11 @@
 
 .yolo-training-dialog .progress-section h3 {
   margin: 0 0 12px 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-wide);
 }
 
 .yolo-training-dialog .progress-bar {
@@ -402,7 +402,7 @@
 .yolo-training-dialog .progress-info {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary, #888);
   margin-bottom: 12px;
 }
@@ -423,21 +423,21 @@
 }
 
 .yolo-training-dialog .metric-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-secondary, #888);
   text-transform: uppercase;
 }
 
 .yolo-training-dialog .metric-value {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
-  font-family: 'SF Mono', 'Monaco', monospace;
+  font-family: var(--font-mono);
 }
 
 .yolo-training-dialog .progress-message {
   margin-top: 12px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--text-secondary, #888);
 }
 
@@ -447,7 +447,7 @@
   gap: 8px;
   padding: 12px;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .yolo-training-dialog .status-message.success {
@@ -478,8 +478,8 @@
   gap: 8px;
   padding: 10px 20px;
   border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
   cursor: pointer;
 }
 
@@ -529,8 +529,8 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   transition: all 0.15s ease;
 }
 
@@ -572,8 +572,8 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-weight: 500;
-  font-size: 14px;
+  font-weight: var(--font-medium);
+  font-size: var(--text-md);
 }
 
 .project-stats.valid .stats-header {
@@ -594,7 +594,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 .stat-label {
@@ -602,8 +602,8 @@
 }
 
 .stat-value {
-  font-weight: 500;
-  font-family: 'SF Mono', 'Monaco', monospace;
+  font-weight: var(--font-medium);
+  font-family: var(--font-mono);
   color: var(--text-primary);
 }
 
@@ -617,7 +617,7 @@
 
 .stats-hint {
   margin-top: 12px;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -632,7 +632,7 @@
   border-radius: 8px;
   margin-bottom: 16px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--text-base);
 }
 
 /* System Info Section */
@@ -646,14 +646,14 @@
 
 .system-info-section h3 {
   margin: 0 0 12px 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
   color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-wide);
 }
 
 .system-info-grid {
@@ -669,23 +669,23 @@
 }
 
 .info-label {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: var(--tracking-wide);
 }
 
 .info-value {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   color: var(--text-primary);
-  font-family: 'SF Mono', 'Monaco', monospace;
+  font-family: var(--font-mono);
 }
 
 .info-value .info-sub {
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
-  font-weight: 400;
+  font-weight: var(--font-normal);
   margin-left: 4px;
 }
 
@@ -777,13 +777,13 @@
 }
 
 .yolo-training-dialog .gpu-status-label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
 }
 
 .yolo-training-dialog .gpu-status-device {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary, #888);
   white-space: nowrap;
   overflow: hidden;
@@ -791,20 +791,20 @@
 }
 
 .yolo-training-dialog .gpu-status-progress {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary, #888);
 }
 
 .yolo-training-dialog .gpu-status-error-msg {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--danger);
 }
 
 .yolo-training-dialog .gpu-status-memory {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   color: var(--text-secondary, #888);
-  font-family: 'SF Mono', 'Monaco', monospace;
+  font-family: var(--font-mono);
 }
 
 .yolo-training-dialog .gpu-install-btn,
@@ -817,8 +817,8 @@
   color: white;
   border: none;
   border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
   cursor: pointer;
   white-space: nowrap;
   transition: filter 0.15s ease;
@@ -846,11 +846,11 @@
 
 .yolo-training-dialog .backend-selection h3 {
   margin: 0 0 12px 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
   color: var(--text-primary, #fff);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-wide);
 }
 
 .yolo-training-dialog .backend-toggle {
@@ -869,8 +869,8 @@
   border: 1px solid var(--border, #333);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
   transition: all 0.15s ease;
 }
 
@@ -892,6 +892,6 @@
 
 .yolo-training-dialog .backend-hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-secondary, #888);
 }

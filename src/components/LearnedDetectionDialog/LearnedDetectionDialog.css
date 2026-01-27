@@ -33,8 +33,8 @@
 
 .learned-detection-dialog .dialog-header h2 {
     margin: 0;
-    font-size: 18px;
-    font-weight: 600;
+    font-size: var(--text-xl);
+    font-weight: var(--font-semibold);
     color: var(--text-primary, #333);
 }
 
@@ -81,13 +81,13 @@
 }
 
 .stat-label {
-    font-size: 14px;
+    font-size: var(--text-md);
     color: var(--text-secondary, #666);
 }
 
 .stat-value {
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-md);
+    font-weight: var(--font-medium);
     color: var(--text-primary, #333);
 }
 
@@ -104,16 +104,16 @@
 }
 
 .section-label {
-    font-size: 12px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: var(--font-semibold);
     color: var(--text-secondary, #666);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: var(--tracking-wide);
 }
 
 .tolerance-value {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: var(--text-lg);
+    font-weight: var(--font-semibold);
     color: var(--accent, #3b82f6);
 }
 
@@ -158,7 +158,7 @@
     padding: 10px 12px;
     background: var(--bg-secondary, #f5f5f5);
     border-radius: 6px;
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--text-secondary, #666);
 }
 
@@ -186,8 +186,8 @@
     border: none;
     background: var(--bg-secondary, #f5f5f5);
     color: var(--text-primary, #333);
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-md);
+    font-weight: var(--font-medium);
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
@@ -207,7 +207,7 @@
 
 .blob-type-hint {
     margin: 8px 0 0 0;
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--text-tertiary, #999);
 }
 
@@ -227,8 +227,8 @@
     border-radius: 8px;
     cursor: pointer;
     color: var(--text-primary, #333);
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-md);
+    font-weight: var(--font-medium);
     transition: background 0.15s ease;
 }
 
@@ -259,7 +259,7 @@
 }
 
 .best-practices-content li {
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--text-secondary, #666);
     line-height: 1.8;
 }
@@ -278,8 +278,8 @@
 .learned-detection-dialog .button-secondary {
     padding: 10px 20px;
     border-radius: 6px;
-    font-size: 14px;
-    font-weight: 500;
+    font-size: var(--text-md);
+    font-weight: var(--font-medium);
     cursor: pointer;
     transition: background 0.2s, border-color 0.2s;
 }
@@ -393,7 +393,7 @@
 }
 
 .loading-content p {
-    font-size: 14px;
+    font-size: var(--text-md);
     color: var(--text-secondary, #666);
     margin: 0;
 }
@@ -410,13 +410,13 @@
 }
 
 .error-message {
-    font-size: 14px;
+    font-size: var(--text-md);
     color: var(--danger, #dc2626);
     margin: 0;
 }
 
 .error-hint {
-    font-size: 13px;
+    font-size: var(--text-base);
     color: var(--text-secondary, #666);
     margin: 0;
 }
