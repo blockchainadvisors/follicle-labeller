@@ -44,3 +44,6 @@ nul
 
 # python-Ali
 hair_follicle_detection-main
+
+# __pycache__ files
+electron/python/__pycache__/
