@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle, GripHorizontal } from 'lucide-react';
 import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo } from '../../types';
 import { blobService } from '../../services/blobService';
 import './DetectionSettingsDialog.css';
@@ -104,6 +104,59 @@ export function DetectionSettingsDialog({
   const [localSettings, setLocalSettings] = useState<DetectionSettings>({ ...settings });
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
+
+  // Draggable dialog state
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; startPosX: number; startPosY: number } | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // Don't start drag if clicking on a button
+    if ((e.target as HTMLElement).closest('button')) return;
+
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    const rect = dialog.getBoundingClientRect();
+    const currentX = position?.x ?? rect.left + rect.width / 2 - window.innerWidth / 2;
+    const currentY = position?.y ?? rect.top + rect.height / 2 - window.innerHeight / 2;
+
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startPosX: currentX,
+      startPosY: currentY,
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [position]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!dragRef.current) return;
+
+    const deltaX = e.clientX - dragRef.current.startX;
+    const deltaY = e.clientY - dragRef.current.startY;
+
+    setPosition({
+      x: dragRef.current.startPosX + deltaX,
+      y: dragRef.current.startPosY + deltaY,
+    });
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    dragRef.current = null;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseMove]);
+
+  // Cleanup event listeners on unmount
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleMouseMove, handleMouseUp]);
 
   // Use parent state if provided, otherwise use local state
   const [localIsInstalling, setLocalIsInstalling] = useState(false);
@@ -210,8 +263,13 @@ export function DetectionSettingsDialog({
 
   return (
     <div className="detection-settings-overlay" onClick={onCancel}>
-      <div className="detection-settings-dialog" onClick={e => e.stopPropagation()}>
-        <div className="dialog-header">
+      <div
+        ref={dialogRef}
+        className="detection-settings-dialog"
+        onClick={e => e.stopPropagation()}
+        style={position ? { transform: `translate(${position.x}px, ${position.y}px)` } : undefined}
+      >
+        <div className="dialog-header" onMouseDown={handleMouseDown}>
           <h2>Detection Settings</h2>
           <button className="close-button" onClick={onCancel}>
             <X size={18} />
