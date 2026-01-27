@@ -56,7 +56,7 @@
 }
 
 .dialog-content {
-  padding: 16px 20px;
+  padding: 16px 12px 16px 20px;
   overflow-y: auto;
   flex: 1;
 }
@@ -315,18 +315,45 @@
   flex-shrink: 0;
 }
 
+.gpu-status-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
 .gpu-status-label {
   font-weight: 600;
 }
 
 .gpu-status-device {
   color: var(--text-secondary, #666);
-  margin-left: auto;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .gpu-status-memory {
   color: var(--text-tertiary, #999);
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.gpu-status-progress {
+  color: var(--text-secondary, #666);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gpu-status-error-msg {
+  color: #dc2626;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* CPU Mode - neutral/gray */
@@ -395,4 +422,208 @@
 
 [data-theme="dark"] .gpu-status-mps .gpu-status-device {
   color: #4a9eff;
+}
+
+/* GPU Available - amber/yellow for action needed */
+.gpu-status-available {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: #92400e;
+}
+
+.gpu-status-available svg {
+  color: #f59e0b;
+}
+
+.gpu-status-available .gpu-status-device {
+  color: #b45309;
+}
+
+/* GPU Installing - blue for in progress */
+.gpu-status-installing {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #1e40af;
+}
+
+.gpu-status-installing svg {
+  color: #3b82f6;
+}
+
+.gpu-status-installing .gpu-status-progress {
+  color: #2563eb;
+}
+
+/* GPU Error - red for error state */
+.gpu-status-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #991b1b;
+}
+
+.gpu-status-error svg {
+  color: #ef4444;
+}
+
+/* Install button */
+.gpu-install-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.gpu-install-btn:hover {
+  background: #d97706;
+}
+
+.gpu-install-btn:active {
+  background: #b45309;
+}
+
+/* Retry button */
+.gpu-retry-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.gpu-retry-btn:hover {
+  background: #dc2626;
+}
+
+/* Spin animation for loading indicator */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Dark theme - GPU Available */
+[data-theme="dark"] .gpu-status-available {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .gpu-status-available .gpu-status-device {
+  color: #f59e0b;
+}
+
+/* Dark theme - GPU Installing */
+[data-theme="dark"] .gpu-status-installing {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .gpu-status-installing .gpu-status-progress {
+  color: #3b82f6;
+}
+
+/* Dark theme - GPU Error */
+[data-theme="dark"] .gpu-status-error {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .gpu-status-error .gpu-status-error-msg {
+  color: #f87171;
+}
+
+/* Backend Selection Toggle */
+.backend-selection {
+  margin-bottom: 16px;
+}
+
+.backend-selection h3 {
+  margin-bottom: 8px;
+}
+
+.backend-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #e0e0e0);
+  background: var(--bg-tertiary, #f5f5f5);
+}
+
+.backend-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.backend-btn:hover:not(.active) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.backend-btn.active {
+  background: var(--accent-color, #6366f1);
+  color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.backend-hint {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary, #999);
+  text-align: center;
+}
+
+/* Dark theme - Backend Toggle */
+[data-theme="dark"] .backend-toggle {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .backend-btn {
+  color: #9ca3af;
+}
+
+[data-theme="dark"] .backend-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .backend-btn.active {
+  background: var(--accent-color, #6366f1);
+  color: white;
 }

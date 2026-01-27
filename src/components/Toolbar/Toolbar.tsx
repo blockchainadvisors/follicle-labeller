@@ -24,7 +24,6 @@ import {
   BarChart3,
   Settings,
   GraduationCap,
-  SlidersHorizontal,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -46,6 +45,7 @@ import {
   DetectionSettingsDialog,
   DetectionSettings,
   DEFAULT_DETECTION_SETTINGS,
+  GPUInstallState,
 } from "../DetectionSettingsDialog/DetectionSettingsDialog";
 import {
   LearnedDetectionDialog,
@@ -153,6 +153,7 @@ export const Toolbar: React.FC = () => {
   const [annotationCount, setAnnotationCount] = useState(0);
   const [canDetect, setCanDetect] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
+  const [setupStatus, setSetupStatus] = useState<string>("");
   const MIN_ANNOTATIONS = 3;
 
   // Refs to prevent duplicate operations
@@ -166,11 +167,27 @@ export const Toolbar: React.FC = () => {
   );
   const [showDetectionSettings, setShowDetectionSettings] = useState(false);
 
+  // Handler for when the BLOB server restarts (e.g., after GPU install)
+  // Clears session state to force recreation
+  const handleServerRestarted = () => {
+    setBlobSessionId(null);
+    lastSessionImageId.current = null;
+    setAnnotationCount(0);
+    setCanDetect(false);
+  };
+
   // State for learned detection dialog
   const [learnedSettings, setLearnedSettings] =
     useState<LearnedDetectionSettings>(DEFAULT_LEARNED_SETTINGS);
   const [showLearnedDetection, setShowLearnedDetection] = useState(false);
   const [isLearnedDetecting, setIsLearnedDetecting] = useState(false);
+
+  // State for GPU package installation (persisted across dialog open/close)
+  const [gpuInstallState, setGpuInstallState] = useState<GPUInstallState>({
+    isInstalling: false,
+    progress: '',
+    error: null,
+  });
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -201,14 +218,23 @@ export const Toolbar: React.FC = () => {
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
+    // Listen for setup progress events
+    const cleanupProgress = window.electronAPI.blob.onSetupProgress(
+      (status) => {
+        setSetupStatus(status);
+      }
+    );
+
     const startServer = async () => {
       setServerStarting(true);
+      setSetupStatus("Checking server status...");
       try {
         // Check if server is already running
         const isRunning = await blobService.isAvailable();
         if (isRunning) {
           setBlobServerConnected(true);
           setServerStarting(false);
+          setSetupStatus("");
           return;
         }
 
@@ -219,13 +245,16 @@ export const Toolbar: React.FC = () => {
           await new Promise((resolve) => setTimeout(resolve, 1000));
           const available = await blobService.isAvailable();
           setBlobServerConnected(available);
+          setSetupStatus("");
         } else {
           console.error("Failed to start BLOB server:", result.error);
           setBlobServerConnected(false);
+          setSetupStatus(`Error: ${result.error}`);
         }
       } catch (error) {
         console.error("Error starting BLOB server:", error);
         setBlobServerConnected(false);
+        setSetupStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
       } finally {
         setServerStarting(false);
       }
@@ -235,6 +264,7 @@ export const Toolbar: React.FC = () => {
 
     // Cleanup on unmount
     return () => {
+      cleanupProgress();
       if (blobSessionId) {
         blobService.clearSession(blobSessionId);
       }
@@ -809,6 +839,7 @@ export const Toolbar: React.FC = () => {
         useCLAHE: detectionSettings.useCLAHE,
         claheClipLimit: detectionSettings.claheClipLimit,
         claheTileSize: detectionSettings.claheTileSize,
+        forceCPU: detectionSettings.forceCPU,
       });
 
       if (result.count === 0) {
@@ -901,6 +932,7 @@ export const Toolbar: React.FC = () => {
           useCLAHE: true,
           claheClipLimit: 3.0,
           claheTileSize: 8,
+          forceCPU: detectionSettings.forceCPU,
         });
 
         if (result.count === 0) {
@@ -1260,14 +1292,14 @@ export const Toolbar: React.FC = () => {
             isDetecting || serverStarting ? (
               <Loader2 size={18} className="animate-spin" />
             ) : (
-              <SlidersHorizontal size={18} />
+              <Sparkles size={18} />
             )
           }
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
               : detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0
-                ? "Detect with Manual Settings"
+                ? "Auto Detect"
                 : "Configure settings first"
           }
           shortcut="D"
@@ -1384,7 +1416,9 @@ export const Toolbar: React.FC = () => {
       {/* Status display */}
       <div className="toolbar-spacer" />
       <div className="toolbar-status">
-        {imageLoaded && activeImage ? (
+        {serverStarting && setupStatus ? (
+          <span className="setup-status">{setupStatus}</span>
+        ) : imageLoaded && activeImage ? (
           <>
             {images.size > 1 && (
               <span className="image-count">{images.size} images</span>
@@ -1411,6 +1445,10 @@ export const Toolbar: React.FC = () => {
             setShowDetectionSettings(false);
           }}
           onCancel={() => setShowDetectionSettings(false)}
+          blobServerConnected={blobServerConnected}
+          onServerRestarted={handleServerRestarted}
+          installState={gpuInstallState}
+          onInstallStateChange={setGpuInstallState}
         />
       )}
 

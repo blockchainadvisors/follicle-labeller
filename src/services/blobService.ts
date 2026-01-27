@@ -10,7 +10,7 @@
  * Requires minimum 3 user annotations before auto-detection can run.
  */
 
-import type { DetectedBlob } from "../types";
+import type { DetectedBlob, GPUInfo } from "../types";
 
 export interface BlobServerConfig {
   host: string;
@@ -296,6 +296,8 @@ export class BlobService {
       useCLAHE?: boolean;
       claheClipLimit?: number;
       claheTileSize?: number;
+      // Backend selection
+      forceCPU?: boolean;
     },
   ): Promise<{
     detections: BlobDetection[];
@@ -368,6 +370,45 @@ export class BlobService {
       // Server is shutting down, connection may fail
     }
     this.currentSessionId = null;
+  }
+
+  /**
+   * Get GPU backend information.
+   *
+   * @returns GPU info including active backend and available backends
+   */
+  async getGPUInfo(): Promise<GPUInfo> {
+    try {
+      const response = await fetch(`${this.baseUrl}/gpu-info`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!response.ok) {
+        return {
+          activeBackend: "cpu",
+          deviceName: "CPU (OpenCV)",
+          available: { cuda: false, mps: false },
+        };
+      }
+
+      const data = await response.json();
+      return {
+        activeBackend: data.active_backend || "cpu",
+        deviceName: data.device_name || "CPU (OpenCV)",
+        memoryGB: data.details?.cuda?.memory_gb,
+        available: {
+          cuda: data.backends?.cuda || false,
+          mps: data.backends?.mps || false,
+        },
+      };
+    } catch {
+      return {
+        activeBackend: "cpu",
+        deviceName: "CPU (OpenCV)",
+        available: { cuda: false, mps: false },
+      };
+    }
   }
 
   /**

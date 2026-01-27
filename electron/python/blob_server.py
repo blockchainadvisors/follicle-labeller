@@ -24,11 +24,50 @@ import sys
 import uuid
 from typing import Dict, List, Optional, Tuple
 
+# Setup NVIDIA CUDA DLL paths before importing GPU libraries (Windows only)
+if sys.platform == 'win32':
+    try:
+        # Find the venv site-packages nvidia directory
+        import site
+        nvidia_dll_paths = []
+        for site_path in site.getsitepackages():
+            nvidia_base = os.path.join(site_path, 'nvidia')
+            if os.path.exists(nvidia_base):
+                dll_subdirs = [
+                    'cuda_nvrtc/bin', 'cublas/bin', 'cuda_runtime/bin',
+                    'cufft/bin', 'curand/bin', 'cusolver/bin',
+                    'cusparse/bin', 'nvjitlink/bin'
+                ]
+                for subdir in dll_subdirs:
+                    dll_path = os.path.join(nvidia_base, subdir)
+                    if os.path.exists(dll_path):
+                        nvidia_dll_paths.append(dll_path)
+                        # Use os.add_dll_directory for Python 3.8+
+                        os.add_dll_directory(dll_path)
+                break
+
+        # Also prepend to PATH for broader compatibility
+        if nvidia_dll_paths:
+            current_path = os.environ.get('PATH', '')
+            new_paths = os.pathsep.join(nvidia_dll_paths)
+            os.environ['PATH'] = new_paths + os.pathsep + current_path
+    except Exception:
+        pass  # Ignore errors, GPU will just not be available
+
 import cv2
 import numpy as np
 from PIL import Image
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+# Import GPU backend manager
+try:
+    from gpu_backend import get_gpu_manager, GPUBackendManager
+    GPU_AVAILABLE = True
+except ImportError:
+    GPU_AVAILABLE = False
+    get_gpu_manager = None
+    GPUBackendManager = None
 
 # Configure logging
 logging.basicConfig(
@@ -42,6 +81,20 @@ CORS(app)
 
 # Global state
 sessions: Dict[str, dict] = {}
+
+# GPU Backend Manager (initialized lazily)
+gpu_manager: Optional['GPUBackendManager'] = None
+
+def get_gpu_backend():
+    """Get the GPU backend manager, initializing if needed."""
+    global gpu_manager
+    if gpu_manager is None and GPU_AVAILABLE and get_gpu_manager:
+        try:
+            gpu_manager = get_gpu_manager()
+            logger.info(f"GPU Backend: {gpu_manager.get_status()['active_backend']}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize GPU backend: {e}")
+    return gpu_manager
 
 # Minimum annotations required for auto-detection
 MIN_ANNOTATIONS_FOR_DETECTION = 3
@@ -296,17 +349,34 @@ def detect_blobs(image: np.ndarray,
         max_area = 10000  # ~100x100
         logger.info(f"Using default size range: area {min_area}-{max_area}")
 
+    # Get GPU backend if available (unless forceCPU is set)
+    force_cpu = settings.get('forceCPU', False)
+    manager = get_gpu_backend() if not force_cpu else None
+    backend = manager.get_backend() if manager else None
+    use_gpu = backend is not None and backend.name != 'cpu'
+
+    if force_cpu:
+        logger.info("Using CPU backend (forced by user preference)")
+    elif use_gpu:
+        logger.info(f"Using GPU backend: {backend.name} ({backend.device_name})")
+
     # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if use_gpu:
+        gray = backend.grayscale(image)
+    else:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # Apply CLAHE for better contrast (if enabled)
     use_clahe = settings.get('useCLAHE', True)
     if use_clahe:
         clip_limit = settings.get('claheClipLimit', 3.0)
         tile_size = settings.get('claheTileSize', 8)
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
-        gray = clahe.apply(gray)
-        logger.info(f"Applied CLAHE with clipLimit={clip_limit}, tileSize={tile_size}")
+        if use_gpu:
+            gray = backend.clahe(gray, clip_limit=clip_limit, tile_size=tile_size)
+        else:
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+            gray = clahe.apply(gray)
+        logger.info(f"Applied CLAHE with clipLimit={clip_limit}, tileSize={tile_size} (GPU={use_gpu})")
 
     detected_boxes: List[Tuple[int, int, int, int]] = []
     detected_results: List[dict] = []
@@ -404,12 +474,17 @@ def detect_blobs(image: np.ndarray,
         logger.info("Trying contour-based detection...")
 
         # Use Gaussian blur + Otsu thresholding (better than adaptive for this use case)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-        # Morphological opening to remove noise and separate touching objects
-        kernel = np.ones((3, 3), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        if use_gpu:
+            blurred = backend.gaussian_blur(gray, kernel_size=5)
+            thresh = backend.threshold_otsu(blurred, invert=True)
+            # Morphological opening to remove noise and separate touching objects
+            thresh = backend.morphological_open(thresh, kernel_size=3)
+        else:
+            blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            # Morphological opening to remove noise and separate touching objects
+            kernel = np.ones((3, 3), np.uint8)
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
 
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -456,6 +531,38 @@ def health():
         'version': '1.0.0',
         'min_annotations': MIN_ANNOTATIONS_FOR_DETECTION
     })
+
+
+@app.route('/gpu-info', methods=['GET'])
+def gpu_info():
+    """Get GPU backend information."""
+    manager = get_gpu_backend()
+
+    if manager:
+        status = manager.get_status()
+        return jsonify({
+            'available': True,
+            'active_backend': status['active_backend'],
+            'device_name': status['device_name'],
+            'backends': {
+                'cuda': status['available']['cuda'],
+                'mps': status['available']['mps'],
+                'cpu': True,
+            },
+            'details': status.get('backends_info', {}),
+        })
+    else:
+        return jsonify({
+            'available': False,
+            'active_backend': 'cpu',
+            'device_name': 'CPU (OpenCV)',
+            'backends': {
+                'cuda': False,
+                'mps': False,
+                'cpu': True,
+            },
+            'details': {},
+        })
 
 
 @app.route('/set-image', methods=['POST'])

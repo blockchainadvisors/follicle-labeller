@@ -261,6 +261,58 @@ const electronAPI = {
       running: boolean;
       scriptPath: string;
     }> => ipcRenderer.invoke("blob:getServerInfo"),
+
+    // Get setup progress status
+    getSetupStatus: (): Promise<string> =>
+      ipcRenderer.invoke("blob:getSetupStatus"),
+
+    // Listen for setup progress events
+    onSetupProgress: (callback: (status: string) => void) => {
+      const handler = (_event: IpcRendererEvent, status: string) =>
+        callback(status);
+      ipcRenderer.on("blob:setupProgress", handler);
+      return () => ipcRenderer.removeListener("blob:setupProgress", handler);
+    },
+
+    // Get GPU backend information
+    getGPUInfo: (): Promise<{
+      activeBackend: "cuda" | "mps" | "cpu";
+      deviceName: string;
+      memoryGB?: number;
+      available: { cuda: boolean; mps: boolean };
+    }> => ipcRenderer.invoke("blob:getGPUInfo"),
+
+    // Restart the BLOB server (after GPU package installation)
+    restartServer: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("blob:restartServer"),
+  },
+
+  // GPU Hardware Detection & Package Installation API
+  gpu: {
+    // Get GPU hardware info (works before packages installed)
+    getHardwareInfo: (): Promise<{
+      hardware: {
+        nvidia: { found: boolean; name?: string; driver_version?: string };
+        apple_silicon: { found: boolean; chip?: string };
+      };
+      packages: { cupy: boolean; torch: boolean };
+      canEnableGpu: boolean;
+      gpuEnabled: boolean;
+    }> => ipcRenderer.invoke("gpu:getHardwareInfo"),
+
+    // Install GPU packages (cupy-cuda12x on Windows/Linux, torch on macOS)
+    installPackages: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("gpu:installPackages"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("gpu:installProgress", handler);
+      return () => ipcRenderer.removeListener("gpu:installProgress", handler);
+    },
   },
 };
 

@@ -345,6 +345,46 @@ declare global {
         checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
         getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
       };
+      // BLOB Detection Server API
+      blob: {
+        startServer: () => Promise<{ success: boolean; error?: string }>;
+        stopServer: () => Promise<{ success: boolean }>;
+        isAvailable: () => Promise<boolean>;
+        checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
+        getSetupStatus: () => Promise<string>;
+        onSetupProgress: (callback: (status: string) => void) => () => void;
+        getGPUInfo: () => Promise<GPUInfo>;
+        restartServer: () => Promise<{ success: boolean; error?: string }>;
+      };
+      // GPU Hardware Detection & Package Installation API
+      gpu: {
+        getHardwareInfo: () => Promise<GPUHardwareInfo>;
+        installPackages: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+      };
     };
   }
+}
+
+// GPU Backend Info
+export interface GPUInfo {
+  activeBackend: 'cuda' | 'mps' | 'cpu';
+  deviceName: string;
+  memoryGB?: number;
+  available: {
+    cuda: boolean;
+    mps: boolean;
+  };
+}
+
+// GPU Hardware Info (for detection before packages installed)
+export interface GPUHardwareInfo {
+  hardware: {
+    nvidia: { found: boolean; name?: string; driver_version?: string };
+    apple_silicon: { found: boolean; chip?: string };
+  };
+  packages: { cupy: boolean; torch: boolean };
+  canEnableGpu: boolean;
+  gpuEnabled: boolean;
 }

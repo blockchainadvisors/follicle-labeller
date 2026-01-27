@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { X } from 'lucide-react';
-import type { BlobDetectionOptions } from '../../types';
+import { useState, useEffect } from 'react';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle } from 'lucide-react';
+import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo } from '../../types';
+import { blobService } from '../../services/blobService';
 import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
@@ -10,6 +11,9 @@ export interface DetectionSettings {
   minHeight: number;
   maxHeight: number;
   darkBlobs: boolean;
+
+  // Backend selection (CPU vs GPU)
+  forceCPU: boolean;
 
   // Gaussian blur preprocessing
   useGaussianBlur: boolean;
@@ -45,6 +49,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   minHeight: 10,
   maxHeight: 200,
   darkBlobs: true,
+  // Backend selection - use GPU by default when available
+  forceCPU: false,
   // Gaussian blur - matches OpenCV pipeline
   useGaussianBlur: true,
   gaussianKernelSize: 5,
@@ -68,18 +74,124 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   softNMSThreshold: 0.1,
 };
 
+// Install state that can be managed by parent for persistence
+export interface GPUInstallState {
+  isInstalling: boolean;
+  progress: string;
+  error: string | null;
+}
+
 interface DetectionSettingsDialogProps {
   settings: DetectionSettings;
   onSave: (settings: DetectionSettings) => void;
   onCancel: () => void;
+  blobServerConnected?: boolean;
+  onServerRestarted?: () => void;
+  // Optional install state from parent for persistence across dialog close/reopen
+  installState?: GPUInstallState;
+  onInstallStateChange?: (state: GPUInstallState) => void;
 }
 
 export function DetectionSettingsDialog({
   settings,
   onSave,
   onCancel,
+  blobServerConnected = false,
+  onServerRestarted,
+  installState,
+  onInstallStateChange,
 }: DetectionSettingsDialogProps) {
   const [localSettings, setLocalSettings] = useState<DetectionSettings>({ ...settings });
+  const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
+  const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
+
+  // Use parent state if provided, otherwise use local state
+  const [localIsInstalling, setLocalIsInstalling] = useState(false);
+  const [localInstallProgress, setLocalInstallProgress] = useState<string>('');
+  const [localInstallError, setLocalInstallError] = useState<string | null>(null);
+
+  // Determine which state to use (parent-controlled or local)
+  const isInstalling = installState?.isInstalling ?? localIsInstalling;
+  const installProgress = installState?.progress ?? localInstallProgress;
+  const installError = installState?.error ?? localInstallError;
+
+  // Helper to update install state (updates parent if controlled, local otherwise)
+  const updateInstallState = (updates: Partial<GPUInstallState>) => {
+    if (onInstallStateChange && installState) {
+      onInstallStateChange({ ...installState, ...updates });
+    } else {
+      if (updates.isInstalling !== undefined) setLocalIsInstalling(updates.isInstalling);
+      if (updates.progress !== undefined) setLocalInstallProgress(updates.progress);
+      if (updates.error !== undefined) setLocalInstallError(updates.error);
+    }
+  };
+
+  // Fetch GPU info from server when connected
+  useEffect(() => {
+    if (!blobServerConnected) return;
+
+    const fetchGpuInfo = async () => {
+      try {
+        const info = await blobService.getGPUInfo();
+        setGpuInfo(info);
+      } catch (error) {
+        console.error('Failed to fetch GPU info:', error);
+      }
+    };
+    fetchGpuInfo();
+  }, [blobServerConnected]);
+
+  // Fetch hardware info and listen for install progress on mount
+  useEffect(() => {
+    const fetchHardwareInfo = async () => {
+      try {
+        const info = await window.electronAPI.gpu.getHardwareInfo();
+        setGpuHardware(info);
+      } catch (error) {
+        console.error('Failed to fetch GPU hardware info:', error);
+      }
+    };
+    fetchHardwareInfo();
+
+    // Listen for install progress
+    const cleanup = window.electronAPI.gpu.onInstallProgress(({ message }) => {
+      updateInstallState({ progress: message });
+    });
+
+    return cleanup;
+  }, [installState, onInstallStateChange]);
+
+  // Handle GPU package installation
+  const handleInstallGPU = async () => {
+    updateInstallState({ isInstalling: true, error: null, progress: 'Starting installation...' });
+
+    try {
+      const result = await window.electronAPI.gpu.installPackages();
+
+      if (result.success) {
+        updateInstallState({ progress: 'Restarting detection server...' });
+        // Restart the blob server to pick up new packages
+        await window.electronAPI.blob.restartServer();
+
+        // Notify parent to recreate session (server restart invalidates old sessions)
+        onServerRestarted?.();
+
+        // Refresh GPU info
+        const info = await window.electronAPI.gpu.getHardwareInfo();
+        setGpuHardware(info);
+
+        // Also refresh gpuInfo for active backend display
+        const gpuStatus = await blobService.getGPUInfo();
+        setGpuInfo(gpuStatus);
+
+        updateInstallState({ isInstalling: false, progress: '' });
+      } else {
+        updateInstallState({ isInstalling: false, error: result.error || 'Installation failed' });
+      }
+    } catch (error) {
+      updateInstallState({ isInstalling: false, error: error instanceof Error ? error.message : 'Installation failed' });
+    }
+  };
 
   const handleChange = <K extends keyof DetectionSettings>(
     key: K,
@@ -107,6 +219,109 @@ export function DetectionSettingsDialog({
         </div>
 
         <div className="dialog-content">
+          {/* GPU Status Indicator */}
+          {/* State 1: GPU Active - packages installed and working */}
+          {gpuInfo && gpuInfo.activeBackend !== 'cpu' && (
+            <div className={`gpu-status gpu-status-${gpuInfo.activeBackend}`}>
+              <Zap size={16} />
+              <div className="gpu-status-content">
+                <span className="gpu-status-label">
+                  {gpuInfo.activeBackend === 'cuda' && 'CUDA Acceleration'}
+                  {gpuInfo.activeBackend === 'mps' && 'Metal Acceleration'}
+                </span>
+                <span className="gpu-status-device">{gpuInfo.deviceName}</span>
+              </div>
+              {gpuInfo.memoryGB && (
+                <span className="gpu-status-memory">
+                  {gpuInfo.memoryGB.toFixed(1)} GB
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* State 2: GPU Available - hardware detected, packages not installed, show install button */}
+          {gpuHardware?.canEnableGpu && !gpuHardware.gpuEnabled && !isInstalling && gpuInfo?.activeBackend === 'cpu' && (
+            <div className="gpu-status gpu-status-available">
+              <Zap size={16} />
+              <div className="gpu-status-content">
+                <span className="gpu-status-label">GPU Available</span>
+                <span className="gpu-status-device">
+                  {gpuHardware.hardware.nvidia.found
+                    ? gpuHardware.hardware.nvidia.name
+                    : gpuHardware.hardware.apple_silicon.chip}
+                </span>
+              </div>
+              <button className="gpu-install-btn" onClick={handleInstallGPU}>
+                <Download size={14} />
+                Install ({typeof window !== 'undefined' && navigator.platform.includes('Mac') ? '~2GB' : '~1.5GB'})
+              </button>
+            </div>
+          )}
+
+          {/* State 3: Installing - show progress */}
+          {isInstalling && (
+            <div className="gpu-status gpu-status-installing">
+              <Loader2 size={16} className="spin" />
+              <div className="gpu-status-content">
+                <span className="gpu-status-label">Installing GPU Packages</span>
+                <span className="gpu-status-progress">{installProgress || 'Starting...'}</span>
+              </div>
+            </div>
+          )}
+
+          {/* State 4: Installation Error */}
+          {installError && !isInstalling && (
+            <div className="gpu-status gpu-status-error">
+              <AlertCircle size={16} />
+              <div className="gpu-status-content">
+                <span className="gpu-status-label">Installation Failed</span>
+                <span className="gpu-status-error-msg">{installError}</span>
+              </div>
+              <button className="gpu-retry-btn" onClick={handleInstallGPU}>
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* State 5: No GPU - CPU only mode */}
+          {gpuInfo && gpuInfo.activeBackend === 'cpu' && !gpuHardware?.canEnableGpu && !isInstalling && !installError && (
+            <div className="gpu-status gpu-status-cpu">
+              <Cpu size={16} />
+              <div className="gpu-status-content">
+                <span className="gpu-status-label">CPU Mode</span>
+                <span className="gpu-status-device">No GPU Detected</span>
+              </div>
+            </div>
+          )}
+
+          {/* Backend Selection - Show when GPU is available (installed or active) */}
+          {gpuHardware?.gpuEnabled && (
+            <section className="settings-section backend-selection">
+              <h3>Processing Backend</h3>
+              <div className="backend-toggle">
+                <button
+                  className={`backend-btn ${!localSettings.forceCPU ? 'active' : ''}`}
+                  onClick={() => handleChange('forceCPU', false)}
+                >
+                  <Zap size={14} />
+                  GPU
+                </button>
+                <button
+                  className={`backend-btn ${localSettings.forceCPU ? 'active' : ''}`}
+                  onClick={() => handleChange('forceCPU', true)}
+                >
+                  <Cpu size={14} />
+                  CPU
+                </button>
+              </div>
+              <p className="backend-hint">
+                {localSettings.forceCPU
+                  ? 'Using CPU for detection (slower but more compatible)'
+                  : 'Using GPU for detection (faster processing)'}
+              </p>
+            </section>
+          )}
+
           {/* Basic Size Parameters */}
           <section className="settings-section">
             <h3>Size Range</h3>

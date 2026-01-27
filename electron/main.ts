@@ -12,6 +12,14 @@ import fs from "fs";
 import { spawn, ChildProcess } from "child_process";
 import JSZip from "jszip";
 import { initUpdater, checkForUpdates } from "./updater";
+import {
+  setupPythonEnvironment,
+  getVenvPythonPath,
+  isVenvValid,
+  getSetupStatus,
+  getGPUHardwareInfo,
+  installGPUPackages,
+} from "./python-env";
 
 // Set Windows AppUserModelId for proper notifications (must be early)
 if (process.platform === "win32") {
@@ -23,6 +31,9 @@ let mainWindow: BrowserWindow | null = null;
 // BLOB detection server process
 let blobServerProcess: ChildProcess | null = null;
 const BLOB_SERVER_PORT = 5555;
+
+// Python environment setup status for UI feedback
+let pythonSetupStatus = "";
 
 // File to open when launched via file association
 let fileToOpen: string | null = null;
@@ -793,6 +804,7 @@ async function checkPythonAvailable(): Promise<{
 
 /**
  * Start the BLOB detection server process.
+ * Automatically sets up Python venv and installs dependencies if needed.
  */
 async function startBlobServer(): Promise<{
   success: boolean;
@@ -803,10 +815,27 @@ async function startBlobServer(): Promise<{
     return { success: true };
   }
 
-  // Check Python availability
-  const pythonCheck = await checkPythonAvailable();
-  if (!pythonCheck.available) {
-    return { success: false, error: pythonCheck.error };
+  console.log("[BLOB Server] Initializing Python environment...");
+  pythonSetupStatus = "Initializing Python environment...";
+
+  // Get requirements.txt path
+  const requirementsPath = app.isPackaged
+    ? path.join(process.resourcesPath, "python", "requirements.txt")
+    : path.join(__dirname, "..", "electron", "python", "requirements.txt");
+
+  // Setup Python environment (creates venv and installs deps if needed)
+  const setupResult = await setupPythonEnvironment(
+    requirementsPath,
+    (status) => {
+      pythonSetupStatus = status;
+      // Notify renderer of progress
+      mainWindow?.webContents.send("blob:setupProgress", status);
+    }
+  );
+
+  if (!setupResult.success) {
+    pythonSetupStatus = `Setup failed: ${setupResult.error}`;
+    return { success: false, error: setupResult.error };
   }
 
   // Check if server script exists
@@ -815,25 +844,26 @@ async function startBlobServer(): Promise<{
     return { success: false, error: "BLOB server script not found" };
   }
 
-  return new Promise((resolve) => {
-    // Use 'python' on all platforms - conda environments use 'python' not 'python3'
-    const pythonCmd = "python";
+  // Get Python path from venv
+  const pythonPath = getVenvPythonPath();
 
+  return new Promise((resolve) => {
     console.log("[BLOB Server] Starting server...");
-    console.log("[BLOB Server] Python command:", pythonCmd);
+    console.log("[BLOB Server] Python path:", pythonPath);
     console.log("[BLOB Server] Script path:", serverPath);
     console.log("[BLOB Server] CWD:", path.dirname(serverPath));
 
-    // Quote the path to handle spaces in directory names
-    const quotedServerPath = `"${serverPath}"`;
+    pythonSetupStatus = "Starting detection server...";
+    mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);
 
+    // Use venv Python directly - no shell needed for more reliable execution
     blobServerProcess = spawn(
-      pythonCmd,
-      [quotedServerPath, "--port", BLOB_SERVER_PORT.toString()],
+      pythonPath,
+      [serverPath, "--port", BLOB_SERVER_PORT.toString()],
       {
         cwd: path.dirname(serverPath),
         stdio: ["ignore", "pipe", "pipe"],
-        shell: true, // Use shell to inherit conda/virtualenv from user's shell config
+        // No shell: true - direct execution is more reliable
       },
     );
 
@@ -847,6 +877,8 @@ async function startBlobServer(): Promise<{
       // Check for successful startup
       if (!resolved && output.includes("Running on")) {
         resolved = true;
+        pythonSetupStatus = "Detection server ready";
+        mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);
         resolve({ success: true });
       }
     });
@@ -859,6 +891,8 @@ async function startBlobServer(): Promise<{
       // Check for successful startup in stderr (where Flask outputs it)
       if (!resolved && output.includes("Running on")) {
         resolved = true;
+        pythonSetupStatus = "Detection server ready";
+        mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);
         resolve({ success: true });
       }
 
@@ -871,6 +905,7 @@ async function startBlobServer(): Promise<{
       blobServerProcess = null;
       if (!resolved) {
         resolved = true;
+        pythonSetupStatus = `Server exited with code ${code}`;
         resolve({
           success: false,
           error: errorOutput || `Process exited with code ${code}`,
@@ -882,58 +917,63 @@ async function startBlobServer(): Promise<{
       console.error("Failed to start BLOB server:", err);
       if (!resolved) {
         resolved = true;
+        pythonSetupStatus = `Failed to start: ${err.message}`;
         resolve({ success: false, error: err.message });
       }
     });
 
-    // Timeout after 30 seconds (no model loading needed, should be fast)
+    // Timeout after 60 seconds (increased for first-time dependency installation)
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
+        pythonSetupStatus = "Server startup timed out";
         resolve({ success: false, error: "Server startup timed out" });
       }
-    }, 30000);
+    }, 60000);
   });
 }
 
 /**
  * Stop the BLOB detection server process.
  */
-function stopBlobServer(): void {
+async function stopBlobServer(): Promise<void> {
   if (blobServerProcess && !blobServerProcess.killed) {
     console.log("Stopping BLOB server...");
 
-    // Try graceful shutdown first via HTTP
-    const http = require("http");
-    const req = http.request(
-      {
-        hostname: "127.0.0.1",
-        port: BLOB_SERVER_PORT,
-        path: "/shutdown",
-        method: "POST",
-        timeout: 2000,
-      },
-      () => {
-        // Response received, server is shutting down
-      },
-    );
+    return new Promise((resolve) => {
+      // Try graceful shutdown first via HTTP
+      const http = require("http");
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: BLOB_SERVER_PORT,
+          path: "/shutdown",
+          method: "POST",
+          timeout: 2000,
+        },
+        () => {
+          // Response received, server is shutting down
+        },
+      );
 
-    req.on("error", () => {
-      // If HTTP fails, kill the process
-      if (blobServerProcess && !blobServerProcess.killed) {
-        blobServerProcess.kill();
-      }
+      req.on("error", () => {
+        // If HTTP fails, kill the process
+        if (blobServerProcess && !blobServerProcess.killed) {
+          blobServerProcess.kill();
+        }
+      });
+
+      req.end();
+
+      // Force kill after timeout if still running
+      setTimeout(() => {
+        if (blobServerProcess && !blobServerProcess.killed) {
+          blobServerProcess.kill("SIGKILL");
+        }
+        blobServerProcess = null;
+        resolve();
+      }, 3000);
     });
-
-    req.end();
-
-    // Force kill after timeout if still running
-    setTimeout(() => {
-      if (blobServerProcess && !blobServerProcess.killed) {
-        blobServerProcess.kill("SIGKILL");
-      }
-      blobServerProcess = null;
-    }, 3000);
   }
 }
 
@@ -993,6 +1033,93 @@ ipcMain.handle("blob:getServerInfo", async () => {
     running: await isBlobServerRunning(),
     scriptPath: getBlobServerPath(),
   };
+});
+
+ipcMain.handle("blob:getSetupStatus", () => {
+  return pythonSetupStatus;
+});
+
+ipcMain.handle("blob:getGPUInfo", async () => {
+  // Make HTTP request to the blob server's /gpu-info endpoint
+  return new Promise((resolve) => {
+    const http = require("http");
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BLOB_SERVER_PORT,
+        path: "/gpu-info",
+        method: "GET",
+        timeout: 5000,
+      },
+      (res: any) => {
+        let data = "";
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            const gpuInfo = JSON.parse(data);
+            resolve({
+              activeBackend: gpuInfo.active_backend || "cpu",
+              deviceName: gpuInfo.device_name || "CPU (OpenCV)",
+              memoryGB: gpuInfo.details?.cuda?.memory_gb,
+              available: {
+                cuda: gpuInfo.backends?.cuda || false,
+                mps: gpuInfo.backends?.mps || false,
+              },
+            });
+          } catch {
+            resolve({
+              activeBackend: "cpu",
+              deviceName: "CPU (OpenCV)",
+              available: { cuda: false, mps: false },
+            });
+          }
+        });
+      }
+    );
+
+    req.on("error", () => {
+      resolve({
+        activeBackend: "cpu",
+        deviceName: "CPU (OpenCV)",
+        available: { cuda: false, mps: false },
+      });
+    });
+
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({
+        activeBackend: "cpu",
+        deviceName: "CPU (OpenCV)",
+        available: { cuda: false, mps: false },
+      });
+    });
+
+    req.end();
+  });
+});
+
+// ============================================
+// GPU Hardware Detection & Installation
+// ============================================
+
+// Get GPU hardware info (works before packages installed)
+ipcMain.handle("gpu:getHardwareInfo", async () => {
+  return getGPUHardwareInfo();
+});
+
+// Install GPU packages
+ipcMain.handle("gpu:installPackages", async () => {
+  return installGPUPackages((message, percent) => {
+    mainWindow?.webContents.send("gpu:installProgress", { message, percent });
+  });
+});
+
+// Restart blob server after installation
+ipcMain.handle("blob:restartServer", async () => {
+  await stopBlobServer();
+  return startBlobServer();
 });
 
 // ============================================
