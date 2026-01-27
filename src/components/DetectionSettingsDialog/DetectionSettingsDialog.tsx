@@ -27,6 +27,15 @@ export interface DetectionSettings {
   useCircularityFilter: boolean;
   minCircularity: number;
 
+  // Inertia filter (for elongated shapes like hair follicles)
+  useInertiaFilter: boolean;
+  minInertiaRatio: number;
+  maxInertiaRatio: number;
+
+  // Convexity filter
+  useConvexityFilter: boolean;
+  minConvexity: number;
+
   // CLAHE preprocessing
   useCLAHE: boolean;
   claheClipLimit: number;
@@ -57,9 +66,16 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   // Morphological opening - separates touching objects
   useMorphOpen: true,
   morphKernelSize: 3,
-  // Circularity filter - rejects elongated shapes
-  useCircularityFilter: true,
+  // Circularity filter - DISABLED for hair follicles (they are elongated, not circular)
+  useCircularityFilter: false,
   minCircularity: 0.2,
+  // Inertia filter - ENABLED for hair follicles (allows elongated shapes)
+  useInertiaFilter: true,
+  minInertiaRatio: 0.01,  // Very low = allows elongated shapes
+  maxInertiaRatio: 1.0,   // Up to perfectly circular
+  // Convexity filter - disabled by default
+  useConvexityFilter: false,
+  minConvexity: 0.5,
   // CLAHE - matches Python clipLimit=3.0
   useCLAHE: true,
   claheClipLimit: 3.0,
@@ -509,6 +525,7 @@ export function DetectionSettingsDialog({
             </h3>
             <p className="section-description">
               Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
+              <strong> Disable for hair follicles</strong> (they are elongated).
             </p>
             {localSettings.useCircularityFilter && (
               <div className="settings-row">
@@ -522,6 +539,83 @@ export function DetectionSettingsDialog({
                   step={0.05}
                 />
                 <span className="hint">0-1, 1.0 = perfect circle</span>
+              </div>
+            )}
+          </section>
+
+          {/* Inertia Filter */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useInertiaFilter}
+                  onChange={e => handleChange('useInertiaFilter', e.target.checked)}
+                />
+                Inertia Filter
+              </label>
+            </h3>
+            <p className="section-description">
+              Controls allowed elongation of detected shapes. Low min ratio allows elongated shapes like
+              <strong> hair follicles</strong>. High ratio requires more circular shapes.
+            </p>
+            {localSettings.useInertiaFilter && (
+              <>
+                <div className="settings-row">
+                  <label>Min Inertia Ratio</label>
+                  <input
+                    type="number"
+                    value={localSettings.minInertiaRatio}
+                    onChange={e => handleChange('minInertiaRatio', parseFloat(e.target.value) || 0)}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                  />
+                  <span className="hint">0-1, 0.01 = very elongated OK</span>
+                </div>
+                <div className="settings-row">
+                  <label>Max Inertia Ratio</label>
+                  <input
+                    type="number"
+                    value={localSettings.maxInertiaRatio}
+                    onChange={e => handleChange('maxInertiaRatio', parseFloat(e.target.value) || 1)}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                  />
+                  <span className="hint">0-1, 1.0 = perfect circle</span>
+                </div>
+              </>
+            )}
+          </section>
+
+          {/* Convexity Filter */}
+          <section className="settings-section">
+            <h3>
+              <label className="section-toggle">
+                <input
+                  type="checkbox"
+                  checked={localSettings.useConvexityFilter}
+                  onChange={e => handleChange('useConvexityFilter', e.target.checked)}
+                />
+                Convexity Filter
+              </label>
+            </h3>
+            <p className="section-description">
+              Filters by how convex (non-concave) the detected shape is. High values reject shapes with indentations.
+            </p>
+            {localSettings.useConvexityFilter && (
+              <div className="settings-row">
+                <label>Min Convexity</label>
+                <input
+                  type="number"
+                  value={localSettings.minConvexity}
+                  onChange={e => handleChange('minConvexity', parseFloat(e.target.value) || 0)}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                />
+                <span className="hint">0-1, 1.0 = perfectly convex</span>
               </div>
             )}
           </section>
@@ -697,8 +791,16 @@ export function settingsToOptions(settings: DetectionSettings): Partial<BlobDete
     // Morphological opening
     useMorphOpen: settings.useMorphOpen,
     morphKernelSize: settings.morphKernelSize,
-    // Circularity filter (0 disables it)
-    minCircularity: settings.useCircularityFilter ? settings.minCircularity : 0,
+    // Circularity filter
+    filterByCircularity: settings.useCircularityFilter,
+    minCircularity: settings.minCircularity,
+    // Inertia filter (for elongated shapes like hair follicles)
+    filterByInertia: settings.useInertiaFilter,
+    minInertiaRatio: settings.minInertiaRatio,
+    maxInertiaRatio: settings.maxInertiaRatio,
+    // Convexity filter
+    filterByConvexity: settings.useConvexityFilter,
+    minConvexity: settings.minConvexity,
     // CLAHE
     useCLAHE: settings.useCLAHE,
     claheClipLimit: settings.claheClipLimit,

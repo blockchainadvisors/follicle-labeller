@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-BLOB Detection Backend Server
+BLOB Detection Backend Server (FastAPI)
 
-This Flask server provides an API for the Follicle Labeller application to use
+This FastAPI server provides an API for the Follicle Labeller application to use
 OpenCV-based BLOB detection for automated follicle detection. It supports:
 - Setting an image for a session
 - Adding user annotations for size learning
@@ -10,6 +10,9 @@ OpenCV-based BLOB detection for automated follicle detection. It supports:
 
 The server learns follicle size from user annotations (minimum 3 required)
 and uses that information to calibrate detection parameters.
+
+FastAPI provides async request handling which avoids thread pool conflicts
+with ProcessPoolExecutor used for parallel blob detection.
 
 Usage:
     python blob_server.py [--port PORT] [--host HOST]
@@ -20,9 +23,10 @@ import base64
 import io
 import logging
 import os
+import signal
 import sys
 import uuid
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Setup NVIDIA CUDA DLL paths before importing GPU libraries (Windows only)
 if sys.platform == 'win32':
@@ -57,8 +61,10 @@ if sys.platform == 'win32':
 import cv2
 import numpy as np
 from PIL import Image
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 # Import GPU backend manager
 try:
@@ -69,6 +75,14 @@ except ImportError:
     get_gpu_manager = None
     GPUBackendManager = None
 
+# Import parallel blob detection
+try:
+    from parallel_blob_detect import parallel_blob_detect
+    PARALLEL_BLOB_AVAILABLE = True
+except ImportError:
+    PARALLEL_BLOB_AVAILABLE = False
+    parallel_blob_detect = None
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -76,14 +90,67 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app)
+# Create FastAPI app
+app = FastAPI(
+    title="BLOB Detection Server",
+    description="OpenCV-based blob detection API for follicle labelling",
+    version="2.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Global state
 sessions: Dict[str, dict] = {}
 
 # GPU Backend Manager (initialized lazily)
 gpu_manager: Optional['GPUBackendManager'] = None
+
+# Server reference for shutdown
+server_instance = None
+
+
+# ============================================
+# Pydantic Models for Request Validation
+# ============================================
+
+class SetImageRequest(BaseModel):
+    image: str  # base64
+
+class AnnotationBox(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+
+class AddAnnotationRequest(BaseModel):
+    sessionId: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+class SyncAnnotationsRequest(BaseModel):
+    sessionId: str
+    annotations: List[AnnotationBox]
+
+class BlobDetectRequest(BaseModel):
+    sessionId: str
+    settings: Optional[Dict[str, Any]] = None
+
+class SessionRequest(BaseModel):
+    sessionId: str
+
+
+# ============================================
+# Helper Functions
+# ============================================
 
 def get_gpu_backend():
     """Get the GPU backend manager, initializing if needed."""
@@ -98,6 +165,10 @@ def get_gpu_backend():
 
 # Minimum annotations required for auto-detection
 MIN_ANNOTATIONS_FOR_DETECTION = 3
+
+# Parallel blob detection threshold (use parallel for images larger than this)
+# 10 million pixels = ~3162x3162 or 2500x4000
+PARALLEL_DETECTION_PIXEL_THRESHOLD = 10_000_000
 
 
 def decode_image(image_data: str) -> Optional[np.ndarray]:
@@ -273,6 +344,125 @@ def overlaps_existing(box: Tuple[int, int, int, int],
     return False
 
 
+class SpatialGrid:
+    """
+    Fast spatial grid for O(1) average-case overlap checking.
+
+    Instead of O(n) scans for each new detection, this uses a grid
+    to only check nearby boxes. Reduces overlap filtering from O(n²) to O(n).
+    """
+
+    def __init__(self, cell_size: float = 100.0):
+        """
+        Initialize spatial grid.
+
+        Args:
+            cell_size: Size of each grid cell in pixels. Should be roughly
+                      the maximum expected box size for best performance.
+        """
+        self.cell_size = cell_size
+        self.grid: Dict[Tuple[int, int], List[Tuple[int, int, int, int]]] = {}
+
+    def _get_cells(self, box: Tuple[int, int, int, int]) -> List[Tuple[int, int]]:
+        """Get all grid cells that a box touches."""
+        x1, y1, x2, y2 = box
+        cell_x1 = int(x1 / self.cell_size)
+        cell_y1 = int(y1 / self.cell_size)
+        cell_x2 = int(x2 / self.cell_size)
+        cell_y2 = int(y2 / self.cell_size)
+
+        cells = []
+        for cx in range(cell_x1, cell_x2 + 1):
+            for cy in range(cell_y1, cell_y2 + 1):
+                cells.append((cx, cy))
+        return cells
+
+    def add(self, box: Tuple[int, int, int, int]):
+        """Add a box to the grid."""
+        for cell in self._get_cells(box):
+            if cell not in self.grid:
+                self.grid[cell] = []
+            self.grid[cell].append(box)
+
+    def overlaps(self, box: Tuple[int, int, int, int], iou_threshold: float = 0.3) -> bool:
+        """Check if box overlaps with any existing box in the grid."""
+        # Check all cells the box touches plus neighbors
+        x1, y1, x2, y2 = box
+        cell_x1 = int(x1 / self.cell_size) - 1
+        cell_y1 = int(y1 / self.cell_size) - 1
+        cell_x2 = int(x2 / self.cell_size) + 1
+        cell_y2 = int(y2 / self.cell_size) + 1
+
+        checked = set()  # Avoid checking same box twice
+        for cx in range(cell_x1, cell_x2 + 1):
+            for cy in range(cell_y1, cell_y2 + 1):
+                for existing in self.grid.get((cx, cy), []):
+                    box_id = id(existing)
+                    if box_id in checked:
+                        continue
+                    checked.add(box_id)
+                    if calculate_iou(box, existing) > iou_threshold:
+                        return True
+        return False
+
+
+def filter_overlapping_detections(
+    keypoints: List,
+    image_shape: Tuple[int, int],
+    follicle_size: int,
+    existing_annotations: List[Tuple[int, int, int, int]],
+    iou_threshold: float = 0.3,
+    method_name: str = 'blob'
+) -> List[dict]:
+    """
+    Filter overlapping detections using spatial grid for O(n) performance.
+
+    Args:
+        keypoints: List of cv2.KeyPoint objects
+        image_shape: (height, width) of the image
+        follicle_size: Estimated follicle size for bounding box calculation
+        existing_annotations: Pre-existing annotation boxes to avoid
+        iou_threshold: IoU threshold for overlap detection
+        method_name: Name of detection method for result metadata
+
+    Returns:
+        List of detection dicts with x, y, width, height, confidence, method
+    """
+    h, w = image_shape
+
+    # Use cell size based on expected box size
+    cell_size = max(follicle_size * 2, 50)
+    grid = SpatialGrid(cell_size=cell_size)
+
+    # Add existing annotations to grid
+    for box in existing_annotations:
+        grid.add(box)
+
+    results = []
+    for kp in keypoints:
+        x, y = int(kp.pt[0]), int(kp.pt[1])
+        r = max(int(kp.size / 2), follicle_size // 2)
+        box = (x - r, y - r, x + r, y + r)
+
+        # Check bounds
+        if box[0] < 0 or box[1] < 0 or box[2] > w or box[3] > h:
+            continue
+
+        # Check overlap using spatial grid (O(1) average case)
+        if not grid.overlaps(box, iou_threshold):
+            grid.add(box)
+            results.append({
+                'x': box[0],
+                'y': box[1],
+                'width': box[2] - box[0],
+                'height': box[3] - box[1],
+                'confidence': 0.8,
+                'method': method_name
+            })
+
+    return results
+
+
 def detect_blobs(image: np.ndarray,
                  annotations: List[dict],
                  settings: Optional[dict] = None) -> List[dict]:
@@ -393,26 +583,41 @@ def detect_blobs(image: np.ndarray,
     params = cv2.SimpleBlobDetector_Params()
 
     # Threshold parameters - scan from 10 to 220 in steps of 10 (22 levels)
-    params.minThreshold = 10
-    params.maxThreshold = 220
-    params.thresholdStep = 10
+    params.minThreshold = settings.get('minThreshold', 10)
+    params.maxThreshold = settings.get('maxThreshold', 220)
+    params.thresholdStep = settings.get('thresholdStep', 10)
 
     # Area filter
     params.filterByArea = True
     params.minArea = min_area
     params.maxArea = max_area
 
-    # Circularity filter - lenient for hair follicles
-    params.filterByCircularity = True
-    params.minCircularity = 0.2
+    # Circularity filter
+    # Default: DISABLED - hair follicles are elongated (shaved ~1mm), not circular
+    # Set filterByCircularity=True and minCircularity=0.2 to require circular shapes
+    filter_by_circularity = settings.get('filterByCircularity', False)
+    params.filterByCircularity = filter_by_circularity
+    params.minCircularity = settings.get('minCircularity', 0.1)
 
-    # Disable other filters
-    params.filterByConvexity = False
-    params.filterByInertia = False
+    # Convexity filter
+    # Default: DISABLED - elongated follicles may not be convex
+    filter_by_convexity = settings.get('filterByConvexity', False)
+    params.filterByConvexity = filter_by_convexity
+    params.minConvexity = settings.get('minConvexity', 0.5)
+
+    # Inertia filter (controls elongation: 0 = line, 1 = circle)
+    # Default: ENABLED with low threshold to allow elongated shapes
+    # minInertiaRatio=0.01 allows very elongated, maxInertiaRatio=1.0 allows any shape
+    filter_by_inertia = settings.get('filterByInertia', True)
+    params.filterByInertia = filter_by_inertia
+    params.minInertiaRatio = settings.get('minInertiaRatio', 0.01)
+    params.maxInertiaRatio = settings.get('maxInertiaRatio', 1.0)
 
     # Color filter - detect dark or light blobs based on settings
+    # Default: dark blobs (hair follicles appear dark)
     dark_blobs = settings.get('darkBlobs', True)
-    params.filterByColor = True
+    filter_by_color = settings.get('filterByColor', True)
+    params.filterByColor = filter_by_color
     params.blobColor = 0 if dark_blobs else 255  # 0 = dark blobs, 255 = light blobs
 
     # Log all detection parameters
@@ -437,37 +642,73 @@ def detect_blobs(image: np.ndarray,
     logger.info(f"    Dark blobs: {dark_blobs}")
     logger.info(f"    Blob color: {params.blobColor} (0=dark, 255=light)")
     logger.info(f"    Threshold range: {params.minThreshold}-{params.maxThreshold} (step: {params.thresholdStep})")
-    logger.info(f"    Min circularity: {params.minCircularity}")
     logger.info(f"    Filter by area: {params.filterByArea}")
-    logger.info(f"    Filter by circularity: {params.filterByCircularity}")
-    logger.info(f"    Filter by convexity: {params.filterByConvexity}")
-    logger.info(f"    Filter by inertia: {params.filterByInertia}")
+    logger.info(f"    Filter by color: {params.filterByColor}")
+    logger.info(f"    Filter by circularity: {params.filterByCircularity} (min: {params.minCircularity})")
+    logger.info(f"    Filter by convexity: {params.filterByConvexity} (min: {params.minConvexity})")
+    logger.info(f"    Filter by inertia: {params.filterByInertia} (min: {params.minInertiaRatio}, max: {params.maxInertiaRatio})")
     logger.info("=" * 60)
 
-    detector = cv2.SimpleBlobDetector_create(params)
-    keypoints = detector.detect(gray)
+    # Determine if we should use parallel detection for large images
+    pixel_count = gray.shape[0] * gray.shape[1]
+    use_parallel = (
+        PARALLEL_BLOB_AVAILABLE
+        and pixel_count >= PARALLEL_DETECTION_PIXEL_THRESHOLD
+        and not settings.get('disableParallel', False)
+    )
 
-    for kp in keypoints:
-        x, y = int(kp.pt[0]), int(kp.pt[1])
-        r = max(int(kp.size / 2), follicle_size // 2)
-        box = (x - r, y - r, x + r, y + r)
+    if use_parallel:
+        # Use parallel tiled blob detection for large images (10-15x faster)
+        logger.info(f"Using PARALLEL blob detection ({pixel_count:,} pixels >= {PARALLEL_DETECTION_PIXEL_THRESHOLD:,} threshold)")
 
-        # Check bounds
-        if box[0] < 0 or box[1] < 0 or box[2] > image.shape[1] or box[3] > image.shape[0]:
-            continue
+        keypoints = parallel_blob_detect(
+            gray,
+            min_threshold=params.minThreshold,
+            max_threshold=params.maxThreshold,
+            threshold_step=params.thresholdStep,
+            min_area=min_area,
+            max_area=max_area,
+            filter_by_circularity=params.filterByCircularity,
+            min_circularity=params.minCircularity,
+            filter_by_convexity=params.filterByConvexity,
+            min_convexity=params.minConvexity,
+            filter_by_inertia=params.filterByInertia,
+            min_inertia_ratio=params.minInertiaRatio,
+            max_inertia_ratio=params.maxInertiaRatio,
+            filter_by_color=params.filterByColor,
+            blob_color=params.blobColor,
+            n_tiles=16,
+            overlap=300,
+            dedup_cell_size=8.0
+        )
+    else:
+        # Use standard sequential blob detection
+        if pixel_count >= PARALLEL_DETECTION_PIXEL_THRESHOLD:
+            logger.info(f"Using SEQUENTIAL blob detection (parallel not available)")
+        else:
+            logger.info(f"Using SEQUENTIAL blob detection ({pixel_count:,} pixels < {PARALLEL_DETECTION_PIXEL_THRESHOLD:,} threshold)")
 
-        if not overlaps_existing(box, existing_boxes + detected_boxes):
-            detected_boxes.append(box)
-            detected_results.append({
-                'x': box[0],
-                'y': box[1],
-                'width': box[2] - box[0],
-                'height': box[3] - box[1],
-                'confidence': 0.8,  # SimpleBlobDetector confidence
-                'method': 'blob'
-            })
+        detector = cv2.SimpleBlobDetector_create(params)
+        keypoints = detector.detect(gray)
 
-    logger.info(f"Blob detection found {len(detected_results)} follicles")
+    # Use optimized spatial grid filter (O(n) instead of O(n²))
+    method_name = 'blob_parallel' if use_parallel else 'blob'
+    detected_results = filter_overlapping_detections(
+        keypoints=keypoints,
+        image_shape=(image.shape[0], image.shape[1]),
+        follicle_size=follicle_size,
+        existing_annotations=existing_boxes,
+        iou_threshold=0.3,
+        method_name=method_name
+    )
+
+    # Track boxes for contour fallback
+    detected_boxes = [
+        (r['x'], r['y'], r['x'] + r['width'], r['y'] + r['height'])
+        for r in detected_results
+    ]
+
+    logger.info(f"Blob detection found {len(detected_results)} follicles (parallel={use_parallel})")
 
     # Method 2: Contour-based fallback if blob detection found few results
     if len(detected_results) < 50:
@@ -519,28 +760,31 @@ def detect_blobs(image: np.ndarray,
 
 
 # ============================================
-# Flask Routes
+# FastAPI Routes
 # ============================================
 
-@app.route('/health', methods=['GET'])
-def health():
+@app.get('/health')
+async def health():
     """Health check endpoint."""
-    return jsonify({
+    return {
         'status': 'ok',
         'server': 'blob-detector',
-        'version': '1.0.0',
-        'min_annotations': MIN_ANNOTATIONS_FOR_DETECTION
-    })
+        'version': '2.0.0',
+        'framework': 'fastapi',
+        'min_annotations': MIN_ANNOTATIONS_FOR_DETECTION,
+        'parallel_detection': PARALLEL_BLOB_AVAILABLE,
+        'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD
+    }
 
 
-@app.route('/gpu-info', methods=['GET'])
-def gpu_info():
+@app.get('/gpu-info')
+async def gpu_info():
     """Get GPU backend information."""
     manager = get_gpu_backend()
 
     if manager:
         status = manager.get_status()
-        return jsonify({
+        return {
             'available': True,
             'active_backend': status['active_backend'],
             'device_name': status['device_name'],
@@ -550,9 +794,11 @@ def gpu_info():
                 'cpu': True,
             },
             'details': status.get('backends_info', {}),
-        })
+            'parallel_detection': PARALLEL_BLOB_AVAILABLE,
+            'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
+        }
     else:
-        return jsonify({
+        return {
             'available': False,
             'active_backend': 'cpu',
             'device_name': 'CPU (OpenCV)',
@@ -562,30 +808,25 @@ def gpu_info():
                 'cpu': True,
             },
             'details': {},
-        })
+            'parallel_detection': PARALLEL_BLOB_AVAILABLE,
+            'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
+        }
 
 
-@app.route('/set-image', methods=['POST'])
-def set_image():
+@app.post('/set-image')
+async def set_image(req: SetImageRequest):
     """
     Set an image for a new session.
-
-    Request body:
-        - image: Base64-encoded image data
 
     Returns:
         - sessionId: Unique session identifier
         - width: Image width
         - height: Image height
     """
-    data = request.get_json()
-    if not data or 'image' not in data:
-        return jsonify({'error': 'Missing image data'}), 400
-
     # Decode image
-    image = decode_image(data['image'])
+    image = decode_image(req.image)
     if image is None:
-        return jsonify({'error': 'Failed to decode image'}), 400
+        raise HTTPException(status_code=400, detail='Failed to decode image')
 
     # Create session
     session_id = str(uuid.uuid4())
@@ -599,189 +840,135 @@ def set_image():
 
     logger.info(f"Created session {session_id} for image {image.shape[1]}x{image.shape[0]}")
 
-    return jsonify({
+    return {
         'sessionId': session_id,
         'width': image.shape[1],
         'height': image.shape[0]
-    })
+    }
 
 
-@app.route('/add-annotation', methods=['POST'])
-def add_annotation():
+@app.post('/add-annotation')
+async def add_annotation(req: AddAnnotationRequest):
     """
     Add a user annotation for size learning.
 
-    Request body:
-        - sessionId: Session identifier
-        - x: Top-left X coordinate
-        - y: Top-left Y coordinate
-        - width: Annotation width
-        - height: Annotation height
-
     Returns:
         - annotationCount: Total annotations in session
         - canDetect: Whether minimum annotations reached
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
-
-    session_id = data.get('sessionId')
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
-
-    # Validate annotation data
-    x = data.get('x')
-    y = data.get('y')
-    width = data.get('width')
-    height = data.get('height')
-
-    if None in [x, y, width, height]:
-        return jsonify({'error': 'Missing annotation coordinates'}), 400
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
 
     # Add annotation
-    session = sessions[session_id]
+    session = sessions[req.sessionId]
     session['annotations'].append({
-        'x': x,
-        'y': y,
-        'width': width,
-        'height': height
+        'x': req.x,
+        'y': req.y,
+        'width': req.width,
+        'height': req.height
     })
 
     annotation_count = len(session['annotations'])
     can_detect = annotation_count >= MIN_ANNOTATIONS_FOR_DETECTION
 
-    logger.info(f"Session {session_id}: {annotation_count} annotations, can_detect={can_detect}")
+    logger.info(f"Session {req.sessionId}: {annotation_count} annotations, can_detect={can_detect}")
 
-    return jsonify({
+    return {
         'annotationCount': annotation_count,
         'canDetect': can_detect,
         'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
-    })
+    }
 
 
-@app.route('/sync-annotations', methods=['POST'])
-def sync_annotations():
+@app.post('/sync-annotations')
+async def sync_annotations(req: SyncAnnotationsRequest):
     """
     Sync all annotations from frontend (replaces session annotations).
 
-    Request body:
-        - sessionId: Session identifier
-        - annotations: Array of {x, y, width, height} objects
-
     Returns:
         - annotationCount: Total annotations in session
         - canDetect: Whether minimum annotations reached
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
-
-    session_id = data.get('sessionId')
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
-
-    annotations = data.get('annotations', [])
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
 
     # Replace session annotations
-    session = sessions[session_id]
+    session = sessions[req.sessionId]
     session['annotations'] = []
 
-    for ann in annotations:
-        x = ann.get('x')
-        y = ann.get('y')
-        width = ann.get('width')
-        height = ann.get('height')
-
-        if None not in [x, y, width, height]:
-            session['annotations'].append({
-                'x': x,
-                'y': y,
-                'width': width,
-                'height': height
-            })
+    for ann in req.annotations:
+        session['annotations'].append({
+            'x': ann.x,
+            'y': ann.y,
+            'width': ann.width,
+            'height': ann.height
+        })
 
     annotation_count = len(session['annotations'])
     can_detect = annotation_count >= MIN_ANNOTATIONS_FOR_DETECTION
 
-    logger.info(f"Session {session_id}: synced {annotation_count} annotations, can_detect={can_detect}")
+    logger.info(f"Session {req.sessionId}: synced {annotation_count} annotations, can_detect={can_detect}")
 
-    return jsonify({
+    return {
         'annotationCount': annotation_count,
         'canDetect': can_detect,
         'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
-    })
+    }
 
 
-@app.route('/get-learned-stats', methods=['POST'])
-def get_learned_stats():
+@app.post('/get-learned-stats')
+async def get_learned_stats(req: SessionRequest):
     """
     Get learned statistics from annotations for the Learn from Selection dialog.
-
-    Request body:
-        - sessionId: Session identifier
 
     Returns:
         - stats: Object with examplesAnalyzed, minWidth, maxWidth, minHeight, maxHeight,
                  minAspectRatio, maxAspectRatio, meanIntensity
         - canDetect: Whether minimum annotations reached
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
 
-    session_id = data.get('sessionId')
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
-
-    session = sessions[session_id]
+    session = sessions[req.sessionId]
     annotations = session['annotations']
     image = session.get('image')
 
     stats = calculate_learned_stats(annotations, image)
     can_detect = len(annotations) >= MIN_ANNOTATIONS_FOR_DETECTION
 
-    logger.info(f"Session {session_id}: learned stats = {stats}")
+    logger.info(f"Session {req.sessionId}: learned stats = {stats}")
 
-    return jsonify({
+    return {
         'stats': stats,
         'canDetect': can_detect,
         'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
-    })
+    }
 
 
-@app.route('/get-annotation-count', methods=['POST'])
-def get_annotation_count():
+@app.post('/get-annotation-count')
+async def get_annotation_count(req: SessionRequest):
     """
     Get the current annotation count for a session.
-
-    Request body:
-        - sessionId: Session identifier
 
     Returns:
         - annotationCount: Total annotations in session
         - canDetect: Whether minimum annotations reached
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
 
-    session_id = data.get('sessionId')
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
-
-    session = sessions[session_id]
+    session = sessions[req.sessionId]
     annotation_count = len(session['annotations'])
 
-    return jsonify({
+    return {
         'annotationCount': annotation_count,
         'canDetect': annotation_count >= MIN_ANNOTATIONS_FOR_DETECTION,
         'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
-    })
+    }
 
 
-@app.route('/blob-detect', methods=['POST'])
-def blob_detect():
+@app.post('/blob-detect')
+async def blob_detect(req: BlobDetectRequest):
     """
     Run BLOB detection on the session image.
 
@@ -789,99 +976,75 @@ def blob_detect():
     1. With annotations (learns size from them)
     2. With manual settings (uses provided size range)
 
-    Request body:
-        - sessionId: Session identifier
-        - settings: Optional dict with manual settings:
-            - minWidth, maxWidth, minHeight, maxHeight: Size range
-            - useCLAHE: Whether to apply CLAHE preprocessing
-            - claheClipLimit: CLAHE clip limit
-            - claheTileSize: CLAHE tile grid size
-            - darkBlobs: Detect dark blobs (True) or light blobs (False)
-
     Returns:
         - detections: Array of {x, y, width, height, confidence, method}
         - count: Number of detections
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
+    if req.sessionId not in sessions:
+        raise HTTPException(status_code=400, detail='Invalid session')
 
-    session_id = data.get('sessionId')
-    if not session_id or session_id not in sessions:
-        return jsonify({'error': 'Invalid session'}), 400
-
-    session = sessions[session_id]
+    session = sessions[req.sessionId]
     annotations = session['annotations']
-    settings = data.get('settings', {})
+    settings = req.settings or {}
 
     # Check if we have either enough annotations OR manual size settings
     has_manual_settings = settings.get('minWidth') and settings.get('maxWidth')
     has_enough_annotations = len(annotations) >= MIN_ANNOTATIONS_FOR_DETECTION
 
     if not has_manual_settings and not has_enough_annotations:
-        return jsonify({
-            'error': f'Either provide manual size settings or at least {MIN_ANNOTATIONS_FOR_DETECTION} annotations',
-            'annotationCount': len(annotations),
-            'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
-        }), 400
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'error': f'Either provide manual size settings or at least {MIN_ANNOTATIONS_FOR_DETECTION} annotations',
+                'annotationCount': len(annotations),
+                'minRequired': MIN_ANNOTATIONS_FOR_DETECTION
+            }
+        )
 
     try:
         # Run detection with settings
         detections = detect_blobs(session['image'], annotations, settings)
 
-        return jsonify({
+        return {
             'detections': detections,
             'count': len(detections),
             'learnedSize': estimate_follicle_size(annotations)
-        })
+        }
 
     except Exception as e:
         logger.error(f"Detection failed: {e}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route('/clear-session', methods=['POST'])
-def clear_session():
+@app.post('/clear-session')
+async def clear_session(req: SessionRequest):
     """
     Clear a session and free memory.
-
-    Request body:
-        - sessionId: Session identifier
 
     Returns:
         - success: True if session was cleared
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({'error': 'Missing request data'}), 400
+    if req.sessionId and req.sessionId in sessions:
+        del sessions[req.sessionId]
+        logger.info(f"Cleared session {req.sessionId}")
 
-    session_id = data.get('sessionId')
-
-    if session_id and session_id in sessions:
-        del sessions[session_id]
-        logger.info(f"Cleared session {session_id}")
-
-    return jsonify({'success': True})
+    return {'success': True}
 
 
-@app.route('/shutdown', methods=['POST'])
-def shutdown():
+@app.post('/shutdown')
+async def shutdown():
     """Shutdown the server gracefully."""
+    global server_instance
     logger.info("Shutting down server...")
 
     # Clear all sessions
     sessions.clear()
 
-    # Shutdown Flask
-    func = request.environ.get('werkzeug.server.shutdown')
-    if func:
-        func()
-    else:
-        # Fallback for newer versions of Werkzeug
-        import signal
-        os.kill(os.getpid(), signal.SIGTERM)
+    # Schedule shutdown
+    if server_instance:
+        server_instance.should_exit = True
 
-    return jsonify({'status': 'shutting down'})
+    return {'status': 'shutting down'}
 
 
 # ============================================
@@ -889,19 +1052,26 @@ def shutdown():
 # ============================================
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='BLOB Detection Server')
+    parser = argparse.ArgumentParser(description='BLOB Detection Server (FastAPI)')
     parser.add_argument('--port', type=int, default=5555, help='Port to run on')
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 
     args = parser.parse_args()
 
-    logger.info(f"Starting BLOB Detection Server on {args.host}:{args.port}")
+    logger.info(f"Starting BLOB Detection Server (FastAPI) on {args.host}:{args.port}")
     logger.info(f"Minimum annotations required: {MIN_ANNOTATIONS_FOR_DETECTION}")
+    logger.info(f"Parallel blob detection available: {PARALLEL_BLOB_AVAILABLE}")
 
-    app.run(
+    # Configure uvicorn
+    config = uvicorn.Config(
+        app,
         host=args.host,
         port=args.port,
-        debug=args.debug,
-        threaded=True
+        log_level="debug" if args.debug else "info",
+        access_log=True
     )
+    server_instance = uvicorn.Server(config)
+
+    # Run the server
+    server_instance.run()

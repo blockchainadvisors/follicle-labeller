@@ -6,9 +6,9 @@ numpy>=1.24.0
 pillow>=10.0.0
 opencv-python>=4.8.0
 
-# Web server
-flask>=3.0.0
-flask-cors>=4.0.0
+# Web server (FastAPI for async support)
+fastapi>=0.109.0
+uvicorn>=0.27.0
 
 # ==============================================
 # GPU Acceleration (Optional)

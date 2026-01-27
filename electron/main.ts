@@ -874,8 +874,10 @@ async function startBlobServer(): Promise<{
       const output = data.toString();
       console.log("[BLOB Server]", output);
 
-      // Check for successful startup
-      if (!resolved && output.includes("Running on")) {
+      // Check for successful startup (case-insensitive to support both Flask and uvicorn)
+      // Flask: "* Running on http://..."
+      // Uvicorn: "Uvicorn running on http://..."
+      if (!resolved && output.toLowerCase().includes("running on")) {
         resolved = true;
         pythonSetupStatus = "Detection server ready";
         mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);
@@ -885,11 +887,11 @@ async function startBlobServer(): Promise<{
 
     blobServerProcess.stderr?.on("data", (data) => {
       const output = data.toString();
-      // Flask/werkzeug outputs "Running on" to stderr, not stdout
+      // Flask/werkzeug and uvicorn output startup info to stderr
       console.log("[BLOB Server stderr]", output);
 
-      // Check for successful startup in stderr (where Flask outputs it)
-      if (!resolved && output.includes("Running on")) {
+      // Check for successful startup in stderr (case-insensitive)
+      if (!resolved && output.toLowerCase().includes("running on")) {
         resolved = true;
         pythonSetupStatus = "Detection server ready";
         mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);

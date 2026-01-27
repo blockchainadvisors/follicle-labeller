@@ -31,8 +31,16 @@ export interface BlobDetectionOptions {
   // Morphological opening to separate touching objects
   useMorphOpen?: boolean;      // Enable morphological opening (default: true)
   morphKernelSize?: number;    // Structuring element size (default: 3)
-  // Circularity filter to reject non-circular shapes
-  minCircularity?: number;     // Minimum circularity 0-1, 1=perfect circle (default: 0.2)
+  // Circularity filter (DISABLE for elongated shapes like hair follicles)
+  filterByCircularity?: boolean; // Enable circularity filtering (default: false for hair follicles)
+  minCircularity?: number;       // Minimum circularity 0-1, 1=perfect circle (default: 0.2)
+  // Inertia filter (for elongated shapes like hair follicles)
+  filterByInertia?: boolean;     // Enable inertia filtering (default: true for hair follicles)
+  minInertiaRatio?: number;      // Min inertia ratio 0-1, low=elongated OK (default: 0.01)
+  maxInertiaRatio?: number;      // Max inertia ratio 0-1, 1=circular (default: 1.0)
+  // Convexity filter
+  filterByConvexity?: boolean;   // Enable convexity filtering (default: false)
+  minConvexity?: number;         // Minimum convexity 0-1, 1=perfectly convex (default: 0.5)
 }
 
 export interface DetectedBlob {
