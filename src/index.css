@@ -15,6 +15,7 @@
   --accent-hover: #3dbdb5;
   --danger: #e94560;
   --danger-hover: #d63d56;
+  --warning: #f59e0b;
   --border: #2a2a4a;
   --success: #4caf50;
 }
@@ -799,6 +800,109 @@ body {
 
 .remove-image-btn:hover {
   opacity: 1;
+}
+
+/* Delete Confirmation Dialog */
+.delete-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.delete-confirm-dialog {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  padding: 24px;
+  width: 320px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  text-align: center;
+  animation: scaleIn 0.15s ease;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.delete-confirm-icon {
+  color: var(--warning);
+  margin-bottom: 12px;
+}
+
+.delete-confirm-dialog h3 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.delete-confirm-filename {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.delete-confirm-warning {
+  margin: 0 0 16px 0;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.delete-confirm-warning strong {
+  font-weight: 600;
+}
+
+.delete-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.delete-confirm-cancel,
+.delete-confirm-delete {
+  padding: 8px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.delete-confirm-cancel {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.delete-confirm-cancel:hover {
+  background: var(--border);
+}
+
+.delete-confirm-delete {
+  background: var(--danger);
+  color: var(--text-primary);
+}
+
+.delete-confirm-delete:hover {
+  background: var(--danger-hover);
 }
 
 /* Help Panel */

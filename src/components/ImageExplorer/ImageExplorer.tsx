@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore } from '../../store/follicleStore';
 import { ProjectImage } from '../../types';
+import { AlertTriangle } from 'lucide-react';
 
 // Generate thumbnail using OffscreenCanvas
 async function generateThumbnail(imageBitmap: ImageBitmap, maxSize: number = 48): Promise<string> {
@@ -104,6 +105,13 @@ export const ImageExplorer: React.FC = () => {
   const follicles = useFollicleStore(state => state.follicles);
   const deleteFolliclesForImage = useFollicleStore(state => state.deleteFolliclesForImage);
 
+  // State for delete confirmation dialog
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    imageId: string;
+    fileName: string;
+    annotationCount: number;
+  } | null>(null);
+
   // Get annotation counts per image
   const getAnnotationCount = (imageId: string) => {
     return follicles.filter(f => f.imageId === imageId).length;
@@ -136,11 +144,33 @@ export const ImageExplorer: React.FC = () => {
     addImage(newImage);
   };
 
+  // Show confirmation dialog before removing image
   const handleRemoveImage = (imageId: string) => {
+    const image = images.get(imageId);
+    if (!image) return;
+
+    const annotationCount = getAnnotationCount(imageId);
+    setDeleteConfirm({
+      imageId,
+      fileName: image.fileName,
+      annotationCount,
+    });
+  };
+
+  // Actually remove the image after confirmation
+  const confirmRemoveImage = () => {
+    if (!deleteConfirm) return;
+
     // Delete annotations for this image
-    deleteFolliclesForImage(imageId);
+    deleteFolliclesForImage(deleteConfirm.imageId);
     // Remove the image
-    removeImage(imageId);
+    removeImage(deleteConfirm.imageId);
+    // Close dialog
+    setDeleteConfirm(null);
+  };
+
+  const cancelRemoveImage = () => {
+    setDeleteConfirm(null);
   };
 
   // Don't render if only one image
@@ -149,30 +179,58 @@ export const ImageExplorer: React.FC = () => {
   }
 
   return (
-    <div className="image-explorer">
-      <div className="explorer-header">
-        <h3>Images</h3>
-        <button className="add-image-btn" onClick={handleAddImage} title="Add image">
-          +
-        </button>
-      </div>
-      <div className="image-list">
-        {imageOrder.map(imageId => {
-          const image = images.get(imageId);
-          if (!image) return null;
+    <>
+      <div className="image-explorer">
+        <div className="explorer-header">
+          <h3>Images</h3>
+          <button className="add-image-btn" onClick={handleAddImage} title="Add image">
+            +
+          </button>
+        </div>
+        <div className="image-list">
+          {imageOrder.map(imageId => {
+            const image = images.get(imageId);
+            if (!image) return null;
 
-          return (
-            <ImageItem
-              key={imageId}
-              image={image}
-              isActive={imageId === activeImageId}
-              annotationCount={getAnnotationCount(imageId)}
-              onSelect={() => setActiveImage(imageId)}
-              onRemove={() => handleRemoveImage(imageId)}
-            />
-          );
-        })}
+            return (
+              <ImageItem
+                key={imageId}
+                image={image}
+                isActive={imageId === activeImageId}
+                annotationCount={getAnnotationCount(imageId)}
+                onSelect={() => setActiveImage(imageId)}
+                onRemove={() => handleRemoveImage(imageId)}
+              />
+            );
+          })}
+        </div>
       </div>
-    </div>
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <div className="delete-confirm-overlay" onClick={cancelRemoveImage}>
+          <div className="delete-confirm-dialog" onClick={e => e.stopPropagation()}>
+            <div className="delete-confirm-icon">
+              <AlertTriangle size={32} />
+            </div>
+            <h3>Delete Image?</h3>
+            <p className="delete-confirm-filename">{deleteConfirm.fileName}</p>
+            {deleteConfirm.annotationCount > 0 && (
+              <p className="delete-confirm-warning">
+                This will also delete <strong>{deleteConfirm.annotationCount}</strong> annotation{deleteConfirm.annotationCount !== 1 ? 's' : ''}.
+              </p>
+            )}
+            <div className="delete-confirm-actions">
+              <button className="delete-confirm-cancel" onClick={cancelRemoveImage}>
+                Cancel
+              </button>
+              <button className="delete-confirm-delete" onClick={confirmRemoveImage}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
