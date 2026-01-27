@@ -4,7 +4,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -29,7 +29,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  border-bottom: 1px solid var(--border, #e0e0e0);
   cursor: grab;
   user-select: none;
 }
@@ -82,7 +82,7 @@
 }
 
 .dialog-content::-webkit-scrollbar-thumb {
-  background: var(--border-color, #ccc);
+  background: var(--border, #ccc);
   border-radius: 4px;
 }
 
@@ -93,7 +93,7 @@
 .settings-section {
   margin-bottom: 20px;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
 .settings-section:last-child {
@@ -117,7 +117,7 @@
 }
 
 .section-description .warning-text {
-  color: var(--warning-color, #f59e0b);
+  color: var(--warning, #f59e0b);
   font-style: italic;
 }
 
@@ -164,7 +164,7 @@
 .settings-row input[type="number"] {
   width: 80px;
   padding: 6px 10px;
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
   font-size: 13px;
   background: var(--bg-primary, #ffffff);
@@ -173,13 +173,13 @@
 
 .settings-row input[type="number"]:focus {
   outline: none;
-  border-color: var(--accent-color, #3b82f6);
+  border-color: var(--accent, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
 .settings-row select {
   padding: 6px 10px;
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
   font-size: 13px;
   background: var(--bg-primary, #ffffff);
@@ -190,7 +190,7 @@
 
 .settings-row select:focus {
   outline: none;
-  border-color: var(--accent-color, #3b82f6);
+  border-color: var(--accent, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
 }
 
@@ -219,7 +219,7 @@
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: var(--accent-color, #3b82f6);
+  accent-color: var(--accent, #3b82f6);
 }
 
 /* Section toggle (checkbox in h3) */
@@ -235,7 +235,7 @@
   width: 16px;
   height: 16px;
   cursor: pointer;
-  accent-color: var(--accent-color, #3b82f6);
+  accent-color: var(--accent, #3b82f6);
 }
 
 /* Disabled sections */
@@ -267,7 +267,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-top: 1px solid var(--border-color, #e0e0e0);
+  border-top: 1px solid var(--border, #e0e0e0);
   background: var(--bg-secondary, #f5f5f5);
 }
 
@@ -286,13 +286,13 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .button-primary {
-  background: var(--accent-color, #3b82f6);
+  background: var(--accent, #3b82f6);
   color: white;
-  border: 1px solid var(--accent-color, #3b82f6);
+  border: 1px solid var(--accent, #3b82f6);
 }
 
 .button-primary:hover {
@@ -303,12 +303,12 @@
 .button-secondary {
   background: var(--bg-primary, #ffffff);
   color: var(--text-primary, #333);
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
 }
 
 .button-secondary:hover {
   background: var(--bg-hover, #f0f0f0);
-  border-color: var(--border-color, #ccc);
+  border-color: var(--border, #ccc);
 }
 
 /* Dark theme support */
@@ -317,27 +317,27 @@
 }
 
 [data-theme="dark"] .dialog-header {
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .dialog-footer {
   background: var(--bg-secondary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .settings-section {
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .settings-row input[type="number"] {
   background: var(--bg-secondary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
   color: var(--text-primary, #e0e0e0);
 }
 
 [data-theme="dark"] .settings-row select {
   background: var(--bg-secondary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
   color: var(--text-primary, #e0e0e0);
 }
 
@@ -347,7 +347,7 @@
 
 [data-theme="dark"] .button-secondary {
   background: var(--bg-secondary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
   color: var(--text-primary, #e0e0e0);
 }
 
@@ -404,7 +404,7 @@
 }
 
 .gpu-status-error-msg {
-  color: #dc2626;
+  color: var(--danger);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
@@ -414,7 +414,7 @@
 /* CPU Mode - neutral/gray */
 .gpu-status-cpu {
   background: var(--bg-secondary, #f5f5f5);
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   color: var(--text-secondary, #666);
 }
 
@@ -455,7 +455,7 @@
 /* Dark theme GPU status */
 [data-theme="dark"] .gpu-status-cpu {
   background: var(--bg-tertiary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
   color: var(--text-secondary, #aaa);
 }
 
@@ -517,7 +517,7 @@
 }
 
 .gpu-status-error svg {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 /* Install button */
@@ -534,7 +534,7 @@
   font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.2s;
+  transition: background 0.15s ease;
 }
 
 .gpu-install-btn:hover {
@@ -551,7 +551,7 @@
   align-items: center;
   gap: 4px;
   padding: 6px 12px;
-  background: #ef4444;
+  background: var(--danger);
   color: white;
   border: none;
   border-radius: 4px;
@@ -559,21 +559,11 @@
   font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.2s;
+  transition: background 0.15s ease;
 }
 
 .gpu-retry-btn:hover {
-  background: #dc2626;
-}
-
-/* Spin animation for loading indicator */
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  background: var(--danger-hover);
 }
 
 .spin {
@@ -627,7 +617,7 @@
   gap: 0;
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   background: var(--bg-tertiary, #f5f5f5);
 }
 
@@ -652,7 +642,7 @@
 }
 
 .backend-btn.active {
-  background: var(--accent-color, #6366f1);
+  background: var(--accent, #6366f1);
   color: white;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
@@ -679,6 +669,6 @@
 }
 
 [data-theme="dark"] .backend-btn.active {
-  background: var(--accent-color, #6366f1);
+  background: var(--accent, #6366f1);
   color: white;
 }

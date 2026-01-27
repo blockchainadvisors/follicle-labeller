@@ -4,7 +4,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0, 0, 0, 0.6);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -28,7 +28,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color, #e0e0e0);
+    border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
 .learned-detection-dialog .dialog-header h2 {
@@ -77,7 +77,7 @@
 }
 
 .stat-row:not(:last-child) {
-    border-bottom: 1px solid var(--border-color, #e0e0e0);
+    border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
 .stat-label {
@@ -114,7 +114,7 @@
 .tolerance-value {
     font-size: 16px;
     font-weight: 600;
-    color: var(--accent-color, #3b82f6);
+    color: var(--accent, #3b82f6);
 }
 
 .tolerance-slider {
@@ -132,7 +132,7 @@
     appearance: none;
     width: 20px;
     height: 20px;
-    background: var(--accent-color, #3b82f6);
+    background: var(--accent, #3b82f6);
     border-radius: 50%;
     cursor: pointer;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
@@ -146,7 +146,7 @@
 .tolerance-slider::-moz-range-thumb {
     width: 20px;
     height: 20px;
-    background: var(--accent-color, #3b82f6);
+    background: var(--accent, #3b82f6);
     border-radius: 50%;
     cursor: pointer;
     border: none;
@@ -177,7 +177,7 @@
     gap: 0;
     border-radius: 8px;
     overflow: hidden;
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border, #e0e0e0);
 }
 
 .blob-type-btn {
@@ -189,15 +189,15 @@
     font-size: 14px;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.2s, color 0.2s;
+    transition: background 0.15s ease, color 0.15s ease;
 }
 
 .blob-type-btn:first-child {
-    border-right: 1px solid var(--border-color, #e0e0e0);
+    border-right: 1px solid var(--border, #e0e0e0);
 }
 
 .blob-type-btn.active {
-    background: var(--accent-color, #3b82f6);
+    background: var(--accent, #3b82f6);
     color: white;
 }
 
@@ -223,13 +223,13 @@
     gap: 8px;
     padding: 12px 16px;
     background: var(--bg-secondary, #f5f5f5);
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border, #e0e0e0);
     border-radius: 8px;
     cursor: pointer;
     color: var(--text-primary, #333);
     font-size: 14px;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background 0.15s ease;
 }
 
 .best-practices-toggle:hover {
@@ -237,7 +237,7 @@
 }
 
 .best-practices-toggle svg:first-child {
-    color: var(--accent-color, #3b82f6);
+    color: var(--accent, #3b82f6);
 }
 
 .best-practices-toggle span {
@@ -248,7 +248,7 @@
 .best-practices-content {
     padding: 16px;
     background: var(--bg-secondary, #f5f5f5);
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border, #e0e0e0);
     border-top: none;
     border-radius: 0 0 8px 8px;
 }
@@ -270,7 +270,7 @@
     justify-content: flex-end;
     gap: 12px;
     padding: 16px 20px;
-    border-top: 1px solid var(--border-color, #e0e0e0);
+    border-top: 1px solid var(--border, #e0e0e0);
     background: var(--bg-secondary, #f5f5f5);
 }
 
@@ -285,9 +285,9 @@
 }
 
 .learned-detection-dialog .button-primary {
-    background: var(--accent-color, #3b82f6);
+    background: var(--accent, #3b82f6);
     color: white;
-    border: 1px solid var(--accent-color, #3b82f6);
+    border: 1px solid var(--accent, #3b82f6);
 }
 
 .learned-detection-dialog .button-primary:hover {
@@ -298,12 +298,12 @@
 .learned-detection-dialog .button-secondary {
     background: var(--bg-primary, #ffffff);
     color: var(--text-primary, #333);
-    border: 1px solid var(--border-color, #e0e0e0);
+    border: 1px solid var(--border, #e0e0e0);
 }
 
 .learned-detection-dialog .button-secondary:hover {
     background: var(--bg-hover, #f0f0f0);
-    border-color: var(--border-color, #ccc);
+    border-color: var(--border, #ccc);
 }
 
 /* Dark theme support */
@@ -312,12 +312,12 @@
 }
 
 [data-theme="dark"] .learned-detection-dialog .dialog-header {
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .learned-detection-dialog .dialog-footer {
     background: var(--bg-secondary, #2d2d2d);
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .stats-box {
@@ -325,7 +325,7 @@
 }
 
 [data-theme="dark"] .stat-row {
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .tolerance-slider {
@@ -337,7 +337,7 @@
 }
 
 [data-theme="dark"] .blob-type-buttons {
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .blob-type-btn {
@@ -346,7 +346,7 @@
 }
 
 [data-theme="dark"] .blob-type-btn:first-child {
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .blob-type-btn:not(.active):hover {
@@ -355,7 +355,7 @@
 
 [data-theme="dark"] .best-practices-toggle {
     background: var(--bg-secondary, #2d2d2d);
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .best-practices-toggle:hover {
@@ -364,12 +364,12 @@
 
 [data-theme="dark"] .best-practices-content {
     background: var(--bg-secondary, #2d2d2d);
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .learned-detection-dialog .button-secondary {
     background: var(--bg-secondary, #2d2d2d);
-    border-color: var(--border-color, #444);
+    border-color: var(--border, #444);
     color: var(--text-primary, #e0e0e0);
 }
 
@@ -389,17 +389,7 @@
 
 .loading-content .spinner {
     animation: spin 1s linear infinite;
-    color: var(--accent-color, #3b82f6);
-}
-
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-
-    to {
-        transform: rotate(360deg);
-    }
+    color: var(--accent, #3b82f6);
 }
 
 .loading-content p {
@@ -421,7 +411,7 @@
 
 .error-message {
     font-size: 14px;
-    color: var(--error-color, #dc2626);
+    color: var(--danger, #dc2626);
     margin: 0;
 }
 

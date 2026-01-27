@@ -59,18 +59,12 @@ export class BlobService {
 
   /**
    * Check if the BLOB server is available.
+   * Uses IPC to avoid browser console errors during startup.
    */
   async isAvailable(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      if (!response.ok) return false;
-
-      const data = await response.json();
-      return data.status === "ok";
+      // Use IPC to check availability - this avoids ERR_CONNECTION_REFUSED in browser console
+      return await window.electronAPI.blob.isAvailable();
     } catch {
       return false;
     }
@@ -78,14 +72,12 @@ export class BlobService {
 
   /**
    * Check if the BLOB server is running.
+   * Uses IPC to avoid browser console errors during startup.
    */
   async isServerRunning(): Promise<boolean> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-      return response.ok;
+      // Use IPC to check server status - this avoids ERR_CONNECTION_REFUSED in browser console
+      return await window.electronAPI.blob.isAvailable();
     } catch {
       return false;
     }

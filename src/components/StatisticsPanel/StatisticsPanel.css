@@ -5,7 +5,7 @@
   width: 280px;
   max-height: calc(100vh - 100px);
   background: var(--bg-secondary, #f5f5f5);
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 100;
@@ -20,7 +20,7 @@
   align-items: center;
   padding: 12px 16px;
   background: var(--bg-tertiary, #e8e8e8);
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
 .statistics-title {
@@ -70,7 +70,7 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-secondary, #666);
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  border-bottom: 1px solid var(--border, #e0e0e0);
   padding-bottom: 8px;
 }
 
@@ -124,7 +124,7 @@
 
 .mini-chart {
   background: var(--bg-primary, #fff);
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 4px;
   padding: 8px;
 }
@@ -146,10 +146,10 @@
 
 .chart-bar {
   flex: 1;
-  background: var(--accent-color, #3b82f6);
+  background: var(--accent, #3b82f6);
   border-radius: 2px 2px 0 0;
   min-height: 2px;
-  transition: background 0.2s;
+  transition: background 0.15s ease;
 }
 
 .chart-bar:hover {
@@ -166,12 +166,12 @@
 /* Dark theme support */
 [data-theme="dark"] .statistics-panel {
   background: var(--bg-secondary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .statistics-header {
   background: var(--bg-tertiary, #3d3d3d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .shape-count {
@@ -180,5 +180,5 @@
 
 [data-theme="dark"] .mini-chart {
   background: var(--bg-primary, #1e1e1e);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }

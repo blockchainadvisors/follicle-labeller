@@ -27,7 +27,7 @@
 
 .export-button.active {
   background: var(--bg-hover, #e5e5e5);
-  border-color: var(--border-color, #ddd);
+  border-color: var(--border, #ddd);
 }
 
 .export-button .chevron {
@@ -42,7 +42,7 @@
   margin-top: 4px;
   min-width: 220px;
   background: var(--bg-primary, #ffffff);
-  border: 1px solid var(--border-color, #e0e0e0);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
@@ -67,7 +67,7 @@
 }
 
 .export-option:not(:last-child) {
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
 .export-option svg {
@@ -104,12 +104,12 @@
 
 [data-theme="dark"] .export-button.active {
   background: var(--bg-hover, #3d3d3d);
-  border-color: var(--border-color, #555);
+  border-color: var(--border, #555);
 }
 
 [data-theme="dark"] .export-dropdown {
   background: var(--bg-primary, #2d2d2d);
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
 
 [data-theme="dark"] .export-option:hover {
@@ -117,5 +117,5 @@
 }
 
 [data-theme="dark"] .export-option:not(:last-child) {
-  border-color: var(--border-color, #444);
+  border-color: var(--border, #444);
 }
