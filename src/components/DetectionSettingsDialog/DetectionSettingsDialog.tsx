@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle, GripHorizontal } from 'lucide-react';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle } from 'lucide-react';
 import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo } from '../../types';
 import { blobService } from '../../services/blobService';
 import './DetectionSettingsDialog.css';
