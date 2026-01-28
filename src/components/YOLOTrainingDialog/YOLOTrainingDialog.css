@@ -12,7 +12,7 @@
 }
 
 .yolo-training-dialog {
-  background: var(--bg-secondary, #1e1e1e);
+  background: var(--bg-secondary, #f5f5f5);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
   width: 600px;
@@ -28,8 +28,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--border, #333);
-  background: var(--bg-secondary, #1e1e1e);
+  border-bottom: 1px solid var(--border, #e0e0e0);
+  background: var(--bg-secondary, #f5f5f5);
   width: 100%;
   box-sizing: border-box;
 }
@@ -38,13 +38,13 @@
   margin: 0;
   font-size: var(--text-xl);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
 }
 
 .yolo-training-dialog .close-button {
   background: none;
   border: none;
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
@@ -54,8 +54,8 @@
 }
 
 .yolo-training-dialog .close-button:hover:not(:disabled) {
-  color: var(--text-primary, #fff);
-  background: var(--bg-hover, #333);
+  color: var(--text-primary, #333);
+  background: var(--bg-hover, #e8e8e8);
 }
 
 .yolo-training-dialog .close-button:disabled {
@@ -69,7 +69,7 @@
   padding: 20px;
   width: 100%;
   box-sizing: border-box;
-  background: var(--bg-secondary, #1e1e1e);
+  background: var(--bg-secondary, #f5f5f5);
 }
 
 .yolo-training-dialog .service-warning {
@@ -77,8 +77,8 @@
   align-items: center;
   gap: 8px;
   padding: 12px;
-  background: var(--warning-bg, #3d3000);
-  color: var(--warning, #ffd700);
+  background: var(--warning-bg, rgba(245, 158, 11, 0.1));
+  color: var(--warning, #b45309);
   border-radius: 6px;
   margin-bottom: 16px;
   font-size: var(--text-base);
@@ -90,9 +90,9 @@
   flex-direction: column;
   gap: 16px;
   padding: 20px;
-  background: var(--bg-hover, #2a2a2a);
+  background: var(--bg-hover, #e8e8e8);
   border-radius: 8px;
-  border: 1px solid var(--border, #333);
+  border: 1px solid var(--border, #e0e0e0);
 }
 
 .dependencies-warning {
@@ -208,7 +208,7 @@
   margin: 0 0 12px 0;
   font-size: var(--text-md);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
 }
@@ -379,14 +379,14 @@
   margin: 0 0 12px 0;
   font-size: var(--text-md);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
 }
 
 .yolo-training-dialog .progress-bar {
   height: 8px;
-  background: var(--border, #333);
+  background: var(--border, #e0e0e0);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 8px;
@@ -403,7 +403,7 @@
   display: flex;
   justify-content: space-between;
   font-size: var(--text-base);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
   margin-bottom: 12px;
 }
 
@@ -418,27 +418,27 @@
   flex-direction: column;
   gap: 4px;
   padding: 8px 12px;
-  background: var(--bg-hover, #2a2a2a);
+  background: var(--bg-hover, #e8e8e8);
   border-radius: 6px;
 }
 
 .yolo-training-dialog .metric-label {
   font-size: var(--text-xs);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
   text-transform: uppercase;
 }
 
 .yolo-training-dialog .metric-value {
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
   font-family: var(--font-mono);
 }
 
 .yolo-training-dialog .progress-message {
   margin-top: 12px;
   font-size: var(--text-base);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
 }
 
 .yolo-training-dialog .status-message {
@@ -451,13 +451,13 @@
 }
 
 .yolo-training-dialog .status-message.success {
-  background: var(--success-bg, #0d3d0d);
-  color: var(--success, #4caf50);
+  background: var(--success-bg, rgba(16, 185, 129, 0.1));
+  color: var(--success, #059669);
 }
 
 .yolo-training-dialog .status-message.error {
-  background: var(--danger-bg, #3d0d0d);
-  color: var(--danger, #f44336);
+  background: var(--danger-bg, rgba(220, 38, 38, 0.1));
+  color: var(--danger, #dc2626);
 }
 
 .yolo-training-dialog .dialog-footer {
@@ -465,8 +465,8 @@
   justify-content: flex-end;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid var(--border, #333);
-  background: var(--bg-secondary, #1e1e1e);
+  border-top: 1px solid var(--border, #e0e0e0);
+  background: var(--bg-secondary, #f5f5f5);
   width: 100%;
   box-sizing: border-box;
 }
@@ -484,13 +484,13 @@
 }
 
 .yolo-training-dialog .cancel-button {
-  background: var(--button-secondary-bg, #2d2d2d);
-  color: var(--text-primary, #fff);
-  border: 1px solid var(--border, #333);
+  background: var(--button-secondary-bg, #ffffff);
+  color: var(--text-primary, #333);
+  border: 1px solid var(--border, #e0e0e0);
 }
 
 .yolo-training-dialog .cancel-button:hover {
-  background: var(--bg-hover, #333);
+  background: var(--bg-hover, #e8e8e8);
 }
 
 .yolo-training-dialog .start-button {
@@ -736,8 +736,8 @@
 }
 
 .yolo-training-dialog .gpu-status-cpu {
-  background: var(--bg-hover, #2a2a2a);
-  border: 1px solid var(--border, #333);
+  background: var(--bg-hover, #e8e8e8);
+  border: 1px solid var(--border, #e0e0e0);
 }
 
 .yolo-training-dialog .gpu-status > svg {
@@ -765,7 +765,7 @@
 }
 
 .yolo-training-dialog .gpu-status-cpu > svg {
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
 }
 
 .yolo-training-dialog .gpu-status-content {
@@ -779,12 +779,12 @@
 .yolo-training-dialog .gpu-status-label {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
 }
 
 .yolo-training-dialog .gpu-status-device {
   font-size: var(--text-sm);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -792,7 +792,7 @@
 
 .yolo-training-dialog .gpu-status-progress {
   font-size: var(--text-sm);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
 }
 
 .yolo-training-dialog .gpu-status-error-msg {
@@ -803,7 +803,7 @@
 .yolo-training-dialog .gpu-status-memory {
   font-size: var(--text-sm);
   font-weight: var(--font-medium);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
   font-family: var(--font-mono);
 }
 
@@ -839,16 +839,16 @@
 .yolo-training-dialog .backend-selection {
   margin-bottom: 20px;
   padding: 16px;
-  background: var(--bg-hover, #2a2a2a);
+  background: var(--bg-hover, #e8e8e8);
   border-radius: 8px;
-  border: 1px solid var(--border, #333);
+  border: 1px solid var(--border, #e0e0e0);
 }
 
 .yolo-training-dialog .backend-selection h3 {
   margin: 0 0 12px 0;
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
-  color: var(--text-primary, #fff);
+  color: var(--text-primary, #333);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
 }
@@ -864,9 +864,9 @@
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  background: var(--bg-secondary, #1e1e1e);
-  color: var(--text-secondary, #888);
-  border: 1px solid var(--border, #333);
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-secondary, #666);
+  border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;
   cursor: pointer;
   font-size: var(--text-base);
@@ -875,8 +875,8 @@
 }
 
 .yolo-training-dialog .backend-btn:hover:not(:disabled) {
-  background: var(--bg-hover, #333);
-  color: var(--text-primary, #fff);
+  background: var(--bg-hover, #e8e8e8);
+  color: var(--text-primary, #333);
 }
 
 .yolo-training-dialog .backend-btn.active {
@@ -893,5 +893,5 @@
 .yolo-training-dialog .backend-hint {
   margin: 0;
   font-size: var(--text-sm);
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary, #666);
 }
