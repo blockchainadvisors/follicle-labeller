@@ -8,6 +8,7 @@ import { yoloKeypointService } from '../../services/yoloKeypointService';
 
 export const PropertyPanel: React.FC = () => {
   const [showUnlockWarning, setShowUnlockWarning] = useState(false);
+  const [showBatchUnlockWarning, setShowBatchUnlockWarning] = useState(false);
   const [isPredicting, setIsPredicting] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
 
@@ -141,6 +142,14 @@ export const PropertyPanel: React.FC = () => {
       selectMultiple(toKeep);
     };
 
+    // Batch unlock handler - removes origins from all selected rectangles
+    const handleBatchUnlock = () => {
+      for (const rect of rectanglesWithOrigin) {
+        updateFollicle(rect.id, { origin: undefined });
+      }
+      setShowBatchUnlockWarning(false);
+    };
+
     // Batch color change handler
     const handleBatchColorChange = (color: string) => {
       for (const f of selectedFollicles) {
@@ -186,6 +195,20 @@ export const PropertyPanel: React.FC = () => {
                 Keep Without Origin ({rectanglesWithoutOrigin.length})
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Batch unlock for rectangles with origins */}
+        {rectanglesWithOrigin.length > 0 && (
+          <div className="property-group">
+            <label>Batch Unlock</label>
+            <button
+              className="unlock-button batch-unlock"
+              onClick={() => setShowBatchUnlockWarning(true)}
+            >
+              <Unlock size={14} />
+              Unlock All ({rectanglesWithOrigin.length})
+            </button>
           </div>
         )}
 
@@ -237,6 +260,34 @@ export const PropertyPanel: React.FC = () => {
             Delete All ({selectedFollicles.length})
           </button>
         </div>
+
+        {/* Batch unlock confirmation dialog */}
+        {showBatchUnlockWarning && (
+          <div className="unlock-warning-overlay">
+            <div className="unlock-warning-dialog">
+              <AlertTriangle size={24} className="warning-icon" />
+              <p className="warning-title">Unlock {rectanglesWithOrigin.length} Rectangles?</p>
+              <p className="warning-text">
+                This will delete the origin point and direction data from all {rectanglesWithOrigin.length} selected rectangles with origins.
+                You will need to set them again.
+              </p>
+              <div className="warning-actions">
+                <button
+                  className="cancel-button"
+                  onClick={() => setShowBatchUnlockWarning(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="danger-button"
+                  onClick={handleBatchUnlock}
+                >
+                  Unlock All
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

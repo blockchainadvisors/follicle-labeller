@@ -650,6 +650,11 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   border-color: var(--text-tertiary);
 }
 
+.unlock-button.batch-unlock {
+  width: 100%;
+  justify-content: center;
+}
+
 .hint-text {
   color: var(--text-tertiary);
   font-size: var(--text-sm);

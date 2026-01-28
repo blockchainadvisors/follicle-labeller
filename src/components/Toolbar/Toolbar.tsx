@@ -35,7 +35,7 @@ import {
   exportToCSV,
   exportYOLOKeypointDatasetZip,
   exportSelectedAnnotationsJSON,
-  importAnnotationsFromJSON,
+  importAnnotationsFromJSONWithDuplicateCheck,
 } from "../../utils/export-utils";
 import {
   extractAllFolliclesToZip,
@@ -145,6 +145,7 @@ export const Toolbar: React.FC = () => {
   const follicles = useFollicleStore((state) => state.follicles);
   const selectedIds = useFollicleStore((state) => state.selectedIds);
   const importFollicles = useFollicleStore((state) => state.importFollicles);
+  const updateFollicle = useFollicleStore((state) => state.updateFollicle);
   const clearAll = useFollicleStore((state) => state.clearAll);
 
   const temporalStore = useTemporalStore();
@@ -832,23 +833,156 @@ export const Toolbar: React.FC = () => {
       if (!result) return;
 
       const text = new TextDecoder().decode(result.data);
-      const importedFollicles = importAnnotationsFromJSON(text, activeImageId);
+      const { newAnnotations, duplicates, augmentable, alreadyAugmented, totalImported } =
+        importAnnotationsFromJSONWithDuplicateCheck(text, activeImageId, follicles);
 
-      if (importedFollicles.length === 0) {
+      if (totalImported === 0) {
         alert("No annotations found in the file.");
         return;
       }
 
-      // Add imported annotations to existing ones
-      const allFollicles = [...follicles, ...importedFollicles];
-      importFollicles(allFollicles);
+      // Build summary message
+      const summaryParts: string[] = [];
+      summaryParts.push(`Import Summary (${totalImported} annotations):\n`);
 
-      console.log(`Imported ${importedFollicles.length} annotations`);
+      if (newAnnotations.length > 0) {
+        summaryParts.push(`✓ ${newAnnotations.length} new - will be imported`);
+      }
+      if (augmentable.length > 0) {
+        summaryParts.push(`↑ ${augmentable.length} can update existing with origin data`);
+      }
+      if (alreadyAugmented.length > 0) {
+        summaryParts.push(`• ${alreadyAugmented.length} skipped - existing already has origin`);
+      }
+      if (duplicates.length > 0) {
+        summaryParts.push(`• ${duplicates.length} exact duplicates`);
+      }
+
+      // Check if there's nothing useful to import
+      const hasUsefulData = newAnnotations.length > 0 || augmentable.length > 0;
+      const hasRedundantData = duplicates.length > 0 || alreadyAugmented.length > 0;
+
+      if (!hasUsefulData && hasRedundantData) {
+        // Everything is redundant
+        const importAnyway = window.confirm(
+          `${summaryParts.join('\n')}\n\n` +
+          `All annotations already exist in the current image.\n` +
+          `${alreadyAugmented.length > 0 ? `${alreadyAugmented.length} existing annotation(s) already have origin data.\n` : ''}` +
+          `\nClick Cancel to import duplicates as new annotations anyway.`
+        );
+
+        if (importAnyway) {
+          return; // User clicked OK to cancel
+        }
+
+        // Import all redundant as new
+        const allFollicles = [...follicles, ...duplicates, ...alreadyAugmented];
+        importFollicles(allFollicles);
+        console.log(`Imported ${duplicates.length + alreadyAugmented.length} annotations as new`);
+        return;
+      }
+
+      // Show summary and confirm import
+      let shouldUpdateExisting = false;
+      let shouldImportDuplicates = false;
+
+      // Single confirmation dialog with all options
+      if (augmentable.length > 0 || hasRedundantData) {
+        let confirmMessage = summaryParts.join('\n') + '\n\n';
+        confirmMessage += 'Default actions:\n';
+        confirmMessage += `• Import ${newAnnotations.length} new annotation(s)\n`;
+
+        if (augmentable.length > 0) {
+          confirmMessage += `• Update ${augmentable.length} existing with origin data\n`;
+        }
+        if (alreadyAugmented.length > 0) {
+          confirmMessage += `• Skip ${alreadyAugmented.length} (existing already better)\n`;
+        }
+        if (duplicates.length > 0) {
+          confirmMessage += `• Skip ${duplicates.length} exact duplicate(s)\n`;
+        }
+
+        confirmMessage += '\nClick OK to proceed with these defaults.\n';
+        confirmMessage += 'Click Cancel to customize options.';
+
+        const useDefaults = window.confirm(confirmMessage);
+
+        if (useDefaults) {
+          // Use defaults: import new, update augmentable, skip rest
+          shouldUpdateExisting = augmentable.length > 0;
+        } else {
+          // Customize: ask about each category
+
+          // Ask about augmentable
+          if (augmentable.length > 0) {
+            shouldUpdateExisting = window.confirm(
+              `Update ${augmentable.length} existing annotation(s) with origin/direction data?\n\n` +
+              `OK = Update existing annotations\n` +
+              `Cancel = Skip (don't update)`
+            );
+          }
+
+          // Ask about duplicates
+          if (duplicates.length > 0) {
+            shouldImportDuplicates = !window.confirm(
+              `Skip ${duplicates.length} exact duplicate(s)?\n\n` +
+              `OK = Skip duplicates\n` +
+              `Cancel = Import as new annotations`
+            );
+          }
+
+          // Ask about already augmented (rarely needed, but offer the option)
+          if (alreadyAugmented.length > 0) {
+            const importAlreadyAugmented = !window.confirm(
+              `Skip ${alreadyAugmented.length} annotation(s) where existing already has origin?\n\n` +
+              `OK = Skip (recommended)\n` +
+              `Cancel = Import as new annotations`
+            );
+
+            if (importAlreadyAugmented) {
+              shouldImportDuplicates = true; // Reuse flag to add these too
+            }
+          }
+        }
+      }
+
+      // Apply updates to existing annotations (augmentable)
+      if (shouldUpdateExisting && augmentable.length > 0) {
+        for (const { imported, existingId } of augmentable) {
+          updateFollicle(existingId, { origin: imported.origin });
+        }
+        console.log(`Updated ${augmentable.length} existing annotations with origin data`);
+      }
+
+      // Build list of annotations to import
+      let annotationsToImport = [...newAnnotations];
+      if (shouldImportDuplicates) {
+        annotationsToImport = [...annotationsToImport, ...duplicates, ...alreadyAugmented];
+      }
+
+      // Import new annotations
+      if (annotationsToImport.length > 0) {
+        const allFollicles = [...follicles, ...annotationsToImport];
+        importFollicles(allFollicles);
+        console.log(`Imported ${annotationsToImport.length} new annotations`);
+      }
+
+      // Log final summary
+      const actions: string[] = [];
+      if (annotationsToImport.length > 0) {
+        actions.push(`${annotationsToImport.length} imported`);
+      }
+      if (shouldUpdateExisting && augmentable.length > 0) {
+        actions.push(`${augmentable.length} updated`);
+      }
+      if (actions.length === 0 && !shouldUpdateExisting) {
+        alert("No changes made.");
+      }
     } catch (error) {
       console.error("Failed to import annotations:", error);
       alert(`Failed to import annotations: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
-  }, [activeImageId, activeImage, follicles, importFollicles]);
+  }, [activeImageId, activeImage, follicles, importFollicles, updateFollicle]);
 
   // Export to YOLO Keypoint dataset format (for pose/keypoint training)
   const handleExportYOLOKeypoint = useCallback(async () => {

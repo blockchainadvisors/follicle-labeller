@@ -813,6 +813,132 @@ export function exportSelectedAnnotationsJSON(
 }
 
 /**
+ * Check if two annotations are duplicates based on shape and position
+ * Uses a tolerance for floating point comparison
+ */
+function areAnnotationsDuplicate(a: Follicle, b: Follicle, tolerance = 2): boolean {
+  if (a.shape !== b.shape) return false;
+
+  if (isCircle(a) && isCircle(b)) {
+    return (
+      Math.abs(a.center.x - b.center.x) < tolerance &&
+      Math.abs(a.center.y - b.center.y) < tolerance &&
+      Math.abs(a.radius - b.radius) < tolerance
+    );
+  }
+
+  if (isRectangle(a) && isRectangle(b)) {
+    return (
+      Math.abs(a.x - b.x) < tolerance &&
+      Math.abs(a.y - b.y) < tolerance &&
+      Math.abs(a.width - b.width) < tolerance &&
+      Math.abs(a.height - b.height) < tolerance
+    );
+  }
+
+  if (isLinear(a) && isLinear(b)) {
+    return (
+      Math.abs(a.startPoint.x - b.startPoint.x) < tolerance &&
+      Math.abs(a.startPoint.y - b.startPoint.y) < tolerance &&
+      Math.abs(a.endPoint.x - b.endPoint.x) < tolerance &&
+      Math.abs(a.endPoint.y - b.endPoint.y) < tolerance &&
+      Math.abs(a.halfWidth - b.halfWidth) < tolerance
+    );
+  }
+
+  return false;
+}
+
+/**
+ * Augmentable annotation - existing annotation can be updated with origin from imported
+ */
+export interface AugmentableAnnotation {
+  /** The imported annotation with origin data */
+  imported: RectangleAnnotation;
+  /** The existing annotation ID to update */
+  existingId: string;
+}
+
+/**
+ * Result of duplicate detection during import
+ */
+export interface ImportDuplicateResult {
+  /** Annotations that are new (no duplicates found) */
+  newAnnotations: Follicle[];
+  /** Annotations that are exact duplicates (same position, same origin state) */
+  duplicates: Follicle[];
+  /** Annotations that match existing but have origin data the existing lacks */
+  augmentable: AugmentableAnnotation[];
+  /** Annotations that match existing but existing already has origin (imported is redundant) */
+  alreadyAugmented: Follicle[];
+  /** Total annotations in the import file */
+  totalImported: number;
+}
+
+/**
+ * Import annotations from JSON and detect duplicates
+ *
+ * @param json JSON string containing annotations
+ * @param targetImageId ID of the image to import annotations into
+ * @param existingFollicles Existing follicles to check for duplicates
+ * @returns Object containing new annotations, duplicates, augmentable, alreadyAugmented, and counts
+ */
+export function importAnnotationsFromJSONWithDuplicateCheck(
+  json: string,
+  targetImageId: string,
+  existingFollicles: Follicle[]
+): ImportDuplicateResult {
+  const allImported = importAnnotationsFromJSON(json, targetImageId);
+  const existingForImage = existingFollicles.filter(f => f.imageId === targetImageId);
+
+  const newAnnotations: Follicle[] = [];
+  const duplicates: Follicle[] = [];
+  const augmentable: AugmentableAnnotation[] = [];
+  const alreadyAugmented: Follicle[] = [];
+
+  for (const imported of allImported) {
+    const matchingExisting = existingForImage.find(existing =>
+      areAnnotationsDuplicate(imported, existing)
+    );
+
+    if (!matchingExisting) {
+      // No match - it's a new annotation
+      newAnnotations.push(imported);
+    } else if (
+      isRectangle(imported) &&
+      isRectangle(matchingExisting) &&
+      imported.origin &&
+      !matchingExisting.origin
+    ) {
+      // Imported has origin, existing doesn't - can augment existing
+      augmentable.push({
+        imported: imported as RectangleAnnotation,
+        existingId: matchingExisting.id,
+      });
+    } else if (
+      isRectangle(imported) &&
+      isRectangle(matchingExisting) &&
+      !imported.origin &&
+      matchingExisting.origin
+    ) {
+      // Existing has origin, imported doesn't - existing is already better
+      alreadyAugmented.push(imported);
+    } else {
+      // Exact duplicate (both have origin, or both don't, or non-rectangle shapes)
+      duplicates.push(imported);
+    }
+  }
+
+  return {
+    newAnnotations,
+    duplicates,
+    augmentable,
+    alreadyAugmented,
+    totalImported: allImported.length,
+  };
+}
+
+/**
  * Import annotations from JSON into current image
  *
  * @param json JSON string containing annotations
