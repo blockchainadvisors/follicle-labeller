@@ -33,6 +33,37 @@ from typing import Any, Dict, List, Optional, Tuple
 # Store early initialization messages (before logger is configured)
 _early_init_messages = []
 
+# Auto-detect and set CUDA_PATH if not already set (Windows only)
+_cuda_path_set = False
+_cuda_toolkit_installed = False
+if sys.platform == 'win32' and not os.environ.get('CUDA_PATH'):
+    # Common CUDA installation paths on Windows
+    cuda_base = r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA'
+    if os.path.exists(cuda_base):
+        # Find the latest CUDA version
+        try:
+            versions = [d for d in os.listdir(cuda_base) if d.startswith('v')]
+            if versions:
+                # Sort by version number (e.g., v12.4, v12.3, v11.8)
+                versions.sort(key=lambda x: [int(n) for n in x[1:].split('.')], reverse=True)
+                cuda_path = os.path.join(cuda_base, versions[0])
+                if os.path.exists(cuda_path):
+                    os.environ['CUDA_PATH'] = cuda_path
+                    _cuda_path_set = True
+                    _cuda_toolkit_installed = True
+                    _early_init_messages.append(f"CUDA_PATH auto-detected: {cuda_path}")
+        except Exception as e:
+            _early_init_messages.append(f"CUDA_PATH auto-detection failed: {e}")
+    else:
+        _early_init_messages.append(
+            "CUDA Toolkit not installed. GPU acceleration via CuPy requires CUDA Toolkit. "
+            "Detection will use CPU. Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads for GPU support."
+        )
+elif os.environ.get('CUDA_PATH'):
+    _cuda_path_set = True
+    _cuda_toolkit_installed = True
+    _early_init_messages.append(f"CUDA_PATH already set: {os.environ.get('CUDA_PATH')}")
+
 # Setup NVIDIA CUDA DLL paths before importing GPU libraries (Windows only)
 _cuda_dll_setup_success = False
 if sys.platform == 'win32':
@@ -605,9 +636,14 @@ def detect_blobs(image: np.ndarray,
     elif use_gpu:
         logger.info(f"Using GPU backend: {backend.name} ({backend.device_name})")
 
-    # Convert to grayscale
+    # Convert to grayscale (with GPU fallback to CPU on error)
     if use_gpu:
-        gray = backend.grayscale(image)
+        try:
+            gray = backend.grayscale(image)
+        except Exception as e:
+            logger.warning(f"GPU grayscale failed, falling back to CPU: {e}")
+            use_gpu = False
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -617,7 +653,16 @@ def detect_blobs(image: np.ndarray,
         clip_limit = settings.get('claheClipLimit', 3.0)
         tile_size = settings.get('claheTileSize', 8)
         if use_gpu:
-            gray = backend.clahe(gray, clip_limit=clip_limit, tile_size=tile_size)
+            try:
+                gray = backend.clahe(gray, clip_limit=clip_limit, tile_size=tile_size)
+            except Exception as e:
+                logger.warning(f"GPU CLAHE failed, falling back to CPU: {e}")
+                use_gpu = False
+                # Need to convert back from GPU array if grayscale succeeded on GPU
+                if hasattr(gray, 'get'):
+                    gray = gray.get()
+                clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+                gray = clahe.apply(gray)
         else:
             clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
             gray = clahe.apply(gray)
@@ -769,18 +814,34 @@ def detect_blobs(image: np.ndarray,
     if len(detected_results) < 50:
         logger.info("Trying contour-based detection...")
 
+        # Ensure gray is a numpy array (may still be GPU array if grayscale succeeded but CLAHE failed)
+        if hasattr(gray, 'get'):
+            gray = gray.get()
+
         # Use Gaussian blur + Otsu thresholding (better than adaptive for this use case)
         if use_gpu:
-            blurred = backend.gaussian_blur(gray, kernel_size=5)
-            thresh = backend.threshold_otsu(blurred, invert=True)
-            # Morphological opening to remove noise and separate touching objects
-            thresh = backend.morphological_open(thresh, kernel_size=3)
+            try:
+                blurred = backend.gaussian_blur(gray, kernel_size=5)
+                thresh = backend.threshold_otsu(blurred, invert=True)
+                # Morphological opening to remove noise and separate touching objects
+                thresh = backend.morphological_open(thresh, kernel_size=3)
+            except Exception as e:
+                logger.warning(f"GPU contour ops failed, falling back to CPU: {e}")
+                use_gpu = False
+                blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+                _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                kernel = np.ones((3, 3), np.uint8)
+                thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         else:
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
             _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             # Morphological opening to remove noise and separate touching objects
             kernel = np.ones((3, 3), np.uint8)
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+        # Ensure thresh is a numpy array before findContours
+        if hasattr(thresh, 'get'):
+            thresh = thresh.get()
 
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -830,6 +891,7 @@ async def health():
         'parallel_detection': PARALLEL_BLOB_AVAILABLE,
         'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
         'gpu_available': GPU_AVAILABLE,
+        'cuda_toolkit_installed': _cuda_toolkit_installed,
         'cuda_dll_setup': _cuda_dll_setup_success,
         'gpu_import_error': _gpu_import_error,
         'parallel_import_error': _parallel_import_error,
