@@ -30,15 +30,23 @@ import sys
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+# Store early initialization messages (before logger is configured)
+_early_init_messages = []
+
 # Setup NVIDIA CUDA DLL paths before importing GPU libraries (Windows only)
+_cuda_dll_setup_success = False
 if sys.platform == 'win32':
     try:
         # Find the venv site-packages nvidia directory
         import site
         nvidia_dll_paths = []
-        for site_path in site.getsitepackages():
+        site_packages = site.getsitepackages()
+        _early_init_messages.append(f"CUDA DLL setup: Checking site-packages: {site_packages}")
+
+        for site_path in site_packages:
             nvidia_base = os.path.join(site_path, 'nvidia')
             if os.path.exists(nvidia_base):
+                _early_init_messages.append(f"CUDA DLL setup: Found nvidia directory at {nvidia_base}")
                 dll_subdirs = [
                     'cuda_nvrtc/bin', 'cublas/bin', 'cuda_runtime/bin',
                     'cufft/bin', 'curand/bin', 'cusolver/bin',
@@ -52,13 +60,18 @@ if sys.platform == 'win32':
                         os.add_dll_directory(dll_path)
                 break
 
+        if not nvidia_dll_paths:
+            _early_init_messages.append("CUDA DLL setup: No NVIDIA DLL paths found in site-packages")
+
         # Also prepend to PATH for broader compatibility
         if nvidia_dll_paths:
             current_path = os.environ.get('PATH', '')
             new_paths = os.pathsep.join(nvidia_dll_paths)
             os.environ['PATH'] = new_paths + os.pathsep + current_path
-    except Exception:
-        pass  # Ignore errors, GPU will just not be available
+            _early_init_messages.append(f"CUDA DLL setup: Added {len(nvidia_dll_paths)} paths to DLL search")
+            _cuda_dll_setup_success = True
+    except Exception as e:
+        _early_init_messages.append(f"CUDA DLL setup ERROR: {type(e).__name__}: {e}")
 
 import cv2
 import numpy as np
@@ -69,21 +82,40 @@ from pydantic import BaseModel
 import uvicorn
 
 # Import GPU backend manager
+_gpu_import_error = None
 try:
     from gpu_backend import get_gpu_manager, GPUBackendManager
     GPU_AVAILABLE = True
-except ImportError:
+    _early_init_messages.append("GPU backend: Successfully imported gpu_backend module")
+except ImportError as e:
     GPU_AVAILABLE = False
     get_gpu_manager = None
     GPUBackendManager = None
+    _gpu_import_error = str(e)
+    _early_init_messages.append(f"GPU backend: Import failed - {e}")
+except Exception as e:
+    GPU_AVAILABLE = False
+    get_gpu_manager = None
+    GPUBackendManager = None
+    _gpu_import_error = str(e)
+    _early_init_messages.append(f"GPU backend: Unexpected error - {type(e).__name__}: {e}")
 
 # Import parallel blob detection
+_parallel_import_error = None
 try:
     from parallel_blob_detect import parallel_blob_detect
     PARALLEL_BLOB_AVAILABLE = True
-except ImportError:
+    _early_init_messages.append("Parallel detection: Successfully imported")
+except ImportError as e:
     PARALLEL_BLOB_AVAILABLE = False
     parallel_blob_detect = None
+    _parallel_import_error = str(e)
+    _early_init_messages.append(f"Parallel detection: Import failed - {e}")
+except Exception as e:
+    PARALLEL_BLOB_AVAILABLE = False
+    parallel_blob_detect = None
+    _parallel_import_error = str(e)
+    _early_init_messages.append(f"Parallel detection: Unexpected error - {type(e).__name__}: {e}")
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +123,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Log early initialization messages now that logger is available
+for msg in _early_init_messages:
+    if 'ERROR' in msg or 'failed' in msg.lower():
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+
+# Log summary of initialization status
+logger.info(f"Initialization summary: CUDA_DLL_SETUP={_cuda_dll_setup_success}, GPU_AVAILABLE={GPU_AVAILABLE}, PARALLEL_AVAILABLE={PARALLEL_BLOB_AVAILABLE}")
+if _gpu_import_error:
+    logger.error(f"GPU backend unavailable: {_gpu_import_error}")
+if _parallel_import_error:
+    logger.error(f"Parallel detection unavailable: {_parallel_import_error}")
 
 # Create FastAPI app
 app = FastAPI(
@@ -782,7 +828,11 @@ async def health():
         'framework': 'fastapi',
         'min_annotations': MIN_ANNOTATIONS_FOR_DETECTION,
         'parallel_detection': PARALLEL_BLOB_AVAILABLE,
-        'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD
+        'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
+        'gpu_available': GPU_AVAILABLE,
+        'cuda_dll_setup': _cuda_dll_setup_success,
+        'gpu_import_error': _gpu_import_error,
+        'parallel_import_error': _parallel_import_error,
     }
 
 
@@ -1021,8 +1071,17 @@ async def blob_detect(req: BlobDetectRequest):
         }
 
     except Exception as e:
-        logger.error(f"Detection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Detection failed: {e}\n{error_traceback}")
+        # Include more context in the error for debugging
+        error_detail = {
+            'error': str(e),
+            'type': type(e).__name__,
+            'gpu_available': GPU_AVAILABLE,
+            'parallel_available': PARALLEL_BLOB_AVAILABLE,
+        }
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.post('/crop-region')
