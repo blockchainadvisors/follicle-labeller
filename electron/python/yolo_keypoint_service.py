@@ -123,6 +123,19 @@ class ModelInfo:
     metrics: Dict[str, float]
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dict with camelCase keys for JavaScript compatibility."""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'path': self.path,
+            'createdAt': self.created_at,
+            'epochsTrained': self.epochs_trained,
+            'imgSize': self.img_size,
+            'metrics': self.metrics,
+        }
+
+    def to_storage_dict(self) -> Dict[str, Any]:
+        """Convert to dict with snake_case keys for file storage."""
         return asdict(self)
 
 
@@ -556,10 +569,10 @@ class YOLOKeypointService:
                 metrics=final_metrics
             )
 
-            # Save model info
+            # Save model info (snake_case for storage)
             info_file = model_dir / 'model_info.json'
             with open(info_file, 'w') as f:
-                json.dump(model_info.to_dict(), f, indent=2)
+                json.dump(model_info.to_storage_dict(), f, indent=2)
 
             progress_callback(TrainingProgress(
                 status='completed',
