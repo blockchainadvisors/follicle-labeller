@@ -18,6 +18,7 @@ export const PropertyPanel: React.FC = () => {
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
   const deleteSelected = useFollicleStore(state => state.deleteSelected);
   const updateFollicle = useFollicleStore(state => state.updateFollicle);
+  const selectMultiple = useFollicleStore(state => state.selectMultiple);
 
   const activeImageId = useProjectStore(state => state.activeImageId);
 
@@ -93,8 +94,8 @@ export const PropertyPanel: React.FC = () => {
             <h4>Tips:</h4>
             <ul>
               <li><strong>Create:</strong> Click to start, click again to finish</li>
-              <li><strong>Circle (1):</strong> Click center, click for radius</li>
-              <li><strong>Rectangle (2):</strong> Click corner, click opposite corner</li>
+              <li><strong>Rectangle (1):</strong> Click corner, click opposite corner</li>
+              <li><strong>Circle (2):</strong> Click center, click for radius</li>
               <li><strong>Linear (3):</strong> Click start, click end, click for width</li>
               <li><strong>Select:</strong> Click on an annotation</li>
               <li><strong>Ctrl+Click:</strong> Add/remove from selection</li>
@@ -118,6 +119,27 @@ export const PropertyPanel: React.FC = () => {
     const circleCount = selectedFollicles.filter(isCircle).length;
     const rectangleCount = selectedFollicles.filter(isRectangle).length;
     const linearCount = selectedFollicles.filter(isLinear).length;
+
+    // Count rectangles with/without origins
+    const allRectangles = selectedFollicles.filter(isRectangle);
+    const rectanglesWithOrigin = allRectangles.filter(r => r.origin);
+    const rectanglesWithoutOrigin = allRectangles.filter(r => !r.origin);
+    const hasRectangles = allRectangles.length > 0;
+
+    // Filter handlers - modify selection to keep only matching annotations
+    const handleKeepWithOrigin = () => {
+      const toKeep = selectedFollicles
+        .filter(f => !isRectangle(f) || f.origin !== undefined)
+        .map(f => f.id);
+      selectMultiple(toKeep);
+    };
+
+    const handleKeepWithoutOrigin = () => {
+      const toKeep = selectedFollicles
+        .filter(f => !isRectangle(f) || f.origin === undefined)
+        .map(f => f.id);
+      selectMultiple(toKeep);
+    };
 
     // Batch color change handler
     const handleBatchColorChange = (color: string) => {
@@ -143,6 +165,29 @@ export const PropertyPanel: React.FC = () => {
             {linearCount > 0 && <span>{linearCount} Linear{linearCount > 1 ? 's' : ''}</span>}
           </div>
         </div>
+
+        {/* Origin filter for rectangles - modifies selection */}
+        {hasRectangles && (
+          <div className="property-group">
+            <label>Filter Selection</label>
+            <div className="origin-filter-buttons">
+              <button
+                className="filter-button"
+                onClick={handleKeepWithOrigin}
+                disabled={rectanglesWithOrigin.length === 0}
+              >
+                Keep With Origin ({rectanglesWithOrigin.length})
+              </button>
+              <button
+                className="filter-button"
+                onClick={handleKeepWithoutOrigin}
+                disabled={rectanglesWithoutOrigin.length === 0}
+              >
+                Keep Without Origin ({rectanglesWithoutOrigin.length})
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="property-group">
           <label htmlFor="batch-color">Batch Color</label>

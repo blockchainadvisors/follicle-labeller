@@ -3,9 +3,6 @@ import {
   Pencil,
   MousePointer2,
   Hand,
-  Circle,
-  Square,
-  Minus,
   ZoomIn,
   ZoomOut,
   RotateCcw,
@@ -26,6 +23,7 @@ import {
   GraduationCap,
   Brain,
   Database,
+  FileUp,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -36,6 +34,8 @@ import {
   exportYOLODataset,
   exportToCSV,
   exportYOLOKeypointDatasetZip,
+  exportSelectedAnnotationsJSON,
+  importAnnotationsFromJSON,
 } from "../../utils/export-utils";
 import {
   extractAllFolliclesToZip,
@@ -56,6 +56,7 @@ import {
   DEFAULT_LEARNED_SETTINGS,
 } from "../LearnedDetectionDialog/LearnedDetectionDialog";
 import { ExportMenu, ExportType } from "../ExportMenu/ExportMenu";
+import { ShapeToolDropdown } from "../ShapeToolDropdown/ShapeToolDropdown";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
 import { YOLOTrainingDialog } from "../YOLOTrainingDialog";
 import { YOLOModelManager } from "../YOLOModelManager";
@@ -103,8 +104,6 @@ export const Toolbar: React.FC = () => {
   const toggleLabels = useCanvasStore((state) => state.toggleLabels);
   const showShapes = useCanvasStore((state) => state.showShapes);
   const toggleShapes = useCanvasStore((state) => state.toggleShapes);
-  const currentShapeType = useCanvasStore((state) => state.currentShapeType);
-  const setShapeType = useCanvasStore((state) => state.setShapeType);
   const selectionToolType = useCanvasStore((state) => state.selectionToolType);
   const setSelectionToolType = useCanvasStore(
     (state) => state.setSelectionToolType,
@@ -784,6 +783,73 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, currentProjectPath]);
 
+  // Export selected annotations as JSON
+  const handleExportSelectedJSON = useCallback(() => {
+    if (selectedIds.size === 0) {
+      alert("No annotations selected. Please select annotations to export.");
+      return;
+    }
+
+    if (!activeImage) {
+      alert("No image loaded.");
+      return;
+    }
+
+    try {
+      const selectedFollicles = follicles.filter(f => selectedIds.has(f.id));
+      const json = exportSelectedAnnotationsJSON(
+        selectedFollicles,
+        selectedIds,
+        { width: activeImage.width, height: activeImage.height }
+      );
+
+      // Create and download JSON file
+      const blob = new Blob([json], { type: "application/json" });
+      const baseName = activeImage.fileName.replace(/\.[^/.]+$/, "");
+      downloadBlob(blob, `${baseName}_selected_annotations.json`);
+
+      console.log(`Exported ${selectedIds.size} selected annotations`);
+    } catch (error) {
+      console.error("Failed to export selected annotations:", error);
+      alert("Failed to export selected annotations. Please try again.");
+    }
+  }, [selectedIds, follicles, activeImage]);
+
+  // Import annotations from JSON
+  const handleImportAnnotations = useCallback(async () => {
+    if (!activeImageId || !activeImage) {
+      alert("Please load an image first before importing annotations.");
+      return;
+    }
+
+    try {
+      // Open file dialog for JSON
+      const result = await window.electronAPI.openFileDialog({
+        filters: [{ name: "JSON Files", extensions: ["json"] }],
+        title: "Import Annotations",
+      });
+
+      if (!result) return;
+
+      const text = new TextDecoder().decode(result.data);
+      const importedFollicles = importAnnotationsFromJSON(text, activeImageId);
+
+      if (importedFollicles.length === 0) {
+        alert("No annotations found in the file.");
+        return;
+      }
+
+      // Add imported annotations to existing ones
+      const allFollicles = [...follicles, ...importedFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`Imported ${importedFollicles.length} annotations`);
+    } catch (error) {
+      console.error("Failed to import annotations:", error);
+      alert(`Failed to import annotations: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  }, [activeImageId, activeImage, follicles, importFollicles]);
+
   // Export to YOLO Keypoint dataset format (for pose/keypoint training)
   const handleExportYOLOKeypoint = useCallback(async () => {
     if (images.size === 0 || follicles.length === 0) return;
@@ -835,9 +901,12 @@ export const Toolbar: React.FC = () => {
         case "csv":
           handleExportCSV();
           break;
+        case "selected-json":
+          handleExportSelectedJSON();
+          break;
       }
     },
-    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV],
+    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV, handleExportSelectedJSON],
   );
 
   // Colors for auto-detected annotations (cycles through)
@@ -1330,27 +1399,7 @@ export const Toolbar: React.FC = () => {
       {mode === "create" && (
         <>
           <div className="toolbar-group" role="group" aria-label="Shape types">
-            <IconButton
-              icon={<Circle size={18} />}
-              tooltip="Circle Shape"
-              shortcut="1"
-              onClick={() => setShapeType("circle")}
-              active={currentShapeType === "circle"}
-            />
-            <IconButton
-              icon={<Square size={18} />}
-              tooltip="Rectangle Shape"
-              shortcut="2"
-              onClick={() => setShapeType("rectangle")}
-              active={currentShapeType === "rectangle"}
-            />
-            <IconButton
-              icon={<Minus size={18} strokeWidth={3} />}
-              tooltip="Linear Shape"
-              shortcut="3"
-              onClick={() => setShapeType("linear")}
-              active={currentShapeType === "linear"}
-            />
+            <ShapeToolDropdown />
           </div>
           <div className="toolbar-divider" />
         </>
@@ -1496,8 +1545,14 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Export options */}
-      <div className="toolbar-group" role="group" aria-label="Export">
+      {/* Import/Export options */}
+      <div className="toolbar-group" role="group" aria-label="Import/Export">
+        <IconButton
+          icon={<FileUp size={18} />}
+          tooltip="Import Annotations"
+          onClick={handleImportAnnotations}
+          disabled={!imageLoaded}
+        />
         <ExportMenu
           onExport={handleExport}
           disabled={!imageLoaded || follicles.length === 0}

@@ -43,7 +43,7 @@ interface CanvasState {
 
 export const useCanvasStore = create<CanvasState>((set) => ({
   mode: "select",
-  currentShapeType: "circle",
+  currentShapeType: "rectangle",
   selectionToolType: "marquee",
   showLabels: false, // Default off for better performance with many annotations
   showShapes: true,

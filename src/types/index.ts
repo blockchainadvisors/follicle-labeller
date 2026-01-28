@@ -286,6 +286,11 @@ declare global {
     electronAPI: {
       // Single image dialog (for adding images)
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
+      // Generic file dialog with filters
+      openFileDialog: (options: {
+        filters?: Array<{ name: string; extensions: string[] }>;
+        title?: string;
+      }) => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
       // Legacy V1 operations (still supported for backward compatibility)
       saveProject: (imageData: ArrayBuffer, imageFileName: string, jsonData: string) => Promise<boolean>;
       loadProject: () => Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null>;

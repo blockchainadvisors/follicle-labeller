@@ -1177,12 +1177,12 @@ export const ImageCanvas: React.FC = () => {
         useCanvasStore.getState().toggleShapes();
       }
 
-      // Shape type shortcuts
+      // Shape type shortcuts (1=Rectangle, 2=Circle, 3=Linear)
       if (e.key === "1") {
-        useCanvasStore.getState().setShapeType("circle");
+        useCanvasStore.getState().setShapeType("rectangle");
       }
       if (e.key === "2") {
-        useCanvasStore.getState().setShapeType("rectangle");
+        useCanvasStore.getState().setShapeType("circle");
       }
       if (e.key === "3") {
         useCanvasStore.getState().setShapeType("linear");

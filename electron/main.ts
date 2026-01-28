@@ -135,6 +135,32 @@ ipcMain.handle("dialog:openImage", async () => {
   };
 });
 
+// Open generic file dialog with custom filters
+ipcMain.handle("dialog:openFile", async (_, options: {
+  filters?: Array<{ name: string; extensions: string[] }>;
+  title?: string;
+}) => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return null;
+
+  const result = await dialog.showOpenDialog(window, {
+    properties: ["openFile"],
+    title: options.title || "Open File",
+    filters: options.filters || [{ name: "All Files", extensions: ["*"] }],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const data = fs.readFileSync(filePath);
+
+  return {
+    filePath,
+    fileName: path.basename(filePath),
+    data: data.buffer,
+  };
+});
+
 // Save project as .fol archive (contains image + JSON)
 ipcMain.handle(
   "dialog:saveProject",

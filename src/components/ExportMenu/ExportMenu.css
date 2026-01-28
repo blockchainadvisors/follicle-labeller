@@ -70,6 +70,17 @@
   border-bottom: 1px solid var(--border, #e0e0e0);
 }
 
+.export-option.disabled,
+.export-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-option.disabled:hover,
+.export-option:disabled:hover {
+  background: transparent;
+}
+
 .export-option svg {
   flex-shrink: 0;
   margin-top: 2px;

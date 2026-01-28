@@ -12,6 +12,16 @@ const electronAPI = {
     data: ArrayBuffer;
   } | null> => ipcRenderer.invoke("dialog:openImage"),
 
+  // Open generic file dialog with filters - returns file path and data
+  openFileDialog: (options: {
+    filters?: Array<{ name: string; extensions: string[] }>;
+    title?: string;
+  }): Promise<{
+    filePath: string;
+    fileName: string;
+    data: ArrayBuffer;
+  } | null> => ipcRenderer.invoke("dialog:openFile", options),
+
   // Legacy V1: Save project as .fol archive (image + annotations)
   saveProject: (
     imageData: ArrayBuffer,

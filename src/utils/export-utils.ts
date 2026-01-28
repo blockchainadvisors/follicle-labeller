@@ -13,6 +13,7 @@ import {
   isLinear
 } from '../types';
 import { generateImageId } from '../store/projectStore';
+import { generateId } from './id-generator';
 import {
   exportYOLOKeypointDataset,
   createKeypointDatasetZip,
@@ -705,3 +706,188 @@ export async function exportYOLOKeypointDatasetZip(
 // Re-export types for convenience
 export type { KeypointExportConfig, KeypointDatasetStats };
 export { DEFAULT_KEYPOINT_EXPORT_CONFIG };
+
+// ============================================
+// Selected Annotations Export/Import
+// ============================================
+
+/**
+ * Interface for selected annotations export format
+ */
+export interface SelectedAnnotationsExport {
+  version: '1.0';
+  type: 'selected-annotations';
+  exportedAt: string;
+  imageDimensions: { width: number; height: number };
+  annotations: Array<{
+    id: string;
+    shape: 'circle' | 'rectangle' | 'linear';
+    label: string;
+    notes: string;
+    color: string;
+    // Shape-specific fields
+    centerX?: number;
+    centerY?: number;
+    radius?: number;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    originX?: number;
+    originY?: number;
+    directionAngle?: number;
+    directionLength?: number;
+    startX?: number;
+    startY?: number;
+    endX?: number;
+    endY?: number;
+    halfWidth?: number;
+  }>;
+}
+
+/**
+ * Export selected annotations as JSON string
+ *
+ * @param follicles All follicles (will be filtered by selectedIds)
+ * @param selectedIds Set of selected annotation IDs
+ * @param imageDimensions The dimensions of the source image
+ * @returns JSON string with selected annotations
+ */
+export function exportSelectedAnnotationsJSON(
+  follicles: Follicle[],
+  selectedIds: Set<string>,
+  imageDimensions: { width: number; height: number }
+): string {
+  const selectedFollicles = follicles.filter(f => selectedIds.has(f.id));
+
+  const exportData: SelectedAnnotationsExport = {
+    version: '1.0',
+    type: 'selected-annotations',
+    exportedAt: new Date().toISOString(),
+    imageDimensions,
+    annotations: selectedFollicles.map(f => {
+      const base = {
+        id: f.id,
+        shape: f.shape,
+        label: f.label,
+        notes: f.notes,
+        color: f.color,
+      };
+
+      if (isCircle(f)) {
+        return {
+          ...base,
+          centerX: Math.round(f.center.x * 100) / 100,
+          centerY: Math.round(f.center.y * 100) / 100,
+          radius: Math.round(f.radius * 100) / 100,
+        };
+      } else if (isRectangle(f)) {
+        return {
+          ...base,
+          x: Math.round(f.x * 100) / 100,
+          y: Math.round(f.y * 100) / 100,
+          width: Math.round(f.width * 100) / 100,
+          height: Math.round(f.height * 100) / 100,
+          ...(f.origin && {
+            originX: Math.round(f.origin.originPoint.x * 100) / 100,
+            originY: Math.round(f.origin.originPoint.y * 100) / 100,
+            directionAngle: Math.round(f.origin.directionAngle * 10000) / 10000,
+            directionLength: Math.round(f.origin.directionLength * 100) / 100,
+          }),
+        };
+      } else {
+        // Linear
+        return {
+          ...base,
+          startX: Math.round(f.startPoint.x * 100) / 100,
+          startY: Math.round(f.startPoint.y * 100) / 100,
+          endX: Math.round(f.endPoint.x * 100) / 100,
+          endY: Math.round(f.endPoint.y * 100) / 100,
+          halfWidth: Math.round(f.halfWidth * 100) / 100,
+        };
+      }
+    }),
+  };
+
+  return JSON.stringify(exportData, null, 2);
+}
+
+/**
+ * Import annotations from JSON into current image
+ *
+ * @param json JSON string containing annotations
+ * @param targetImageId ID of the image to import annotations into
+ * @returns Array of new follicles with fresh IDs
+ */
+export function importAnnotationsFromJSON(
+  json: string,
+  targetImageId: string
+): Follicle[] {
+  const data = JSON.parse(json) as SelectedAnnotationsExport;
+
+  // Validate format
+  if (data.type !== 'selected-annotations' || data.version !== '1.0') {
+    throw new Error('Invalid annotation file format. Expected selected-annotations v1.0');
+  }
+
+  if (!data.annotations || !Array.isArray(data.annotations)) {
+    throw new Error('No annotations found in file');
+  }
+
+  const now = Date.now();
+
+  return data.annotations.map(ann => {
+    const base = {
+      id: generateId(), // Generate new unique ID to avoid conflicts
+      imageId: targetImageId,
+      label: ann.label || '',
+      notes: ann.notes || '',
+      color: ann.color || '#4ECDC4',
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (ann.shape === 'circle' && ann.centerX !== undefined && ann.centerY !== undefined && ann.radius !== undefined) {
+      return {
+        ...base,
+        shape: 'circle' as const,
+        center: { x: ann.centerX, y: ann.centerY },
+        radius: ann.radius,
+      } as CircleAnnotation;
+    } else if (ann.shape === 'rectangle' && ann.x !== undefined && ann.y !== undefined && ann.width !== undefined && ann.height !== undefined) {
+      const origin = (ann.originX !== undefined && ann.originY !== undefined)
+        ? {
+            originPoint: { x: ann.originX, y: ann.originY },
+            directionAngle: ann.directionAngle ?? 0,
+            directionLength: ann.directionLength ?? 30,
+          }
+        : undefined;
+
+      return {
+        ...base,
+        shape: 'rectangle' as const,
+        x: ann.x,
+        y: ann.y,
+        width: ann.width,
+        height: ann.height,
+        origin,
+      } as RectangleAnnotation;
+    } else if (ann.shape === 'linear' && ann.startX !== undefined && ann.startY !== undefined && ann.endX !== undefined && ann.endY !== undefined && ann.halfWidth !== undefined) {
+      return {
+        ...base,
+        shape: 'linear' as const,
+        startPoint: { x: ann.startX, y: ann.startY },
+        endPoint: { x: ann.endX, y: ann.endY },
+        halfWidth: ann.halfWidth,
+      } as LinearAnnotation;
+    } else {
+      // Default to circle if shape is unknown
+      return {
+        ...base,
+        shape: 'circle' as const,
+        center: { x: ann.centerX ?? 100, y: ann.centerY ?? 100 },
+        radius: ann.radius ?? 50,
+      } as CircleAnnotation;
+    }
+  });
+}

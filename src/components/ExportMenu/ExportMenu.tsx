@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Download, FileText, Table, Image, ChevronDown, Target } from 'lucide-react';
+import { Download, FileText, Table, Image, ChevronDown, Target, FileJson } from 'lucide-react';
 import './ExportMenu.css';
 
-export type ExportType = 'images' | 'yolo' | 'yolo-keypoint' | 'csv';
+export type ExportType = 'images' | 'yolo' | 'yolo-keypoint' | 'csv' | 'selected-json';
 
 interface ExportMenuProps {
   onExport: (type: ExportType) => void;
@@ -95,6 +95,20 @@ export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps
             <div className="option-text">
               <span className="option-label">CSV Export</span>
               <span className="option-description">Spreadsheet for analysis</span>
+            </div>
+          </button>
+
+          <button
+            className={`export-option ${!hasSelection ? 'disabled' : ''}`}
+            onClick={() => hasSelection && handleExport('selected-json')}
+            disabled={!hasSelection}
+          >
+            <FileJson size={16} />
+            <div className="option-text">
+              <span className="option-label">Selected Annotations</span>
+              <span className="option-description">
+                {hasSelection ? 'Export selected as JSON' : 'Select annotations first'}
+              </span>
             </div>
           </button>
         </div>
