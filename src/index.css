@@ -943,6 +943,21 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.custom-settings-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  background: var(--accent, #3b82f6);
+  border-radius: 50%;
+  color: white;
+  flex-shrink: 0;
 }
 
 .annotation-count {

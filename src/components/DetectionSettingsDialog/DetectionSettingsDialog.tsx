@@ -12,6 +12,8 @@ export interface DetectionSettings {
 
   // YOLO Detection settings
   yoloModelId: string | null;  // Selected model ID (null = pre-trained/default)
+  yoloModelName: string | null;  // Human-readable model name for display
+  yoloModelSource: 'pretrained' | 'custom';  // Whether this is a pre-trained or custom model
   yoloConfidenceThreshold: number;  // Confidence threshold for YOLO (0-1)
   yoloUseTiledInference: boolean;  // Use tiled inference for large images
   yoloTileSize: number;  // Tile size for tiled inference (should match training tile size)
@@ -77,6 +79,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   detectionMethod: 'blob',
   // YOLO Detection settings
   yoloModelId: null,
+  yoloModelName: null,
+  yoloModelSource: 'pretrained',
   yoloConfidenceThreshold: 0.5,
   yoloUseTiledInference: true,  // Enable by default for better results on large images
   yoloTileSize: 1024,  // Match typical training tile size
@@ -135,25 +139,40 @@ export interface GPUInstallState {
 
 interface DetectionSettingsDialogProps {
   settings: DetectionSettings;
-  onSave: (settings: DetectionSettings) => void;
-  onCancel: () => void;
+  onClose: () => void;
   blobServerConnected?: boolean;
   onServerRestarted?: () => void;
   // Optional install state from parent for persistence across dialog close/reopen
   installState?: GPUInstallState;
   onInstallStateChange?: (state: GPUInstallState) => void;
+  // Live settings update callbacks (changes apply immediately)
+  onSettingsChange: (settings: DetectionSettings) => void;
+  // Per-image settings support
+  activeImageId?: string | null;
+  activeImageName?: string;
+  hasImageOverride?: boolean;
+  globalSettings?: DetectionSettings;  // Global settings for comparison/reset
+  onImageSettingsChange?: (imageId: string, settings: Partial<DetectionSettings>) => void;
+  onClearImageOverride?: (imageId: string) => void;
 }
 
 export function DetectionSettingsDialog({
   settings,
-  onSave,
-  onCancel,
+  onClose,
   blobServerConnected = false,
   onServerRestarted,
   installState,
   onInstallStateChange,
+  onSettingsChange,
+  activeImageId,
+  activeImageName,
+  hasImageOverride = false,
+  globalSettings,
+  onImageSettingsChange,
+  onClearImageOverride,
 }: DetectionSettingsDialogProps) {
-  const [localSettings, setLocalSettings] = useState<DetectionSettings>({ ...settings });
+  // Track whether we're editing per-image or global settings
+  const [applyToImageOnly, setApplyToImageOnly] = useState(hasImageOverride);
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
   const [loadedKeypointModel, setLoadedKeypointModel] = useState<ModelInfo | null>(null);
@@ -346,23 +365,42 @@ export function DetectionSettingsDialog({
     }
   };
 
+  // Live update handler - immediately saves changes
   const handleChange = <K extends keyof DetectionSettings>(
     key: K,
     value: DetectionSettings[K]
   ) => {
-    setLocalSettings(prev => ({ ...prev, [key]: value }));
+    const newSettings = { ...settings, [key]: value };
+    if (applyToImageOnly && activeImageId && onImageSettingsChange) {
+      // Update per-image settings
+      onImageSettingsChange(activeImageId, newSettings);
+    } else {
+      // Update global settings
+      onSettingsChange(newSettings);
+    }
   };
 
   const handleReset = () => {
-    setLocalSettings({ ...DEFAULT_DETECTION_SETTINGS });
+    if (applyToImageOnly && globalSettings) {
+      // Reset to global settings when in per-image mode
+      if (activeImageId && onImageSettingsChange) {
+        onImageSettingsChange(activeImageId, globalSettings);
+      }
+    } else {
+      // Reset to defaults when in global mode
+      onSettingsChange({ ...DEFAULT_DETECTION_SETTINGS });
+    }
   };
 
-  const handleSave = () => {
-    onSave(localSettings);
+  const handleClearImageOverride = () => {
+    if (activeImageId && onClearImageOverride) {
+      onClearImageOverride(activeImageId);
+      setApplyToImageOnly(false);
+    }
   };
 
   return (
-    <div className="detection-settings-overlay" onClick={onCancel}>
+    <div className="detection-settings-overlay" onClick={onClose}>
       <div
         ref={dialogRef}
         className="detection-settings-dialog"
@@ -371,25 +409,60 @@ export function DetectionSettingsDialog({
       >
         <div className="dialog-header" onMouseDown={handleMouseDown}>
           <h2>Detection Settings</h2>
-          <button className="close-button" onClick={onCancel}>
+          <button className="close-button" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
 
         <div className="dialog-content">
+          {/* Per-Image Settings Toggle */}
+          {activeImageId && onImageSettingsChange && (
+            <section className="settings-section per-image-section">
+              <div className="per-image-header">
+                <label className="per-image-toggle">
+                  <input
+                    type="checkbox"
+                    checked={applyToImageOnly}
+                    onChange={e => setApplyToImageOnly(e.target.checked)}
+                  />
+                  <span>Apply to this image only</span>
+                </label>
+                {hasImageOverride && (
+                  <button
+                    className="clear-override-btn"
+                    onClick={handleClearImageOverride}
+                    title="Remove custom settings for this image"
+                  >
+                    Reset to Global
+                  </button>
+                )}
+              </div>
+              <p className="per-image-hint">
+                {applyToImageOnly
+                  ? `Settings will only apply to "${activeImageName || 'current image'}"`
+                  : 'Settings will apply to all images in the project'}
+              </p>
+              {hasImageOverride && !applyToImageOnly && (
+                <p className="per-image-warning">
+                  ⚠ This image has custom settings. Saving globally won't change per-image settings.
+                </p>
+              )}
+            </section>
+          )}
+
           {/* Detection Method Toggle */}
           <section className="settings-section detection-method-section">
             <h3>Detection Method</h3>
             <div className="detection-method-toggle">
               <button
-                className={`method-btn ${localSettings.detectionMethod === 'blob' ? 'active' : ''}`}
+                className={`method-btn ${settings.detectionMethod === 'blob' ? 'active' : ''}`}
                 onClick={() => handleChange('detectionMethod', 'blob')}
               >
                 <Box size={16} />
                 SimpleBlobDetector
               </button>
               <button
-                className={`method-btn ${localSettings.detectionMethod === 'yolo' ? 'active' : ''}`}
+                className={`method-btn ${settings.detectionMethod === 'yolo' ? 'active' : ''}`}
                 onClick={() => handleChange('detectionMethod', 'yolo')}
               >
                 <Brain size={16} />
@@ -397,14 +470,14 @@ export function DetectionSettingsDialog({
               </button>
             </div>
             <p className="method-description">
-              {localSettings.detectionMethod === 'blob'
+              {settings.detectionMethod === 'blob'
                 ? 'Uses OpenCV SimpleBlobDetector for classical computer vision based detection. Fast and reliable for uniform images.'
                 : 'Uses YOLO neural network for AI-powered detection. Better for complex images and varied lighting.'}
             </p>
           </section>
 
           {/* YOLO Detection Settings (shown when YOLO method selected) */}
-          {localSettings.detectionMethod === 'yolo' && (
+          {settings.detectionMethod === 'yolo' && (
             <section className="settings-section yolo-detection-section">
               <h3>YOLO Detection Settings</h3>
 
@@ -412,8 +485,35 @@ export function DetectionSettingsDialog({
               <div className="settings-row">
                 <label>Model</label>
                 <select
-                  value={localSettings.yoloModelId || 'pretrained'}
-                  onChange={e => handleChange('yoloModelId', e.target.value === 'pretrained' ? null : e.target.value)}
+                  value={settings.yoloModelId || 'pretrained'}
+                  onChange={e => {
+                    const value = e.target.value;
+                    let newSettings: DetectionSettings;
+                    if (value === 'pretrained') {
+                      // Pre-trained model
+                      newSettings = {
+                        ...settings,
+                        yoloModelId: null,
+                        yoloModelName: null,
+                        yoloModelSource: 'pretrained',
+                      };
+                    } else {
+                      // Custom trained model
+                      const selectedModel = detectionModels.find(m => m.id === value);
+                      newSettings = {
+                        ...settings,
+                        yoloModelId: value,
+                        yoloModelName: selectedModel?.name || value,
+                        yoloModelSource: 'custom',
+                      };
+                    }
+                    // Apply immediately
+                    if (applyToImageOnly && activeImageId && onImageSettingsChange) {
+                      onImageSettingsChange(activeImageId, newSettings);
+                    } else {
+                      onSettingsChange(newSettings);
+                    }
+                  }}
                   disabled={loadingDetectionModels}
                 >
                   <option value="pretrained">Pre-trained (yolo11n.pt)</option>
@@ -424,6 +524,17 @@ export function DetectionSettingsDialog({
                   ))}
                 </select>
               </div>
+              {/* Show warning if saved model is not available */}
+              {settings.yoloModelId && settings.yoloModelSource === 'custom' &&
+               !detectionModels.find(m => m.id === settings.yoloModelId) && (
+                <div className="yolo-warning">
+                  <AlertCircle size={14} />
+                  <span>
+                    Saved model "{settings.yoloModelName || settings.yoloModelId}" not found.
+                    Using pre-trained model or select another model.
+                  </span>
+                </div>
+              )}
 
               {/* Confidence Threshold */}
               <div className="settings-row">
@@ -433,10 +544,10 @@ export function DetectionSettingsDialog({
                   min="0.1"
                   max="0.9"
                   step="0.05"
-                  value={localSettings.yoloConfidenceThreshold}
+                  value={settings.yoloConfidenceThreshold}
                   onChange={e => handleChange('yoloConfidenceThreshold', parseFloat(e.target.value))}
                 />
-                <span className="value-display">{(localSettings.yoloConfidenceThreshold * 100).toFixed(0)}%</span>
+                <span className="value-display">{(settings.yoloConfidenceThreshold * 100).toFixed(0)}%</span>
               </div>
               <p className="setting-hint">
                 Higher threshold = fewer but more confident detections. Lower = more detections but possible false positives.
@@ -447,7 +558,7 @@ export function DetectionSettingsDialog({
                 <label>
                   <input
                     type="checkbox"
-                    checked={localSettings.yoloUseTiledInference}
+                    checked={settings.yoloUseTiledInference}
                     onChange={e => handleChange('yoloUseTiledInference', e.target.checked)}
                   />
                   Use Tiled Inference (for large images)
@@ -458,13 +569,13 @@ export function DetectionSettingsDialog({
               </p>
 
               {/* Tiled Inference Settings */}
-              {localSettings.yoloUseTiledInference && (
+              {settings.yoloUseTiledInference && (
                 <>
                   <div className="settings-row">
                     <label>Tile Size (px)</label>
                     <input
                       type="number"
-                      value={localSettings.yoloTileSize}
+                      value={settings.yoloTileSize}
                       onChange={e => handleChange('yoloTileSize', parseInt(e.target.value) || 1024)}
                       min={256}
                       max={2048}
@@ -476,7 +587,7 @@ export function DetectionSettingsDialog({
                     <label>Tile Overlap (px)</label>
                     <input
                       type="number"
-                      value={localSettings.yoloTileOverlap}
+                      value={settings.yoloTileOverlap}
                       onChange={e => handleChange('yoloTileOverlap', parseInt(e.target.value) || 128)}
                       min={0}
                       max={512}
@@ -491,10 +602,10 @@ export function DetectionSettingsDialog({
                       min="0.1"
                       max="0.9"
                       step="0.05"
-                      value={localSettings.yoloNmsThreshold}
+                      value={settings.yoloNmsThreshold}
                       onChange={e => handleChange('yoloNmsThreshold', parseFloat(e.target.value))}
                     />
-                    <span className="value-display">{(localSettings.yoloNmsThreshold * 100).toFixed(0)}%</span>
+                    <span className="value-display">{(settings.yoloNmsThreshold * 100).toFixed(0)}%</span>
                   </div>
                   <p className="setting-hint">
                     IoU threshold for merging detections at tile boundaries. Lower = more aggressive merging.
@@ -505,20 +616,20 @@ export function DetectionSettingsDialog({
                     <label>
                       <input
                         type="checkbox"
-                        checked={localSettings.yoloAutoScaleMode === 'auto'}
+                        checked={settings.yoloAutoScaleMode === 'auto'}
                         onChange={e => handleChange('yoloAutoScaleMode', e.target.checked ? 'auto' : 'none')}
                       />
                       Auto-scale (Recommended)
                     </label>
                   </div>
                   <p className="setting-hint">
-                    {localSettings.yoloAutoScaleMode === 'auto'
+                    {settings.yoloAutoScaleMode === 'auto'
                       ? 'Automatically scales based on your annotations (if 3+ exist) or image size. Uses existing follicle sizes as reference.'
                       : 'Manually set the scale factor below.'}
                   </p>
 
                   {/* Manual Scale Factor (only shown when auto is off) */}
-                  {localSettings.yoloAutoScaleMode === 'none' && (
+                  {settings.yoloAutoScaleMode === 'none' && (
                     <div className="settings-row">
                       <label>Scale Factor</label>
                       <input
@@ -526,21 +637,21 @@ export function DetectionSettingsDialog({
                         min="1.0"
                         max="3.0"
                         step="0.1"
-                        value={localSettings.yoloScaleFactor}
+                        value={settings.yoloScaleFactor}
                         onChange={e => handleChange('yoloScaleFactor', parseFloat(e.target.value))}
                       />
-                      <span className="value-display">{localSettings.yoloScaleFactor.toFixed(1)}x</span>
+                      <span className="value-display">{settings.yoloScaleFactor.toFixed(1)}x</span>
                     </div>
                   )}
 
                   {/* Reference sizes (shown when auto is on) */}
-                  {localSettings.yoloAutoScaleMode === 'auto' && (
+                  {settings.yoloAutoScaleMode === 'auto' && (
                     <>
                       <div className="settings-row">
                         <label>Training Annotation Size</label>
                         <input
                           type="number"
-                          value={localSettings.yoloTrainingAnnotationSize}
+                          value={settings.yoloTrainingAnnotationSize}
                           onChange={e => handleChange('yoloTrainingAnnotationSize', parseInt(e.target.value) || 57)}
                           min={10}
                           max={500}
@@ -552,7 +663,7 @@ export function DetectionSettingsDialog({
                         <label>Training Image Size</label>
                         <input
                           type="number"
-                          value={localSettings.yoloTrainingImageSize}
+                          value={settings.yoloTrainingImageSize}
                           onChange={e => handleChange('yoloTrainingImageSize', parseInt(e.target.value) || 12240)}
                           min={1000}
                           max={20000}
@@ -662,14 +773,14 @@ export function DetectionSettingsDialog({
               <h3>Processing Backend</h3>
               <div className="backend-toggle">
                 <button
-                  className={`backend-btn ${!localSettings.forceCPU ? 'active' : ''}`}
+                  className={`backend-btn ${!settings.forceCPU ? 'active' : ''}`}
                   onClick={() => handleChange('forceCPU', false)}
                 >
                   <Zap size={14} />
                   GPU
                 </button>
                 <button
-                  className={`backend-btn ${localSettings.forceCPU ? 'active' : ''}`}
+                  className={`backend-btn ${settings.forceCPU ? 'active' : ''}`}
                   onClick={() => handleChange('forceCPU', true)}
                 >
                   <Cpu size={14} />
@@ -677,7 +788,7 @@ export function DetectionSettingsDialog({
                 </button>
               </div>
               <p className="backend-hint">
-                {localSettings.forceCPU
+                {settings.forceCPU
                   ? 'Using CPU for detection (slower but more compatible)'
                   : 'Using GPU for detection (faster processing)'}
               </p>
@@ -685,7 +796,7 @@ export function DetectionSettingsDialog({
           )}
 
           {/* Blob Detection Settings (shown when Blob method selected) */}
-          {localSettings.detectionMethod === 'blob' && (
+          {settings.detectionMethod === 'blob' && (
             <>
           {/* Basic Size Parameters */}
           <section className="settings-section">
@@ -694,7 +805,7 @@ export function DetectionSettingsDialog({
               <label>Min Width</label>
               <input
                 type="number"
-                value={localSettings.minWidth}
+                value={settings.minWidth}
                 onChange={e => handleChange('minWidth', parseInt(e.target.value) || 0)}
                 min={1}
                 max={1000}
@@ -704,7 +815,7 @@ export function DetectionSettingsDialog({
               <label>Max Width</label>
               <input
                 type="number"
-                value={localSettings.maxWidth}
+                value={settings.maxWidth}
                 onChange={e => handleChange('maxWidth', parseInt(e.target.value) || 0)}
                 min={1}
                 max={5000}
@@ -714,7 +825,7 @@ export function DetectionSettingsDialog({
               <label>Min Height</label>
               <input
                 type="number"
-                value={localSettings.minHeight}
+                value={settings.minHeight}
                 onChange={e => handleChange('minHeight', parseInt(e.target.value) || 0)}
                 min={1}
                 max={1000}
@@ -724,7 +835,7 @@ export function DetectionSettingsDialog({
               <label>Max Height</label>
               <input
                 type="number"
-                value={localSettings.maxHeight}
+                value={settings.maxHeight}
                 onChange={e => handleChange('maxHeight', parseInt(e.target.value) || 0)}
                 min={1}
                 max={5000}
@@ -734,7 +845,7 @@ export function DetectionSettingsDialog({
               <label>
                 <input
                   type="checkbox"
-                  checked={localSettings.darkBlobs}
+                  checked={settings.darkBlobs}
                   onChange={e => handleChange('darkBlobs', e.target.checked)}
                 />
                 Dark Blobs (detect dark regions on light background)
@@ -748,7 +859,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useGaussianBlur}
+                  checked={settings.useGaussianBlur}
                   onChange={e => handleChange('useGaussianBlur', e.target.checked)}
                 />
                 Gaussian Blur
@@ -757,11 +868,11 @@ export function DetectionSettingsDialog({
             <p className="section-description">
               Smooths the image to reduce noise before detection. Helps avoid false positives from image artifacts.
             </p>
-            {localSettings.useGaussianBlur && (
+            {settings.useGaussianBlur && (
               <div className="settings-row">
                 <label>Kernel Size</label>
                 <select
-                  value={localSettings.gaussianKernelSize}
+                  value={settings.gaussianKernelSize}
                   onChange={e => handleChange('gaussianKernelSize', parseInt(e.target.value))}
                 >
                   <option value={3}>3x3 (light blur)</option>
@@ -778,7 +889,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useMorphOpen}
+                  checked={settings.useMorphOpen}
                   onChange={e => handleChange('useMorphOpen', e.target.checked)}
                 />
                 Morphological Opening
@@ -787,11 +898,11 @@ export function DetectionSettingsDialog({
             <p className="section-description">
               Separates touching objects by eroding then dilating. Essential for splitting merged detections.
             </p>
-            {localSettings.useMorphOpen && (
+            {settings.useMorphOpen && (
               <div className="settings-row">
                 <label>Kernel Size</label>
                 <select
-                  value={localSettings.morphKernelSize}
+                  value={settings.morphKernelSize}
                   onChange={e => handleChange('morphKernelSize', parseInt(e.target.value))}
                 >
                   <option value={3}>3x3 (recommended)</option>
@@ -808,7 +919,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useCircularityFilter}
+                  checked={settings.useCircularityFilter}
                   onChange={e => handleChange('useCircularityFilter', e.target.checked)}
                 />
                 Circularity Filter
@@ -818,12 +929,12 @@ export function DetectionSettingsDialog({
               Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
               <strong> Disable for hair follicles</strong> (they are elongated).
             </p>
-            {localSettings.useCircularityFilter && (
+            {settings.useCircularityFilter && (
               <div className="settings-row">
                 <label>Min Circularity</label>
                 <input
                   type="number"
-                  value={localSettings.minCircularity}
+                  value={settings.minCircularity}
                   onChange={e => handleChange('minCircularity', parseFloat(e.target.value) || 0)}
                   min={0}
                   max={1}
@@ -840,7 +951,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useInertiaFilter}
+                  checked={settings.useInertiaFilter}
                   onChange={e => handleChange('useInertiaFilter', e.target.checked)}
                 />
                 Inertia Filter
@@ -850,13 +961,13 @@ export function DetectionSettingsDialog({
               Controls allowed elongation of detected shapes. Low min ratio allows elongated shapes like
               <strong> hair follicles</strong>. High ratio requires more circular shapes.
             </p>
-            {localSettings.useInertiaFilter && (
+            {settings.useInertiaFilter && (
               <>
                 <div className="settings-row">
                   <label>Min Inertia Ratio</label>
                   <input
                     type="number"
-                    value={localSettings.minInertiaRatio}
+                    value={settings.minInertiaRatio}
                     onChange={e => handleChange('minInertiaRatio', parseFloat(e.target.value) || 0)}
                     min={0}
                     max={1}
@@ -868,7 +979,7 @@ export function DetectionSettingsDialog({
                   <label>Max Inertia Ratio</label>
                   <input
                     type="number"
-                    value={localSettings.maxInertiaRatio}
+                    value={settings.maxInertiaRatio}
                     onChange={e => handleChange('maxInertiaRatio', parseFloat(e.target.value) || 1)}
                     min={0}
                     max={1}
@@ -886,7 +997,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useConvexityFilter}
+                  checked={settings.useConvexityFilter}
                   onChange={e => handleChange('useConvexityFilter', e.target.checked)}
                 />
                 Convexity Filter
@@ -895,12 +1006,12 @@ export function DetectionSettingsDialog({
             <p className="section-description">
               Filters by how convex (non-concave) the detected shape is. High values reject shapes with indentations.
             </p>
-            {localSettings.useConvexityFilter && (
+            {settings.useConvexityFilter && (
               <div className="settings-row">
                 <label>Min Convexity</label>
                 <input
                   type="number"
-                  value={localSettings.minConvexity}
+                  value={settings.minConvexity}
                   onChange={e => handleChange('minConvexity', parseFloat(e.target.value) || 0)}
                   min={0}
                   max={1}
@@ -917,7 +1028,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useCLAHE}
+                  checked={settings.useCLAHE}
                   onChange={e => handleChange('useCLAHE', e.target.checked)}
                 />
                 CLAHE Preprocessing
@@ -927,13 +1038,13 @@ export function DetectionSettingsDialog({
               Contrast Limited Adaptive Histogram Equalization improves detection in
               images with uneven lighting or low contrast.
             </p>
-            {localSettings.useCLAHE && (
+            {settings.useCLAHE && (
               <>
                 <div className="settings-row">
                   <label>Clip Limit</label>
                   <input
                     type="number"
-                    value={localSettings.claheClipLimit}
+                    value={settings.claheClipLimit}
                     onChange={e => handleChange('claheClipLimit', parseFloat(e.target.value) || 1)}
                     min={1}
                     max={10}
@@ -945,7 +1056,7 @@ export function DetectionSettingsDialog({
                   <label>Tile Size</label>
                   <input
                     type="number"
-                    value={localSettings.claheTileSize}
+                    value={settings.claheTileSize}
                     onChange={e => handleChange('claheTileSize', parseInt(e.target.value) || 4)}
                     min={2}
                     max={16}
@@ -962,7 +1073,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useSAHI}
+                  checked={settings.useSAHI}
                   onChange={e => handleChange('useSAHI', e.target.checked)}
                 />
                 SAHI Tiling
@@ -972,13 +1083,13 @@ export function DetectionSettingsDialog({
               Sliced Aided Hyper Inference processes large images in overlapping tiles
               for better detection of small objects.
             </p>
-            {localSettings.useSAHI && (
+            {settings.useSAHI && (
               <>
                 <div className="settings-row">
                   <label>Tile Size (px)</label>
                   <input
                     type="number"
-                    value={localSettings.tileSize}
+                    value={settings.tileSize}
                     onChange={e => handleChange('tileSize', parseInt(e.target.value) || 256)}
                     min={128}
                     max={2048}
@@ -990,7 +1101,7 @@ export function DetectionSettingsDialog({
                   <label>Overlap</label>
                   <input
                     type="number"
-                    value={localSettings.tileOverlap}
+                    value={settings.tileOverlap}
                     onChange={e => handleChange('tileOverlap', parseFloat(e.target.value) || 0.1)}
                     min={0}
                     max={0.5}
@@ -1008,7 +1119,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useSoftNMS}
+                  checked={settings.useSoftNMS}
                   onChange={e => handleChange('useSoftNMS', e.target.checked)}
                 />
                 Soft-NMS (Non-Maximum Suppression)
@@ -1017,13 +1128,13 @@ export function DetectionSettingsDialog({
             <p className="section-description">
               Reduces overlapping detections using soft suppression with Gaussian decay.
             </p>
-            {localSettings.useSoftNMS && (
+            {settings.useSoftNMS && (
               <>
                 <div className="settings-row">
                   <label>Sigma</label>
                   <input
                     type="number"
-                    value={localSettings.softNMSSigma}
+                    value={settings.softNMSSigma}
                     onChange={e => handleChange('softNMSSigma', parseFloat(e.target.value) || 0.3)}
                     min={0.1}
                     max={2}
@@ -1035,7 +1146,7 @@ export function DetectionSettingsDialog({
                   <label>Threshold</label>
                   <input
                     type="number"
-                    value={localSettings.softNMSThreshold}
+                    value={settings.softNMSThreshold}
                     onChange={e => handleChange('softNMSThreshold', parseFloat(e.target.value) || 0.05)}
                     min={0.01}
                     max={0.5}
@@ -1055,7 +1166,7 @@ export function DetectionSettingsDialog({
               <label className="section-toggle">
                 <input
                   type="checkbox"
-                  checked={localSettings.useKeypointPrediction}
+                  checked={settings.useKeypointPrediction}
                   onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
                   disabled={!keypointModelsAvailable}
                 />
@@ -1069,7 +1180,7 @@ export function DetectionSettingsDialog({
                 <span className="warning-text"> No trained models available. Train a model first using the YOLO Training dialog.</span>
               )}
             </p>
-            {localSettings.useKeypointPrediction && keypointModelsAvailable && loadedKeypointModel && (
+            {settings.useKeypointPrediction && keypointModelsAvailable && loadedKeypointModel && (
               <div className="keypoint-model-info">
                 <span className="model-name">Using: {loadedKeypointModel.name}</span>
                 <span className="model-meta">
@@ -1084,14 +1195,7 @@ export function DetectionSettingsDialog({
           <button className="button-secondary" onClick={handleReset}>
             Reset to Defaults
           </button>
-          <div className="footer-actions">
-            <button className="button-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-            <button className="button-primary" onClick={handleSave}>
-              Save Settings
-            </button>
-          </div>
+          <span className="auto-save-hint">Changes are saved automatically</span>
         </div>
       </div>
     </div>

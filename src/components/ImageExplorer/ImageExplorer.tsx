@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore } from '../../store/follicleStore';
+import { useSettingsStore } from '../../store/settingsStore';
 import { ProjectImage } from '../../types';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Settings } from 'lucide-react';
 
 // Generate thumbnail using OffscreenCanvas
 async function generateThumbnail(imageBitmap: ImageBitmap, maxSize: number = 48): Promise<string> {
@@ -29,11 +30,12 @@ interface ImageItemProps {
   image: ProjectImage;
   isActive: boolean;
   annotationCount: number;
+  hasCustomSettings: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }
 
-const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, onSelect, onRemove }) => {
+const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, hasCustomSettings, onSelect, onRemove }) => {
   const [thumbnail, setThumbnail] = useState<string>('');
   const [isHovered, setIsHovered] = useState(false);
 
@@ -73,6 +75,11 @@ const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount,
       <div className="image-info">
         <span className="image-name" title={image.fileName}>
           {truncateFileName(image.fileName)}
+          {hasCustomSettings && (
+            <span className="custom-settings-indicator" title="Has custom detection settings">
+              <Settings size={10} />
+            </span>
+          )}
         </span>
         <span className="annotation-count">
           {annotationCount} annotation{annotationCount !== 1 ? 's' : ''}
@@ -104,6 +111,8 @@ export const ImageExplorer: React.FC = () => {
 
   const follicles = useFollicleStore(state => state.follicles);
   const deleteFolliclesForImage = useFollicleStore(state => state.deleteFolliclesForImage);
+
+  const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
 
   // State for delete confirmation dialog
   const [deleteConfirm, setDeleteConfirm] = useState<{
@@ -198,6 +207,7 @@ export const ImageExplorer: React.FC = () => {
                 image={image}
                 isActive={imageId === activeImageId}
                 annotationCount={getAnnotationCount(imageId)}
+                hasCustomSettings={imageSettingsOverrides.has(imageId)}
                 onSelect={() => setActiveImage(imageId)}
                 onRemove={() => handleRemoveImage(imageId)}
               />

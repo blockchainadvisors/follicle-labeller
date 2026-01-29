@@ -3,12 +3,22 @@ import type { ImageId, DetectionSettingsExport } from '../types';
 import { DEFAULT_DETECTION_SETTINGS } from '../components/DetectionSettingsDialog/DetectionSettingsDialog';
 import type { DetectionSettings } from '../components/DetectionSettingsDialog/DetectionSettingsDialog';
 
+// Information about a missing model
+export interface MissingModelInfo {
+  modelId: string;
+  modelName: string | null;
+  modelSource: 'pretrained' | 'custom';
+}
+
 interface SettingsState {
   // Global settings (project default)
   globalDetectionSettings: DetectionSettings;
 
   // Per-image overrides (sparse map - only stores images with custom settings)
   imageSettingsOverrides: Map<ImageId, Partial<DetectionSettings>>;
+
+  // Missing model tracking - set when a project references a model that doesn't exist
+  missingModelInfo: MissingModelInfo | null;
 
   // Actions
   setGlobalDetectionSettings: (settings: DetectionSettings) => void;
@@ -22,6 +32,10 @@ interface SettingsState {
     imageOverrides?: Map<string, Partial<DetectionSettingsExport>>
   ) => void;
 
+  // Model validation (called after models list is loaded)
+  validateModelAvailability: (availableModelIds: string[]) => void;
+  clearMissingModelWarning: () => void;
+
   // Export helpers
   getGlobalSettingsForExport: () => DetectionSettingsExport;
   getImageOverridesForExport: () => Map<string, Partial<DetectionSettingsExport>>;
@@ -33,6 +47,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   globalDetectionSettings: { ...DEFAULT_DETECTION_SETTINGS },
   imageSettingsOverrides: new Map(),
+  missingModelInfo: null,
 
   setGlobalDetectionSettings: (settings) => {
     set({ globalDetectionSettings: settings });
@@ -65,6 +80,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   loadFromProject: (globalSettings, imageOverrides) => {
     // Merge with defaults for backward compatibility
     // Old files without settings will use all defaults
+    // New fields (yoloModelName, yoloModelSource) will get defaults if missing
     const merged: DetectionSettings = globalSettings
       ? { ...DEFAULT_DETECTION_SETTINGS, ...globalSettings }
       : { ...DEFAULT_DETECTION_SETTINGS };
@@ -77,10 +93,54 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       }
     }
 
+    // Check if we have a custom model ID - we'll validate availability later
+    // when the Toolbar component loads the models list
+    let missingInfo: MissingModelInfo | null = null;
+    if (merged.yoloModelId && merged.yoloModelSource === 'custom') {
+      // Store potential missing model info - will be cleared if model is found
+      missingInfo = {
+        modelId: merged.yoloModelId,
+        modelName: merged.yoloModelName,
+        modelSource: merged.yoloModelSource,
+      };
+    }
+
     set({
       globalDetectionSettings: merged,
       imageSettingsOverrides: overridesMap,
+      missingModelInfo: missingInfo,
     });
+  },
+
+  validateModelAvailability: (availableModelIds) => {
+    const state = get();
+    const { globalDetectionSettings } = state;
+
+    // If there's a custom model referenced, check if it exists
+    if (globalDetectionSettings.yoloModelId && globalDetectionSettings.yoloModelSource === 'custom') {
+      const modelExists = availableModelIds.includes(globalDetectionSettings.yoloModelId);
+
+      if (modelExists) {
+        // Model found, clear any missing warning
+        set({ missingModelInfo: null });
+      } else {
+        // Model not found, set missing info
+        set({
+          missingModelInfo: {
+            modelId: globalDetectionSettings.yoloModelId,
+            modelName: globalDetectionSettings.yoloModelName,
+            modelSource: globalDetectionSettings.yoloModelSource,
+          },
+        });
+      }
+    } else {
+      // No custom model, clear missing info
+      set({ missingModelInfo: null });
+    }
+  },
+
+  clearMissingModelWarning: () => {
+    set({ missingModelInfo: null });
   },
 
   getGlobalSettingsForExport: () => {
@@ -103,6 +163,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({
       globalDetectionSettings: { ...DEFAULT_DETECTION_SETTINGS },
       imageSettingsOverrides: new Map(),
+      missingModelInfo: null,
     });
   },
 }));

@@ -262,6 +262,8 @@ export interface DetectionSettingsExport {
 
   // YOLO Detection settings
   yoloModelId: string | null;
+  yoloModelName: string | null;  // Human-readable model name for cross-machine display
+  yoloModelSource: 'pretrained' | 'custom';  // Model type for validation
   yoloConfidenceThreshold: number;
   yoloUseTiledInference: boolean;
   yoloTileSize: number;
@@ -962,6 +964,10 @@ export interface DetectionSettings {
   detectionMethod: DetectionMethod;
   /** Selected YOLO model ID (null = use default/pre-trained) */
   yoloModelId: string | null;
+  /** Human-readable model name for display */
+  yoloModelName: string | null;
+  /** Model type: 'pretrained' or 'custom' */
+  yoloModelSource: 'pretrained' | 'custom';
   /** YOLO confidence threshold (0-1) */
   yoloConfidenceThreshold: number;
   // Blob detection settings
@@ -988,6 +994,8 @@ export interface DetectionSettings {
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   detectionMethod: 'blob',
   yoloModelId: null,
+  yoloModelName: null,
+  yoloModelSource: 'pretrained',
   yoloConfidenceThreshold: 0.5,
   minWidth: 10,
   maxWidth: 200,

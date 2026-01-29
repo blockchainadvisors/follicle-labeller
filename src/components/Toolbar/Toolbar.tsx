@@ -183,16 +183,23 @@ export const Toolbar: React.FC = () => {
   const lastSessionImageId = useRef<string | null>(null);
 
   // Settings store for detection settings (persisted with project)
+  const globalDetectionSettings = useSettingsStore(state => state.globalDetectionSettings);
   const setGlobalDetectionSettings = useSettingsStore(state => state.setGlobalDetectionSettings);
+  const setImageSettingsOverride = useSettingsStore(state => state.setImageSettingsOverride);
+  const clearImageSettingsOverride = useSettingsStore(state => state.clearImageSettingsOverride);
+  const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
   const getEffectiveSettings = useSettingsStore(state => state.getEffectiveSettings);
   const loadSettingsFromProject = useSettingsStore(state => state.loadFromProject);
   const clearSettings = useSettingsStore(state => state.clearAll);
   const getGlobalSettingsForExport = useSettingsStore(state => state.getGlobalSettingsForExport);
   const getImageOverridesForExport = useSettingsStore(state => state.getImageOverridesForExport);
+  const missingModelInfo = useSettingsStore(state => state.missingModelInfo);
+  const validateModelAvailability = useSettingsStore(state => state.validateModelAvailability);
+  const clearMissingModelWarning = useSettingsStore(state => state.clearMissingModelWarning);
 
   // Use effective settings for active image (supports per-image overrides)
   const detectionSettings = getEffectiveSettings(activeImageId);
-  const setDetectionSettings = setGlobalDetectionSettings;
+  const hasImageOverride = activeImageId ? imageSettingsOverrides.has(activeImageId) : false;
 
   // State for detection settings dialog visibility
   const [showDetectionSettings, setShowDetectionSettings] = useState(false);
@@ -614,6 +621,18 @@ export const Toolbar: React.FC = () => {
       // Load detection settings (uses defaults for old files without settings)
       loadSettingsFromProject(globalSettings, imageSettingsMap);
 
+      // Validate model availability after loading settings
+      // This checks if the saved YOLO model exists on this machine
+      try {
+        const models = await yoloDetectionService.listModels();
+        const modelIds = models.map(m => m.id);
+        validateModelAvailability(modelIds);
+      } catch (error) {
+        console.warn('Failed to validate YOLO models:', error);
+        // If we can't list models, we can't validate - clear any warning
+        clearMissingModelWarning();
+      }
+
       // Add all loaded images
       for (const image of loadedImages) {
         addImage(image);
@@ -634,6 +653,8 @@ export const Toolbar: React.FC = () => {
       clearAll,
       clearSettings,
       loadSettingsFromProject,
+      validateModelAvailability,
+      clearMissingModelWarning,
       addImage,
       importFollicles,
       setCurrentProjectPath,
@@ -1942,8 +1963,29 @@ export const Toolbar: React.FC = () => {
           }
         />
         <IconButton
-          icon={<Settings size={18} />}
-          tooltip="Detection Settings"
+          icon={
+            <span style={{ position: 'relative' }}>
+              <Settings size={18} />
+              {missingModelInfo && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: '#f59e0b',
+                  }}
+                  title="Saved model not found"
+                />
+              )}
+            </span>
+          }
+          tooltip={missingModelInfo
+            ? `Detection Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+            : "Detection Settings"
+          }
           onClick={() => setShowDetectionSettings(true)}
           disabled={!imageLoaded}
         />
@@ -2107,15 +2149,29 @@ export const Toolbar: React.FC = () => {
       {showDetectionSettings && (
         <DetectionSettingsDialog
           settings={detectionSettings}
-          onSave={(settings) => {
-            setDetectionSettings(settings);
-            setShowDetectionSettings(false);
-          }}
-          onCancel={() => setShowDetectionSettings(false)}
+          onClose={() => setShowDetectionSettings(false)}
           blobServerConnected={blobServerConnected}
           onServerRestarted={handleServerRestarted}
           installState={gpuInstallState}
           onInstallStateChange={setGpuInstallState}
+          // Live settings updates (changes apply immediately and mark file dirty)
+          onSettingsChange={(newSettings) => {
+            setGlobalDetectionSettings(newSettings);
+            setDirty(true);
+          }}
+          // Per-image settings support
+          activeImageId={activeImageId}
+          activeImageName={activeImage?.fileName}
+          hasImageOverride={hasImageOverride}
+          globalSettings={globalDetectionSettings}
+          onImageSettingsChange={(imageId, newSettings) => {
+            setImageSettingsOverride(imageId, newSettings);
+            setDirty(true);
+          }}
+          onClearImageOverride={(imageId) => {
+            clearImageSettingsOverride(imageId);
+            setDirty(true);
+          }}
         />
       )}
 
