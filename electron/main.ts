@@ -1954,6 +1954,236 @@ ipcMain.handle(
 );
 
 // ============================================
+// Model Export/Import API
+// ============================================
+
+/**
+ * Get the models directory path
+ */
+function getModelsDir(): string {
+  const os = require("os");
+  return path.join(os.homedir(), ".follicle-labeller", "models", "detection");
+}
+
+// Export model as portable package (ZIP with model.pt + config.json)
+ipcMain.handle(
+  "model:exportPackage",
+  async (
+    _,
+    modelId: string,
+    modelPath: string,
+    config: Record<string, unknown>
+  ) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return { success: false, error: "No focused window" };
+
+    try {
+      // Get model name from config for default filename
+      const modelName = (config.modelName as string) || modelId;
+      const safeName = modelName.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const defaultFileName = `${safeName}_model.zip`;
+
+      // Show save dialog
+      const result = await dialog.showSaveDialog(window, {
+        defaultPath: defaultFileName,
+        filters: [{ name: "Model Package", extensions: ["zip"] }],
+        title: "Export Model Package",
+      });
+
+      if (result.canceled || !result.filePath) {
+        return { success: false, canceled: true };
+      }
+
+      // Check if model file exists
+      if (!fs.existsSync(modelPath)) {
+        return { success: false, error: "Model file not found" };
+      }
+
+      // Create ZIP package
+      const zip = new JSZip();
+
+      // Add model.pt
+      const modelData = fs.readFileSync(modelPath);
+      zip.file("model.pt", modelData);
+
+      // Check for .engine file (TensorRT)
+      const enginePath = modelPath.replace(/\.pt$/i, ".engine");
+      if (fs.existsSync(enginePath)) {
+        const engineData = fs.readFileSync(enginePath);
+        zip.file("model.engine", engineData);
+        // Update config to indicate engine is included
+        config.files = { model: "model.pt", engine: "model.engine" };
+      } else {
+        config.files = { model: "model.pt" };
+      }
+
+      // Add config.json
+      const configJson = JSON.stringify(config, null, 2);
+      zip.file("config.json", configJson);
+
+      // Generate and save the archive
+      const content = await zip.generateAsync({
+        type: "nodebuffer",
+        compression: "DEFLATE",
+        compressionOptions: { level: 6 },
+      });
+      fs.writeFileSync(result.filePath, content);
+
+      console.log(`[Model Export] Exported model to ${result.filePath}`);
+
+      return { success: true, filePath: result.filePath };
+    } catch (error) {
+      console.error("[Model Export] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Export failed",
+      };
+    }
+  }
+);
+
+// Preview model package before import (read config.json from ZIP)
+ipcMain.handle("model:previewPackage", async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return { valid: false, error: "No focused window" };
+
+  try {
+    // Show open dialog
+    const result = await dialog.showOpenDialog(window, {
+      filters: [{ name: "Model Package", extensions: ["zip"] }],
+      title: "Import Model Package",
+      properties: ["openFile"],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { valid: false, canceled: true };
+    }
+
+    const filePath = result.filePaths[0];
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
+
+    // Check for config.json
+    const configFile = zip.file("config.json");
+    if (!configFile) {
+      return { valid: false, error: "Invalid package: missing config.json" };
+    }
+
+    // Parse config
+    const configJson = await configFile.async("string");
+    const config = JSON.parse(configJson);
+
+    // Validate required fields
+    if (!config.version || !config.modelName || !config.modelId) {
+      return { valid: false, error: "Invalid package: missing required fields" };
+    }
+
+    // Check for model.pt
+    const modelFile = zip.file("model.pt");
+    if (!modelFile) {
+      return { valid: false, error: "Invalid package: missing model.pt" };
+    }
+
+    // Check for engine file
+    const engineFile = zip.file("model.engine");
+
+    return {
+      valid: true,
+      filePath,
+      config,
+      hasEngine: !!engineFile,
+    };
+  } catch (error) {
+    console.error("[Model Preview] Error:", error);
+    return {
+      valid: false,
+      error: error instanceof Error ? error.message : "Failed to read package",
+    };
+  }
+});
+
+// Import model package
+ipcMain.handle(
+  "model:importPackage",
+  async (_, filePath: string, newModelName?: string) => {
+    try {
+      const crypto = require("crypto");
+
+      // Read the ZIP file
+      const data = fs.readFileSync(filePath);
+      const zip = await JSZip.loadAsync(data);
+
+      // Parse config
+      const configFile = zip.file("config.json");
+      if (!configFile) {
+        return { success: false, error: "Invalid package: missing config.json" };
+      }
+      const configJson = await configFile.async("string");
+      const config = JSON.parse(configJson);
+
+      // Generate new unique ID for imported model
+      const newModelId = crypto.randomBytes(8).toString("hex");
+      const modelName = newModelName || config.modelName || "Imported Model";
+      const safeName = modelName.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+      // Create model directory
+      const modelsDir = getModelsDir();
+      const modelDir = path.join(modelsDir, `${safeName}_${newModelId}`);
+      fs.mkdirSync(modelDir, { recursive: true });
+
+      // Extract model.pt
+      const modelFile = zip.file("model.pt");
+      if (!modelFile) {
+        return { success: false, error: "Invalid package: missing model.pt" };
+      }
+      const modelData = await modelFile.async("nodebuffer");
+      const modelOutputPath = path.join(modelDir, "best.pt");
+      fs.writeFileSync(modelOutputPath, modelData);
+
+      // Extract engine file if present (but note: .engine files are GPU-specific)
+      const engineFile = zip.file("model.engine");
+      if (engineFile) {
+        const engineData = await engineFile.async("nodebuffer");
+        const engineOutputPath = path.join(modelDir, "best.engine");
+        fs.writeFileSync(engineOutputPath, engineData);
+        console.log("[Model Import] Note: TensorRT .engine file imported but may not work on different GPU");
+      }
+
+      // Create model metadata file for the model manager
+      const metadata = {
+        id: newModelId,
+        name: modelName,
+        path: modelOutputPath,
+        createdAt: new Date().toISOString(),
+        epochsTrained: config.training?.epochs || 0,
+        imgSize: config.training?.imgSize || 640,
+        metrics: config.metrics || {},
+        importedFrom: path.basename(filePath),
+        originalModelId: config.modelId,
+      };
+
+      const metadataPath = path.join(modelDir, "metadata.json");
+      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+
+      console.log(`[Model Import] Imported model to ${modelDir}`);
+
+      return {
+        success: true,
+        modelId: newModelId,
+        modelPath: modelOutputPath,
+        modelName,
+      };
+    } catch (error) {
+      console.error("[Model Import] Error:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Import failed",
+      };
+    }
+  }
+);
+
+// ============================================
 // File Handling
 // ============================================
 

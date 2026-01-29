@@ -474,6 +474,32 @@ declare global {
         install: () => Promise<{ success: boolean; error?: string }>;
         onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
       };
+      // Model Export/Import API
+      model: {
+        exportPackage: (
+          modelId: string,
+          modelPath: string,
+          config: Record<string, unknown>
+        ) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+        previewPackage: () => Promise<{
+          valid: boolean;
+          filePath?: string;
+          config?: Record<string, unknown>;
+          hasEngine?: boolean;
+          canceled?: boolean;
+          error?: string;
+        }>;
+        importPackage: (
+          filePath: string,
+          newModelName?: string
+        ) => Promise<{
+          success: boolean;
+          modelId?: string;
+          modelPath?: string;
+          modelName?: string;
+          error?: string;
+        }>;
+      };
       // YOLO Keypoint Training API
       yoloKeypoint: {
         getStatus: () => Promise<YoloKeypointStatus>;
@@ -986,6 +1012,97 @@ export interface TensorRTStatus {
 
 /** Inference backend for YOLO detection */
 export type YoloInferenceBackend = 'pytorch' | 'tensorrt';
+
+// ============================================
+// COCO JSON Format Types
+// ============================================
+
+/**
+ * COCO format info section
+ */
+export interface COCOInfo {
+  description: string;
+  version: string;
+  year?: number;
+  contributor?: string;
+  date_created?: string;
+}
+
+/**
+ * COCO format image entry
+ */
+export interface COCOImage {
+  id: number;
+  file_name: string;
+  width: number;
+  height: number;
+  date_captured?: string;
+}
+
+/**
+ * COCO format annotation entry
+ */
+export interface COCOAnnotation {
+  id: number;
+  image_id: number;
+  category_id: number;
+  /** Bounding box in [x, y, width, height] format (top-left origin) */
+  bbox: [number, number, number, number];
+  /** Area of the bounding box */
+  area: number;
+  /** 0 = single object, 1 = crowd */
+  iscrowd: 0 | 1;
+  /** Optional segmentation (not used for bounding box detection) */
+  segmentation?: number[][] | { counts: number[]; size: [number, number] };
+  /**
+   * Optional keypoints in [x1, y1, v1, x2, y2, v2, ...] format
+   * v = 0: not labeled, 1: labeled but not visible, 2: labeled and visible
+   */
+  keypoints?: number[];
+  /** Number of keypoints with v > 0 */
+  num_keypoints?: number;
+}
+
+/**
+ * COCO format category entry
+ */
+export interface COCOCategory {
+  id: number;
+  name: string;
+  supercategory?: string;
+  /** Keypoint names for pose estimation */
+  keypoints?: string[];
+  /** Skeleton connections for visualization */
+  skeleton?: [number, number][];
+}
+
+/**
+ * Complete COCO dataset format
+ */
+export interface COCODataset {
+  info: COCOInfo;
+  images: COCOImage[];
+  annotations: COCOAnnotation[];
+  categories: COCOCategory[];
+  /** Optional licenses */
+  licenses?: Array<{
+    id: number;
+    name: string;
+    url: string;
+  }>;
+}
+
+/**
+ * Options for COCO export
+ */
+export interface COCOExportOptions {
+  /** Include keypoints (origin/direction) in export */
+  includeKeypoints: boolean;
+  /** Export images alongside JSON (creates ZIP) */
+  exportImages: boolean;
+  /** Category name for annotations (default: "follicle") */
+  categoryName?: string;
+}
 
 /**
  * Extended detection settings including YOLO configuration.

@@ -39,6 +39,8 @@ import {
   exportSelectedAnnotationsJSON,
   importAnnotationsFromJSONWithDuplicateCheck,
 } from "../../utils/export-utils";
+import { exportToCOCO, getCOCOExportStats } from "../../utils/coco-export";
+import { isCOCOFormat, importCOCOWithStats } from "../../utils/coco-import";
 import {
   extractAllFolliclesToZip,
   extractSelectedFolliclesToZip,
@@ -885,7 +887,7 @@ export const Toolbar: React.FC = () => {
     }
   }, [selectedIds, follicles, activeImage]);
 
-  // Import annotations from JSON - opens file dialog and shows import dialog
+  // Import annotations from JSON (supports both internal format and COCO) - opens file dialog and shows import dialog
   const handleImportAnnotations = useCallback(async () => {
     if (!activeImageId || !activeImage) {
       alert("Please load an image first before importing annotations.");
@@ -902,16 +904,49 @@ export const Toolbar: React.FC = () => {
       if (!result) return;
 
       const text = new TextDecoder().decode(result.data);
-      const analysis = importAnnotationsFromJSONWithDuplicateCheck(text, activeImageId, follicles);
 
-      if (analysis.totalImported === 0) {
-        alert("No annotations found in the file.");
-        return;
+      // Detect format and parse accordingly
+      if (isCOCOFormat(text)) {
+        // Parse as COCO format
+        const cocoResult = importCOCOWithStats(text, {
+          targetImageId: activeImageId,
+          importKeypoints: true,
+        });
+
+        if (cocoResult.totalImported === 0) {
+          alert("No annotations found in the COCO file.");
+          return;
+        }
+
+        // Convert to ImportAnalysis format (COCO imports are all new, no duplicates check for now)
+        const analysis: ImportAnalysis = {
+          newAnnotations: cocoResult.newAnnotations,
+          augmentable: [],
+          alreadyAugmented: [],
+          duplicates: [],
+          totalImported: cocoResult.totalImported,
+        };
+
+        // Show the import dialog
+        setImportAnalysis(analysis);
+        setShowImportDialog(true);
+
+        console.log(
+          `COCO import: ${cocoResult.totalImported} annotations (${cocoResult.stats.withKeypoints} with keypoints)`
+        );
+      } else {
+        // Parse as internal format
+        const analysis = importAnnotationsFromJSONWithDuplicateCheck(text, activeImageId, follicles);
+
+        if (analysis.totalImported === 0) {
+          alert("No annotations found in the file.");
+          return;
+        }
+
+        // Show the import dialog
+        setImportAnalysis(analysis);
+        setShowImportDialog(true);
       }
-
-      // Show the import dialog
-      setImportAnalysis(analysis);
-      setShowImportDialog(true);
     } catch (error) {
       console.error("Failed to import annotations:", error);
       alert(`Failed to import annotations: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -1033,6 +1068,49 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, currentProjectPath]);
 
+  // Export to COCO JSON format
+  const handleExportCOCO = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) {
+      alert("No annotations to export.");
+      return;
+    }
+
+    try {
+      const stats = getCOCOExportStats(images, follicles);
+
+      // Ask about keypoints if any annotations have them
+      let includeKeypoints = true;
+      if (stats.annotationsWithKeypoints > 0) {
+        includeKeypoints = confirm(
+          `${stats.annotationsWithKeypoints} of ${stats.annotationCount} annotations have origin/direction data.\n\nInclude keypoints in COCO export?`
+        );
+      }
+
+      const cocoJson = exportToCOCO(images, follicles, {
+        includeKeypoints,
+        exportImages: false,
+        categoryName: "follicle",
+      });
+
+      // Create blob and download
+      const blob = new Blob([cocoJson], { type: "application/json" });
+      const baseName = currentProjectPath
+        ? currentProjectPath
+            .replace(/\.[^/.]+$/, "")
+            .split(/[/\\]/)
+            .pop()
+        : "annotations";
+      downloadBlob(blob, `${baseName}_coco.json`);
+
+      console.log(
+        `Exported COCO JSON: ${stats.imageCount} images, ${stats.annotationCount} annotations`
+      );
+    } catch (error) {
+      console.error("Failed to export COCO JSON:", error);
+      alert("Failed to export COCO JSON. Please try again.");
+    }
+  }, [images, follicles, currentProjectPath]);
+
   // Handle export menu selection
   const handleExport = useCallback(
     (type: ExportType) => {
@@ -1052,9 +1130,12 @@ export const Toolbar: React.FC = () => {
         case "selected-json":
           handleExportSelectedJSON();
           break;
+        case "coco-json":
+          handleExportCOCO();
+          break;
       }
     },
-    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV, handleExportSelectedJSON],
+    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV, handleExportSelectedJSON, handleExportCOCO],
   );
 
   // Colors for auto-detected annotations (cycles through)

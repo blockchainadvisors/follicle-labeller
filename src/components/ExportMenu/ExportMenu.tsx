@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Download, FileText, Table, Image, ChevronDown, Target, FileJson } from 'lucide-react';
+import { Download, FileText, Table, Image, ChevronDown, Target, FileJson, ChevronRight, Database } from 'lucide-react';
 import './ExportMenu.css';
 
-export type ExportType = 'images' | 'yolo' | 'yolo-keypoint' | 'csv' | 'selected-json';
+export type ExportType = 'images' | 'yolo' | 'yolo-keypoint' | 'csv' | 'selected-json' | 'coco-json';
 
 interface ExportMenuProps {
   onExport: (type: ExportType) => void;
@@ -10,8 +10,22 @@ interface ExportMenuProps {
   hasSelection?: boolean;
 }
 
+interface Submenu {
+  label: string;
+  icon: React.ReactNode;
+  items: {
+    type: ExportType;
+    label: string;
+    description: string;
+    icon: React.ReactNode;
+    disabled?: boolean;
+    disabledReason?: string;
+  }[];
+}
+
 export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [activeSubmenu, setActiveSubmenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu when clicking outside
@@ -19,6 +33,7 @@ export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsOpen(false);
+        setActiveSubmenu(null);
       }
     };
 
@@ -34,7 +49,54 @@ export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps
   const handleExport = (type: ExportType) => {
     onExport(type);
     setIsOpen(false);
+    setActiveSubmenu(null);
   };
+
+  // Define submenus
+  const submenus: Submenu[] = [
+    {
+      label: 'Training Data',
+      icon: <Database size={16} />,
+      items: [
+        {
+          type: 'yolo',
+          label: 'YOLO Detection Dataset',
+          description: 'Images + bounding box labels for training',
+          icon: <FileText size={16} />,
+        },
+        {
+          type: 'yolo-keypoint',
+          label: 'YOLO Keypoint Dataset',
+          description: 'Origin + direction for pose training',
+          icon: <Target size={16} />,
+        },
+        {
+          type: 'coco-json',
+          label: 'COCO JSON',
+          description: 'Standard format with optional keypoints',
+          icon: <FileJson size={16} />,
+        },
+      ],
+    },
+    {
+      label: 'Analysis',
+      icon: <Table size={16} />,
+      items: [
+        {
+          type: 'csv',
+          label: 'CSV Export',
+          description: 'Spreadsheet for data analysis',
+          icon: <Table size={16} />,
+        },
+        {
+          type: 'images',
+          label: 'Follicle Crops',
+          description: hasSelection ? 'Selected or all images as ZIP' : 'All follicle images as ZIP',
+          icon: <Image size={16} />,
+        },
+      ],
+    },
+  ];
 
   return (
     <div className="export-menu" ref={menuRef}>
@@ -52,52 +114,51 @@ export function ExportMenu({ onExport, disabled, hasSelection }: ExportMenuProps
 
       {isOpen && (
         <div className="export-dropdown">
-          <button
-            className="export-option"
-            onClick={() => handleExport('images')}
-          >
-            <Image size={16} />
-            <div className="option-text">
-              <span className="option-label">Follicle Images</span>
-              <span className="option-description">
-                {hasSelection ? 'Selected or all images as ZIP' : 'All follicle images as ZIP'}
-              </span>
-            </div>
-          </button>
+          {/* Submenus */}
+          {submenus.map((submenu) => (
+            <div
+              key={submenu.label}
+              className="export-submenu-container"
+              onMouseEnter={() => setActiveSubmenu(submenu.label)}
+              onMouseLeave={() => setActiveSubmenu(null)}
+            >
+              <button className="export-option submenu-trigger">
+                {submenu.icon}
+                <div className="option-text">
+                  <span className="option-label">{submenu.label}</span>
+                </div>
+                <ChevronRight size={14} className="submenu-arrow" />
+              </button>
 
-          <button
-            className="export-option"
-            onClick={() => handleExport('yolo')}
-          >
-            <FileText size={16} />
-            <div className="option-text">
-              <span className="option-label">YOLO Dataset</span>
-              <span className="option-description">Images + labels for training</span>
+              {activeSubmenu === submenu.label && (
+                <div className="export-submenu">
+                  {submenu.items.map((item) => (
+                    <button
+                      key={item.type}
+                      className={`export-option ${item.disabled ? 'disabled' : ''}`}
+                      onClick={() => !item.disabled && handleExport(item.type)}
+                      disabled={item.disabled}
+                    >
+                      {item.icon}
+                      <div className="option-text">
+                        <span className="option-label">{item.label}</span>
+                        <span className="option-description">
+                          {item.disabled && item.disabledReason
+                            ? item.disabledReason
+                            : item.description}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </button>
+          ))}
 
-          <button
-            className="export-option"
-            onClick={() => handleExport('yolo-keypoint')}
-          >
-            <Target size={16} />
-            <div className="option-text">
-              <span className="option-label">YOLO Keypoint Dataset</span>
-              <span className="option-description">Origin + direction for pose training</span>
-            </div>
-          </button>
+          {/* Divider */}
+          <div className="export-divider" />
 
-          <button
-            className="export-option"
-            onClick={() => handleExport('csv')}
-          >
-            <Table size={16} />
-            <div className="option-text">
-              <span className="option-label">CSV Export</span>
-              <span className="option-description">Spreadsheet for analysis</span>
-            </div>
-          </button>
-
+          {/* Selected Annotations (always at bottom) */}
           <button
             className={`export-option ${!hasSelection ? 'disabled' : ''}`}
             onClick={() => hasSelection && handleExport('selected-json')}

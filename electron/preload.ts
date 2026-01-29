@@ -574,6 +574,39 @@ const electronAPI = {
       ipcRenderer.invoke("yolo-keypoint:writeDatasetToTemp", files),
   },
 
+  // Model Export/Import API
+  model: {
+    // Export model as portable package (ZIP with model.pt + config.json)
+    exportPackage: (
+      modelId: string,
+      modelPath: string,
+      config: Record<string, unknown>
+    ): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke("model:exportPackage", modelId, modelPath, config),
+
+    // Preview model package before import (read config.json from ZIP)
+    previewPackage: (): Promise<{
+      valid: boolean;
+      filePath?: string;
+      config?: Record<string, unknown>;
+      hasEngine?: boolean;
+      canceled?: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke("model:previewPackage"),
+
+    // Import model package
+    importPackage: (
+      filePath: string,
+      newModelName?: string
+    ): Promise<{
+      success: boolean;
+      modelId?: string;
+      modelPath?: string;
+      modelName?: string;
+      error?: string;
+    }> => ipcRenderer.invoke("model:importPackage", filePath, newModelName),
+  },
+
   // YOLO Detection Training API (for follicle bounding box detection)
   yoloDetection: {
     // Get service status

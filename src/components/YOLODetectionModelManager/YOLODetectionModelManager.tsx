@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap } from 'lucide-react';
+import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap, Upload, Package } from 'lucide-react';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
 import { DetectionModelInfo, TensorRTStatus } from '../../types';
+import { createModelPackageConfig, formatMetrics as formatPackageMetrics, ModelPackageConfig } from '../../utils/model-export';
 import './YOLODetectionModelManager.css';
 
 interface YOLODetectionModelManagerProps {
@@ -19,6 +20,13 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
   const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
+  const [exportingPackage, setExportingPackage] = useState<string | null>(null);
+  const [importingPackage, setImportingPackage] = useState(false);
+  const [importPreview, setImportPreview] = useState<{
+    filePath: string;
+    config: ModelPackageConfig;
+    hasEngine: boolean;
+  } | null>(null);
 
   // Load models on mount
   const loadModels = useCallback(async () => {
@@ -159,6 +167,95 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
     }
   }, [loadedModelPath]);
 
+  // Export model as portable package (ZIP)
+  const handleExportPackage = useCallback(async (model: DetectionModelInfo) => {
+    setError(null);
+    setExportingPackage(model.id);
+    try {
+      // Create config for package
+      const config = createModelPackageConfig(model);
+
+      const result = await window.electronAPI.model.exportPackage(
+        model.id,
+        model.path,
+        config as unknown as Record<string, unknown>
+      );
+
+      if (result.canceled) {
+        // User canceled - do nothing
+        return;
+      }
+
+      if (result.success && result.filePath) {
+        alert(`Model exported to:\n${result.filePath}`);
+      } else {
+        setError(result.error || 'Export failed');
+      }
+    } catch (err) {
+      setError('Failed to export model package');
+      console.error('Failed to export model package:', err);
+    } finally {
+      setExportingPackage(null);
+    }
+  }, []);
+
+  // Preview model package before import
+  const handleImportPackagePreview = useCallback(async () => {
+    setError(null);
+    setImportingPackage(true);
+    try {
+      const result = await window.electronAPI.model.previewPackage();
+
+      if (result.canceled) {
+        // User canceled - do nothing
+        return;
+      }
+
+      if (result.valid && result.filePath && result.config) {
+        setImportPreview({
+          filePath: result.filePath,
+          config: result.config as unknown as ModelPackageConfig,
+          hasEngine: result.hasEngine || false,
+        });
+      } else {
+        setError(result.error || 'Invalid model package');
+      }
+    } catch (err) {
+      setError('Failed to read model package');
+      console.error('Failed to read model package:', err);
+    } finally {
+      setImportingPackage(false);
+    }
+  }, []);
+
+  // Confirm and import model package
+  const handleConfirmImport = useCallback(async () => {
+    if (!importPreview) return;
+
+    setError(null);
+    setImportingPackage(true);
+    try {
+      const result = await window.electronAPI.model.importPackage(
+        importPreview.filePath,
+        importPreview.config.modelName
+      );
+
+      if (result.success) {
+        alert(`Model "${result.modelName}" imported successfully!`);
+        setImportPreview(null);
+        // Refresh model list
+        loadModels();
+      } else {
+        setError(result.error || 'Import failed');
+      }
+    } catch (err) {
+      setError('Failed to import model package');
+      console.error('Failed to import model package:', err);
+    } finally {
+      setImportingPackage(false);
+    }
+  }, [importPreview, loadModels]);
+
   // Format date
   const formatDate = (isoDate: string) => {
     try {
@@ -183,6 +280,19 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
         <div className="dialog-header">
           <h2>YOLO Detection Models</h2>
           <div className="header-actions">
+            <button
+              className="import-model-button"
+              onClick={handleImportPackagePreview}
+              disabled={loading || importingPackage}
+              title="Import model package"
+            >
+              {importingPackage ? (
+                <Loader2 size={16} className="animate-spin" />
+              ) : (
+                <Upload size={16} />
+              )}
+              Import Model
+            </button>
             <button className="refresh-button" onClick={loadModels} disabled={loading}>
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -280,6 +390,19 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
                     </button>
 
                     <button
+                      className="action-button export-package"
+                      onClick={() => handleExportPackage(model)}
+                      disabled={exportingPackage === model.id}
+                      title="Export as portable package (ZIP)"
+                    >
+                      {exportingPackage === model.id ? (
+                        <Loader2 size={16} className="animate-spin" />
+                      ) : (
+                        <Package size={16} />
+                      )}
+                    </button>
+
+                    <button
                       className="action-button delete"
                       onClick={() => handleDeleteModel(model)}
                       disabled={deletingModel === model.id}
@@ -304,6 +427,79 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
             Close
           </button>
         </div>
+
+        {/* Import Preview Dialog */}
+        {importPreview && (
+          <div className="import-preview-overlay" onClick={() => setImportPreview(null)}>
+            <div className="import-preview-dialog" onClick={(e) => e.stopPropagation()}>
+              <div className="import-preview-header">
+                <h3>Import Model Package</h3>
+                <button className="close-button" onClick={() => setImportPreview(null)}>
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="import-preview-content">
+                <div className="preview-item">
+                  <span className="preview-label">Model Name:</span>
+                  <span className="preview-value">{importPreview.config.modelName}</span>
+                </div>
+                <div className="preview-item">
+                  <span className="preview-label">Training:</span>
+                  <span className="preview-value">
+                    {importPreview.config.training.epochs} epochs, {importPreview.config.training.imgSize}px
+                  </span>
+                </div>
+                <div className="preview-item">
+                  <span className="preview-label">Metrics:</span>
+                  <span className="preview-value">
+                    {formatPackageMetrics(importPreview.config.metrics)}
+                  </span>
+                </div>
+                <div className="preview-item">
+                  <span className="preview-label">Trained:</span>
+                  <span className="preview-value">
+                    {formatDate(importPreview.config.trainingDate)}
+                  </span>
+                </div>
+                {importPreview.hasEngine && (
+                  <div className="preview-warning">
+                    <Zap size={14} />
+                    <span>
+                      Package includes TensorRT engine (may not work on different GPU)
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div className="import-preview-footer">
+                <button
+                  className="cancel-button"
+                  onClick={() => setImportPreview(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="import-button"
+                  onClick={handleConfirmImport}
+                  disabled={importingPackage}
+                >
+                  {importingPackage ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Importing...
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={16} />
+                      Import Model
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

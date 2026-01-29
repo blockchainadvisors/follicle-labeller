@@ -40,13 +40,13 @@
   top: 100%;
   left: 0;
   margin-top: 4px;
-  min-width: 220px;
+  min-width: 200px;
   background: var(--bg-primary, #ffffff);
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   z-index: 1000;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .export-option {
@@ -91,6 +91,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1;
 }
 
 .option-label {
@@ -102,6 +103,55 @@
 .option-description {
   font-size: var(--text-xs);
   color: var(--text-secondary, #666);
+}
+
+/* Submenu styles */
+.export-submenu-container {
+  position: relative;
+}
+
+.export-option.submenu-trigger {
+  display: flex;
+  align-items: center;
+}
+
+.export-option.submenu-trigger .option-text {
+  flex: 1;
+}
+
+.submenu-arrow {
+  margin-left: auto;
+  color: var(--text-secondary, #666);
+  flex-shrink: 0;
+}
+
+.export-submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  margin-left: 4px;
+  min-width: 240px;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1001;
+  overflow: hidden;
+}
+
+.export-submenu .export-option:first-child {
+  border-top: none;
+}
+
+.export-submenu .export-option:last-child {
+  border-bottom: none;
+}
+
+/* Divider */
+.export-divider {
+  height: 1px;
+  background: var(--border, #e0e0e0);
+  margin: 4px 0;
 }
 
 /* Dark theme support */
@@ -129,4 +179,17 @@
 
 [data-theme="dark"] .export-option:not(:last-child) {
   border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .export-submenu {
+  background: var(--bg-primary, #2d2d2d);
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .export-divider {
+  background: var(--border, #444);
+}
+
+[data-theme="dark"] .submenu-arrow {
+  color: var(--text-secondary, #999);
 }
