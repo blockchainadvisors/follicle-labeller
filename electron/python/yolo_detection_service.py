@@ -523,13 +523,12 @@ class YOLODetectionService:
             # Start training (with resume if applicable)
             if is_resuming:
                 logger.info(f"Resuming training from checkpoint, device={device}")
-                # When resuming, ultralytics handles most params from the checkpoint
+                # When resuming, ultralytics needs resume=True to load optimizer state etc.
+                # Use fewer workers on Windows to avoid multiprocessing issues with CUDA
                 results = model.train(
                     resume=True,
                     device=device,
-                    project=str(model_dir.parent),
-                    name=model_dir.name,
-                    exist_ok=True,
+                    workers=0,  # Disable multiprocessing to avoid CUDA deadlocks on Windows
                     verbose=True
                 )
             else:
