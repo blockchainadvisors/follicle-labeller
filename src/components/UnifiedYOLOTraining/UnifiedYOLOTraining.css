@@ -87,6 +87,7 @@
 .unified-yolo-training-dialog .tab-button.active {
   color: var(--accent, #3b82f6);
   border-bottom-color: var(--accent, #3b82f6);
+  background: transparent !important;
 }
 
 /* Tab Content */

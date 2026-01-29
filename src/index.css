@@ -1624,14 +1624,14 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 .theme-dropdown {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
+  left: 0;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   min-width: 200px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  z-index: 100;
+  z-index: 1000;
   animation: dropdownFadeIn 0.15s ease;
 }
 
