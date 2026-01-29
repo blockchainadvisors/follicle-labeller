@@ -30,15 +30,54 @@ import sys
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+# Store early initialization messages (before logger is configured)
+_early_init_messages = []
+
+# Auto-detect and set CUDA_PATH if not already set (Windows only)
+_cuda_path_set = False
+_cuda_toolkit_installed = False
+if sys.platform == 'win32' and not os.environ.get('CUDA_PATH'):
+    # Common CUDA installation paths on Windows
+    cuda_base = r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA'
+    if os.path.exists(cuda_base):
+        # Find the latest CUDA version
+        try:
+            versions = [d for d in os.listdir(cuda_base) if d.startswith('v')]
+            if versions:
+                # Sort by version number (e.g., v12.4, v12.3, v11.8)
+                versions.sort(key=lambda x: [int(n) for n in x[1:].split('.')], reverse=True)
+                cuda_path = os.path.join(cuda_base, versions[0])
+                if os.path.exists(cuda_path):
+                    os.environ['CUDA_PATH'] = cuda_path
+                    _cuda_path_set = True
+                    _cuda_toolkit_installed = True
+                    _early_init_messages.append(f"CUDA_PATH auto-detected: {cuda_path}")
+        except Exception as e:
+            _early_init_messages.append(f"CUDA_PATH auto-detection failed: {e}")
+    else:
+        _early_init_messages.append(
+            "CUDA Toolkit not installed. GPU acceleration via CuPy requires CUDA Toolkit. "
+            "Detection will use CPU. Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads for GPU support."
+        )
+elif os.environ.get('CUDA_PATH'):
+    _cuda_path_set = True
+    _cuda_toolkit_installed = True
+    _early_init_messages.append(f"CUDA_PATH already set: {os.environ.get('CUDA_PATH')}")
+
 # Setup NVIDIA CUDA DLL paths before importing GPU libraries (Windows only)
+_cuda_dll_setup_success = False
 if sys.platform == 'win32':
     try:
         # Find the venv site-packages nvidia directory
         import site
         nvidia_dll_paths = []
-        for site_path in site.getsitepackages():
+        site_packages = site.getsitepackages()
+        _early_init_messages.append(f"CUDA DLL setup: Checking site-packages: {site_packages}")
+
+        for site_path in site_packages:
             nvidia_base = os.path.join(site_path, 'nvidia')
             if os.path.exists(nvidia_base):
+                _early_init_messages.append(f"CUDA DLL setup: Found nvidia directory at {nvidia_base}")
                 dll_subdirs = [
                     'cuda_nvrtc/bin', 'cublas/bin', 'cuda_runtime/bin',
                     'cufft/bin', 'curand/bin', 'cusolver/bin',
@@ -52,13 +91,18 @@ if sys.platform == 'win32':
                         os.add_dll_directory(dll_path)
                 break
 
+        if not nvidia_dll_paths:
+            _early_init_messages.append("CUDA DLL setup: No NVIDIA DLL paths found in site-packages")
+
         # Also prepend to PATH for broader compatibility
         if nvidia_dll_paths:
             current_path = os.environ.get('PATH', '')
             new_paths = os.pathsep.join(nvidia_dll_paths)
             os.environ['PATH'] = new_paths + os.pathsep + current_path
-    except Exception:
-        pass  # Ignore errors, GPU will just not be available
+            _early_init_messages.append(f"CUDA DLL setup: Added {len(nvidia_dll_paths)} paths to DLL search")
+            _cuda_dll_setup_success = True
+    except Exception as e:
+        _early_init_messages.append(f"CUDA DLL setup ERROR: {type(e).__name__}: {e}")
 
 import cv2
 import numpy as np
@@ -69,21 +113,40 @@ from pydantic import BaseModel
 import uvicorn
 
 # Import GPU backend manager
+_gpu_import_error = None
 try:
     from gpu_backend import get_gpu_manager, GPUBackendManager
     GPU_AVAILABLE = True
-except ImportError:
+    _early_init_messages.append("GPU backend: Successfully imported gpu_backend module")
+except ImportError as e:
     GPU_AVAILABLE = False
     get_gpu_manager = None
     GPUBackendManager = None
+    _gpu_import_error = str(e)
+    _early_init_messages.append(f"GPU backend: Import failed - {e}")
+except Exception as e:
+    GPU_AVAILABLE = False
+    get_gpu_manager = None
+    GPUBackendManager = None
+    _gpu_import_error = str(e)
+    _early_init_messages.append(f"GPU backend: Unexpected error - {type(e).__name__}: {e}")
 
 # Import parallel blob detection
+_parallel_import_error = None
 try:
     from parallel_blob_detect import parallel_blob_detect
     PARALLEL_BLOB_AVAILABLE = True
-except ImportError:
+    _early_init_messages.append("Parallel detection: Successfully imported")
+except ImportError as e:
     PARALLEL_BLOB_AVAILABLE = False
     parallel_blob_detect = None
+    _parallel_import_error = str(e)
+    _early_init_messages.append(f"Parallel detection: Import failed - {e}")
+except Exception as e:
+    PARALLEL_BLOB_AVAILABLE = False
+    parallel_blob_detect = None
+    _parallel_import_error = str(e)
+    _early_init_messages.append(f"Parallel detection: Unexpected error - {type(e).__name__}: {e}")
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +154,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Log early initialization messages now that logger is available
+for msg in _early_init_messages:
+    if 'ERROR' in msg or 'failed' in msg.lower():
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+
+# Log summary of initialization status
+logger.info(f"Initialization summary: CUDA_DLL_SETUP={_cuda_dll_setup_success}, GPU_AVAILABLE={GPU_AVAILABLE}, PARALLEL_AVAILABLE={PARALLEL_BLOB_AVAILABLE}")
+if _gpu_import_error:
+    logger.error(f"GPU backend unavailable: {_gpu_import_error}")
+if _parallel_import_error:
+    logger.error(f"Parallel detection unavailable: {_parallel_import_error}")
 
 # Create FastAPI app
 app = FastAPI(
@@ -559,9 +636,14 @@ def detect_blobs(image: np.ndarray,
     elif use_gpu:
         logger.info(f"Using GPU backend: {backend.name} ({backend.device_name})")
 
-    # Convert to grayscale
+    # Convert to grayscale (with GPU fallback to CPU on error)
     if use_gpu:
-        gray = backend.grayscale(image)
+        try:
+            gray = backend.grayscale(image)
+        except Exception as e:
+            logger.warning(f"GPU grayscale failed, falling back to CPU: {e}")
+            use_gpu = False
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -571,7 +653,16 @@ def detect_blobs(image: np.ndarray,
         clip_limit = settings.get('claheClipLimit', 3.0)
         tile_size = settings.get('claheTileSize', 8)
         if use_gpu:
-            gray = backend.clahe(gray, clip_limit=clip_limit, tile_size=tile_size)
+            try:
+                gray = backend.clahe(gray, clip_limit=clip_limit, tile_size=tile_size)
+            except Exception as e:
+                logger.warning(f"GPU CLAHE failed, falling back to CPU: {e}")
+                use_gpu = False
+                # Need to convert back from GPU array if grayscale succeeded on GPU
+                if hasattr(gray, 'get'):
+                    gray = gray.get()
+                clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+                gray = clahe.apply(gray)
         else:
             clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
             gray = clahe.apply(gray)
@@ -723,18 +814,34 @@ def detect_blobs(image: np.ndarray,
     if len(detected_results) < 50:
         logger.info("Trying contour-based detection...")
 
+        # Ensure gray is a numpy array (may still be GPU array if grayscale succeeded but CLAHE failed)
+        if hasattr(gray, 'get'):
+            gray = gray.get()
+
         # Use Gaussian blur + Otsu thresholding (better than adaptive for this use case)
         if use_gpu:
-            blurred = backend.gaussian_blur(gray, kernel_size=5)
-            thresh = backend.threshold_otsu(blurred, invert=True)
-            # Morphological opening to remove noise and separate touching objects
-            thresh = backend.morphological_open(thresh, kernel_size=3)
+            try:
+                blurred = backend.gaussian_blur(gray, kernel_size=5)
+                thresh = backend.threshold_otsu(blurred, invert=True)
+                # Morphological opening to remove noise and separate touching objects
+                thresh = backend.morphological_open(thresh, kernel_size=3)
+            except Exception as e:
+                logger.warning(f"GPU contour ops failed, falling back to CPU: {e}")
+                use_gpu = False
+                blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+                _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                kernel = np.ones((3, 3), np.uint8)
+                thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
         else:
             blurred = cv2.GaussianBlur(gray, (5, 5), 0)
             _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
             # Morphological opening to remove noise and separate touching objects
             kernel = np.ones((3, 3), np.uint8)
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+        # Ensure thresh is a numpy array before findContours
+        if hasattr(thresh, 'get'):
+            thresh = thresh.get()
 
         # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -782,7 +889,12 @@ async def health():
         'framework': 'fastapi',
         'min_annotations': MIN_ANNOTATIONS_FOR_DETECTION,
         'parallel_detection': PARALLEL_BLOB_AVAILABLE,
-        'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD
+        'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
+        'gpu_available': GPU_AVAILABLE,
+        'cuda_toolkit_installed': _cuda_toolkit_installed,
+        'cuda_dll_setup': _cuda_dll_setup_success,
+        'gpu_import_error': _gpu_import_error,
+        'parallel_import_error': _parallel_import_error,
     }
 
 
@@ -1021,8 +1133,17 @@ async def blob_detect(req: BlobDetectRequest):
         }
 
     except Exception as e:
-        logger.error(f"Detection failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_traceback = traceback.format_exc()
+        logger.error(f"Detection failed: {e}\n{error_traceback}")
+        # Include more context in the error for debugging
+        error_detail = {
+            'error': str(e),
+            'type': type(e).__name__,
+            'gpu_available': GPU_AVAILABLE,
+            'parallel_available': PARALLEL_BLOB_AVAILABLE,
+        }
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.post('/crop-region')

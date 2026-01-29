@@ -305,7 +305,22 @@ export class BlobService {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || "Detection failed");
+      // Handle both string and object error details
+      const detail = error.detail;
+      let errorMessage = "Detection failed";
+      if (typeof detail === "string") {
+        errorMessage = detail;
+      } else if (detail && typeof detail === "object") {
+        errorMessage = detail.error || "Detection failed";
+        // Log additional debug info
+        console.error("Detection error details:", detail);
+        if (detail.gpu_available === false) {
+          errorMessage += " (GPU not available)";
+        }
+      } else if (error.error) {
+        errorMessage = error.error;
+      }
+      throw new Error(errorMessage);
     }
 
     return response.json();
