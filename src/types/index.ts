@@ -255,6 +255,78 @@ export interface AnnotationExportV2 extends AnnotationExport {
   imageId: ImageId;
 }
 
+// Detection settings export format (for project file persistence)
+export interface DetectionSettingsExport {
+  // Detection method
+  detectionMethod: 'blob' | 'yolo';
+
+  // YOLO Detection settings
+  yoloModelId: string | null;
+  yoloConfidenceThreshold: number;
+  yoloUseTiledInference: boolean;
+  yoloTileSize: number;
+  yoloTileOverlap: number;
+  yoloNmsThreshold: number;
+  yoloScaleFactor: number;
+  yoloAutoScaleMode: 'auto' | 'none';
+  yoloTrainingImageSize: number;
+  yoloTrainingAnnotationSize: number;
+
+  // Basic size parameters (for blob detection)
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  darkBlobs: boolean;
+
+  // Backend selection
+  forceCPU: boolean;
+
+  // Gaussian blur preprocessing
+  useGaussianBlur: boolean;
+  gaussianKernelSize: number;
+
+  // Morphological opening
+  useMorphOpen: boolean;
+  morphKernelSize: number;
+
+  // Circularity filter
+  useCircularityFilter: boolean;
+  minCircularity: number;
+
+  // Inertia filter
+  useInertiaFilter: boolean;
+  minInertiaRatio: number;
+  maxInertiaRatio: number;
+
+  // Convexity filter
+  useConvexityFilter: boolean;
+  minConvexity: number;
+
+  // CLAHE preprocessing
+  useCLAHE: boolean;
+  claheClipLimit: number;
+  claheTileSize: number;
+
+  // SAHI-style tiling
+  useSAHI: boolean;
+  tileSize: number;
+  tileOverlap: number;
+
+  // Soft-NMS
+  useSoftNMS: boolean;
+  softNMSSigma: number;
+  softNMSThreshold: number;
+
+  // YOLO Keypoint prediction
+  useKeypointPrediction: boolean;
+}
+
+// Project settings container
+export interface ProjectSettings {
+  detection?: DetectionSettingsExport;
+}
+
 export interface ImageManifestEntry {
   id: ImageId;
   fileName: string;
@@ -263,6 +335,7 @@ export interface ImageManifestEntry {
   height: number;
   sortOrder: number;
   viewport: Viewport;
+  detectionSettings?: Partial<DetectionSettingsExport>;  // Optional per-image override
 }
 
 export interface ProjectManifestV2 {
@@ -274,6 +347,7 @@ export interface ProjectManifestV2 {
     annotationCount: number;
   };
   images: ImageManifestEntry[];
+  settings?: ProjectSettings;  // Optional global settings (backward compatible)
 }
 
 export interface AnnotationsFileV2 {
@@ -528,6 +602,30 @@ declare global {
             className: string;
           }>;
           count: number;
+        }>;
+        predictTiled: (
+          imageData: string,
+          confidenceThreshold?: number,
+          tileSize?: number,
+          overlap?: number,
+          nmsThreshold?: number,
+          scaleFactor?: number
+        ) => Promise<{
+          success: boolean;
+          detections: Array<{
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+            classId: number;
+            className: string;
+          }>;
+          count: number;
+          method: string;
+          tileSize: number;
+          overlap: number;
+          scaleFactor: number;
         }>;
         showExportDialog: (
           defaultFileName: string

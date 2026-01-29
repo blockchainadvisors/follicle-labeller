@@ -48,10 +48,9 @@ import {
 import { blobService } from "../../services/blobService";
 import {
   DetectionSettingsDialog,
-  DetectionSettings,
-  DEFAULT_DETECTION_SETTINGS,
   GPUInstallState,
 } from "../DetectionSettingsDialog/DetectionSettingsDialog";
+import { useSettingsStore } from "../../store/settingsStore";
 import {
   LearnedDetectionDialog,
   LearnedDetectionSettings,
@@ -69,6 +68,12 @@ import {
   ImportAnalysis,
   ImportOptions,
 } from "../ImportAnnotationsDialog/ImportAnnotationsDialog";
+import {
+  DuplicateDetectionDialog,
+  DuplicateReport,
+  DuplicateAction,
+  findDuplicates,
+} from "../DuplicateDetectionDialog";
 import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
@@ -177,10 +182,19 @@ export const Toolbar: React.FC = () => {
   const isSyncingAnnotations = useRef(false);
   const lastSessionImageId = useRef<string | null>(null);
 
-  // State for detection settings dialog (manual settings mode)
-  const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>(
-    DEFAULT_DETECTION_SETTINGS,
-  );
+  // Settings store for detection settings (persisted with project)
+  const setGlobalDetectionSettings = useSettingsStore(state => state.setGlobalDetectionSettings);
+  const getEffectiveSettings = useSettingsStore(state => state.getEffectiveSettings);
+  const loadSettingsFromProject = useSettingsStore(state => state.loadFromProject);
+  const clearSettings = useSettingsStore(state => state.clearAll);
+  const getGlobalSettingsForExport = useSettingsStore(state => state.getGlobalSettingsForExport);
+  const getImageOverridesForExport = useSettingsStore(state => state.getImageOverridesForExport);
+
+  // Use effective settings for active image (supports per-image overrides)
+  const detectionSettings = getEffectiveSettings(activeImageId);
+  const setDetectionSettings = setGlobalDetectionSettings;
+
+  // State for detection settings dialog visibility
   const [showDetectionSettings, setShowDetectionSettings] = useState(false);
 
   // Handler for when the BLOB server restarts (e.g., after GPU install)
@@ -212,6 +226,12 @@ export const Toolbar: React.FC = () => {
   const [showYOLODetectionModelManager, setShowYOLODetectionModelManager] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
+
+  // State for duplicate detection dialog
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [duplicateReport, setDuplicateReport] = useState<DuplicateReport | null>(null);
+  const [pendingDetections, setPendingDetections] = useState<RectangleAnnotation[]>([]);
+  const [detectionMethodName, setDetectionMethodName] = useState<string>("Detection");
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -461,7 +481,8 @@ export const Toolbar: React.FC = () => {
         const url = URL.createObjectURL(blob);
 
         // Create pre-decoded ImageBitmap for smooth rendering
-        const bitmap = await createImageBitmap(blob);
+        // Use imageOrientation: 'from-image' to apply EXIF rotation (matches backend)
+        const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
 
         const newImage: ProjectImage = {
           id: generateImageId(),
@@ -487,9 +508,12 @@ export const Toolbar: React.FC = () => {
     if (images.size === 0) return false;
 
     try {
+      // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
         follicles,
+        getGlobalSettingsForExport(),
+        getImageOverridesForExport(),
       );
 
       let result: { success: boolean; filePath?: string };
@@ -521,15 +545,18 @@ export const Toolbar: React.FC = () => {
       console.error("Failed to save project:", error);
       return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
   const handleSaveAs = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;
 
     try {
+      // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
         follicles,
+        getGlobalSettingsForExport(),
+        getImageOverridesForExport(),
       );
 
       // Always show save dialog
@@ -550,7 +577,7 @@ export const Toolbar: React.FC = () => {
       console.error("Failed to save project:", error);
       return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
   // Check for unsaved changes and prompt user
   // Returns true if safe to proceed, false if user cancelled
@@ -580,8 +607,12 @@ export const Toolbar: React.FC = () => {
       // Clear existing project
       clearProject();
       clearAll();
+      clearSettings();
 
-      const { loadedImages, loadedFollicles } = await parseImportV2(result);
+      const { loadedImages, loadedFollicles, globalSettings, imageSettingsMap } = await parseImportV2(result);
+
+      // Load detection settings (uses defaults for old files without settings)
+      loadSettingsFromProject(globalSettings, imageSettingsMap);
 
       // Add all loaded images
       for (const image of loadedImages) {
@@ -601,6 +632,8 @@ export const Toolbar: React.FC = () => {
     [
       clearProject,
       clearAll,
+      clearSettings,
+      loadSettingsFromProject,
       addImage,
       importFollicles,
       setCurrentProjectPath,
@@ -629,7 +662,8 @@ export const Toolbar: React.FC = () => {
 
     clearProject();
     clearAll();
-  }, [clearProject, clearAll, checkUnsavedChanges]);
+    clearSettings();
+  }, [clearProject, clearAll, clearSettings, checkUnsavedChanges]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -908,6 +942,41 @@ export const Toolbar: React.FC = () => {
     setImportAnalysis(null);
   }, []);
 
+  // Handle duplicate detection dialog action
+  const handleDuplicateAction = useCallback((action: DuplicateAction) => {
+    if (!duplicateReport || pendingDetections.length === 0) {
+      setShowDuplicateDialog(false);
+      setDuplicateReport(null);
+      setPendingDetections([]);
+      return;
+    }
+
+    if (action === "cancel") {
+      // Don't add any detections
+      console.log("Detection cancelled by user");
+    } else if (action === "keepNew") {
+      // Filter out duplicates and add only new detections
+      const newDetections = pendingDetections.filter(
+        (_, index) => !duplicateReport.duplicateIndices.has(index)
+      );
+      if (newDetections.length > 0) {
+        const allFollicles = [...follicles, ...newDetections];
+        importFollicles(allFollicles);
+        console.log(`Added ${newDetections.length} new detections (skipped ${duplicateReport.duplicates} duplicates)`);
+      }
+    } else if (action === "keepAll") {
+      // Add all detections including duplicates
+      const allFollicles = [...follicles, ...pendingDetections];
+      importFollicles(allFollicles);
+      console.log(`Added all ${pendingDetections.length} detections`);
+    }
+
+    // Clear state
+    setShowDuplicateDialog(false);
+    setDuplicateReport(null);
+    setPendingDetections([]);
+  }, [duplicateReport, pendingDetections, follicles, importFollicles]);
+
   // Export to YOLO Keypoint dataset format (for pose/keypoint training)
   const handleExportYOLOKeypoint = useCallback(async () => {
     if (images.size === 0 || follicles.length === 0) return;
@@ -1028,15 +1097,52 @@ export const Toolbar: React.FC = () => {
       // Get image as base64
       const imageBase64 = await getImageBase64(activeImage);
 
-      // Run YOLO detection
-      const predictions = await yoloDetectionService.predict(
-        imageBase64,
-        detectionSettings.yoloConfidenceThreshold
-      );
+      // Run YOLO detection (tiled or regular based on settings)
+      let predictions: DetectionPrediction[];
+      if (detectionSettings.yoloUseTiledInference) {
+        // Calculate scale factor based on mode
+        // "Automatic Detection" always uses imageSize-based scaling
+        // Annotation-based scaling is only available via "Learn from Selection"
+        let scaleFactor = detectionSettings.yoloScaleFactor;
+        const autoScaleMode = detectionSettings.yoloAutoScaleMode;
+
+        if (autoScaleMode === 'auto') {
+          // Auto-calculate based on image size vs training reference
+          const trainingSize = detectionSettings.yoloTrainingImageSize;
+          const currentSize = Math.max(activeImage.width, activeImage.height);
+
+          if (currentSize < trainingSize) {
+            scaleFactor = trainingSize / currentSize;
+            scaleFactor = Math.min(scaleFactor, 3.0); // Cap at 3.0x
+            scaleFactor = Math.round(scaleFactor * 10) / 10;
+          } else {
+            scaleFactor = 1.0;
+          }
+          console.log(`Auto-scale (imageSize): image ${activeImage.width}x${activeImage.height}, training ref ${trainingSize}, scale=${scaleFactor}x`);
+        }
+        // else mode === 'none', use manual scaleFactor from settings
+
+        // Use tiled inference for large images
+        predictions = await yoloDetectionService.predictTiled(
+          imageBase64,
+          detectionSettings.yoloConfidenceThreshold,
+          detectionSettings.yoloTileSize,
+          detectionSettings.yoloTileOverlap,
+          detectionSettings.yoloNmsThreshold,
+          scaleFactor
+        );
+        console.log(`Tiled YOLO detection: ${predictions.length} follicles (tile_size=${detectionSettings.yoloTileSize}, scale=${scaleFactor}x)`);
+      } else {
+        // Use regular inference (scales full image)
+        predictions = await yoloDetectionService.predict(
+          imageBase64,
+          detectionSettings.yoloConfidenceThreshold
+        );
+      }
 
       if (predictions.length === 0) {
         console.log("No follicles detected by YOLO");
-        alert("No follicles detected. Try lowering the confidence threshold.");
+        alert("No follicles detected. Try lowering the confidence threshold or adjusting tile settings.");
         setIsDetecting(false);
         return;
       }
@@ -1064,11 +1170,23 @@ export const Toolbar: React.FC = () => {
         }),
       );
 
-      // Import all at once (supports undo as single action)
-      const allFollicles = [...follicles, ...newFollicles];
-      importFollicles(allFollicles);
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
 
-      console.log(`YOLO detected ${predictions.length} follicles`);
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("YOLO");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`YOLO detected ${predictions.length} follicles (no duplicates)`);
+      }
     } catch (error) {
       console.error("YOLO detection failed:", error);
       alert(
@@ -1085,6 +1203,153 @@ export const Toolbar: React.FC = () => {
     importFollicles,
     detectionSettings.yoloModelId,
     detectionSettings.yoloConfidenceThreshold,
+    detectionSettings.yoloUseTiledInference,
+    detectionSettings.yoloTileSize,
+    detectionSettings.yoloTileOverlap,
+    detectionSettings.yoloNmsThreshold,
+    detectionSettings.yoloScaleFactor,
+    detectionSettings.yoloAutoScaleMode,
+    detectionSettings.yoloTrainingImageSize,
+    getImageBase64,
+  ]);
+
+  // YOLO detection with annotation-based scaling (Learn from Selection for YOLO)
+  const handleYoloLearnFromSelection = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    // Get SELECTED annotations for this image
+    const selectedFollicles = follicles.filter(f => f.imageId === activeImageId && selectedIds.has(f.id));
+
+    if (selectedFollicles.length < 3) {
+      alert(`Please select at least 3 annotations to learn from. Currently selected: ${selectedFollicles.length}`);
+      return;
+    }
+
+    setIsDetecting(true);
+
+    try {
+      // Load model if needed
+      if (detectionSettings.yoloModelId) {
+        const models = await yoloDetectionService.listModels();
+        const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
+        if (selectedModel) {
+          const loaded = await yoloDetectionService.loadModel(selectedModel.path);
+          if (!loaded) {
+            throw new Error('Failed to load selected YOLO model');
+          }
+        }
+      }
+
+      // Get image as base64
+      const imageBase64 = await getImageBase64(activeImage);
+
+      // Calculate scale factor based on SELECTED annotation sizes
+      const avgSize = selectedFollicles.reduce((sum, f) => {
+        let size = 0;
+        if (f.shape === 'circle') {
+          size = f.radius * 2; // Diameter
+        } else if (f.shape === 'rectangle') {
+          size = Math.max(f.width, f.height);
+        } else if (f.shape === 'linear') {
+          // Linear: calculate length and width
+          const dx = f.endPoint.x - f.startPoint.x;
+          const dy = f.endPoint.y - f.startPoint.y;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          const width = f.halfWidth * 2;
+          size = Math.max(length, width);
+        }
+        return sum + size;
+      }, 0) / selectedFollicles.length;
+
+      const trainingAnnotationSize = detectionSettings.yoloTrainingAnnotationSize;
+      let scaleFactor = 1.0;
+
+      if (avgSize > 0 && avgSize < trainingAnnotationSize) {
+        scaleFactor = trainingAnnotationSize / avgSize;
+        scaleFactor = Math.min(scaleFactor, 3.0); // Cap at 3.0x
+        scaleFactor = Math.round(scaleFactor * 10) / 10;
+      }
+
+      console.log(`YOLO Learn from Selection: ${selectedFollicles.length} selected, avg size ${avgSize.toFixed(1)}px, training ref ${trainingAnnotationSize}px, scale=${scaleFactor}x`);
+
+      // Run tiled inference with annotation-based scale factor
+      const predictions = await yoloDetectionService.predictTiled(
+        imageBase64,
+        detectionSettings.yoloConfidenceThreshold,
+        detectionSettings.yoloTileSize,
+        detectionSettings.yoloTileOverlap,
+        detectionSettings.yoloNmsThreshold,
+        scaleFactor
+      );
+
+      if (predictions.length === 0) {
+        console.log("No follicles detected by YOLO");
+        alert("No follicles detected. Try selecting different reference annotations or lowering the confidence threshold.");
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert predictions to RECTANGLE annotations
+      const existingCount = follicles.filter(
+        (f) => f.imageId === activeImageId,
+      ).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = predictions.map(
+        (detection: DetectionPrediction, i: number) => ({
+          id: generateId(),
+          imageId: activeImageId,
+          shape: "rectangle" as const,
+          x: detection.x,
+          y: detection.y,
+          width: detection.width,
+          height: detection.height,
+          label: `YOLO Learned ${existingCount + i + 1}`,
+          notes: `YOLO detection from selection (conf: ${(detection.confidence * 100).toFixed(0)}%, scale: ${scaleFactor}x)`,
+          color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
+
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("YOLO (Learned)");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`YOLO detected ${predictions.length} follicles using annotation-based scaling (no duplicates)`);
+      }
+    } catch (error) {
+      console.error("YOLO detection failed:", error);
+      alert(
+        `YOLO detection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isDetecting,
+    follicles,
+    selectedIds,
+    importFollicles,
+    detectionSettings.yoloModelId,
+    detectionSettings.yoloConfidenceThreshold,
+    detectionSettings.yoloTileSize,
+    detectionSettings.yoloTileOverlap,
+    detectionSettings.yoloNmsThreshold,
+    detectionSettings.yoloTrainingAnnotationSize,
     getImageBase64,
   ]);
 
@@ -1176,12 +1441,25 @@ export const Toolbar: React.FC = () => {
         },
       );
 
-      // Import all at once (supports undo as single action)
-      const allFollicles = [...follicles, ...newFollicles];
-      importFollicles(allFollicles);
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
 
       const originsCount = predictedOrigins?.size ?? 0;
-      console.log(`Detected ${count} follicles using manual settings${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
+
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("BLOB");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`Detected ${count} follicles using manual settings (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
+      }
     } catch (error) {
       console.error("Failed to detect follicles:", error);
       alert(
@@ -1303,14 +1581,27 @@ export const Toolbar: React.FC = () => {
           },
         );
 
-        // Import all at once (supports undo as single action)
-        const allFollicles = [...follicles, ...newFollicles];
-        importFollicles(allFollicles);
+        // Check for duplicates with existing annotations
+        const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+        const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+        const report = findDuplicates(detectionBoxes, existingAnnotations);
 
         const originsCount = predictedOrigins?.size ?? 0;
-        console.log(
-          `Detected ${count} follicles using learned settings (tolerance: ${settings.tolerance}%)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`,
-        );
+
+        if (report.duplicates > 0) {
+          // Show dialog to let user decide
+          setPendingDetections(newFollicles);
+          setDuplicateReport(report);
+          setDetectionMethodName("Learned BLOB");
+          setShowDuplicateDialog(true);
+        } else {
+          // No duplicates, import all directly
+          const allFollicles = [...follicles, ...newFollicles];
+          importFollicles(allFollicles);
+          console.log(
+            `Detected ${count} follicles using learned settings (tolerance: ${settings.tolerance}%) (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`,
+          );
+        }
       } catch (error) {
         console.error("Failed to detect follicles:", error);
         alert(
@@ -1333,16 +1624,29 @@ export const Toolbar: React.FC = () => {
     ],
   );
 
-  // Open learned detection dialog
+  // Open learned detection dialog or run YOLO with annotation-based scaling
   const handleOpenLearnedDetection = useCallback(() => {
-    if (!canDetect) {
-      alert(
-        `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
-      );
-      return;
+    if (detectionSettings.detectionMethod === 'yolo') {
+      // For YOLO: Check selected annotations and run directly
+      const selectedCount = follicles.filter(f => f.imageId === activeImageId && selectedIds.has(f.id)).length;
+      if (selectedCount < 3) {
+        alert(
+          `Please select at least 3 annotations to learn from. Currently selected: ${selectedCount}`,
+        );
+        return;
+      }
+      handleYoloLearnFromSelection();
+    } else {
+      // For BLOB: Check total annotations and open dialog
+      if (!canDetect) {
+        alert(
+          `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
+        );
+        return;
+      }
+      setShowLearnedDetection(true);
     }
-    setShowLearnedDetection(true);
-  }, [canDetect]);
+  }, [canDetect, detectionSettings.detectionMethod, follicles, activeImageId, selectedIds, handleYoloLearnFromSelection]);
 
   // Listen for auto-detect trigger from ImageCanvas keyboard shortcut
   // Use learned detection if we have annotations, otherwise settings-based
@@ -1454,9 +1758,12 @@ export const Toolbar: React.FC = () => {
           currentProjectPath,
         );
         try {
+          // Include detection settings in the auto-save
           const { manifest, annotations, imageList } = generateExportV2(
             Array.from(images.values()),
             follicles,
+            getGlobalSettingsForExport(),
+            getImageOverridesForExport(),
           );
 
           const result = await window.electronAPI.saveProjectV2ToPath(
@@ -1478,7 +1785,7 @@ export const Toolbar: React.FC = () => {
 
     const cleanup = window.electronAPI.onSystemSuspend(handleSystemSuspend);
     return cleanup;
-  }, [isDirty, currentProjectPath, images, follicles, markClean]);
+  }, [isDirty, currentProjectPath, images, follicles, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 
@@ -1581,7 +1888,7 @@ export const Toolbar: React.FC = () => {
       <div className="toolbar-group" role="group" aria-label="Detection tools">
         <IconButton
           icon={
-            isLearnedDetecting || serverStarting ? (
+            isLearnedDetecting || isDetecting || serverStarting ? (
               <Loader2 size={18} className="animate-spin" />
             ) : (
               <GraduationCap size={18} />
@@ -1590,18 +1897,23 @@ export const Toolbar: React.FC = () => {
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
-              : !canDetect
-                ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable learning`
-                : "Learn from Selection"
+              : detectionSettings.detectionMethod === 'yolo'
+                ? selectedIds.size < 3
+                  ? `Select at least 3 annotations (${selectedIds.size} selected)`
+                  : "Learn from Selection (YOLO)"
+                : !canDetect
+                  ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable learning`
+                  : "Learn from Selection"
           }
           shortcut="L"
           onClick={handleOpenLearnedDetection}
           disabled={
             !imageLoaded ||
             isLearnedDetecting ||
+            isDetecting ||
             serverStarting ||
             !blobServerConnected ||
-            !canDetect
+            (detectionSettings.detectionMethod === 'yolo' ? selectedIds.size < 3 : !canDetect)
           }
         />
         <IconButton
@@ -1854,6 +2166,15 @@ export const Toolbar: React.FC = () => {
           analysis={importAnalysis}
           onImport={handleImportConfirm}
           onCancel={handleImportCancel}
+        />
+      )}
+
+      {/* Duplicate Detection Dialog */}
+      {showDuplicateDialog && duplicateReport && (
+        <DuplicateDetectionDialog
+          report={duplicateReport}
+          onAction={handleDuplicateAction}
+          detectionMethod={detectionMethodName}
         />
       )}
     </div>

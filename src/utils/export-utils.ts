@@ -8,6 +8,7 @@ import {
   ProjectManifestV2,
   AnnotationsFileV2,
   AnnotationExportV2,
+  DetectionSettingsExport,
   isCircle,
   isRectangle,
   isLinear
@@ -133,7 +134,9 @@ export function generateExport(
  */
 export function generateExportV2(
   images: ProjectImage[],
-  follicles: Follicle[]
+  follicles: Follicle[],
+  globalSettings?: DetectionSettingsExport,
+  imageSettingsOverrides?: Map<string, Partial<DetectionSettingsExport>>
 ): {
   manifest: ProjectManifestV2;
   annotations: AnnotationsFileV2;
@@ -147,15 +150,27 @@ export function generateExportV2(
       imageCount: images.length,
       annotationCount: follicles.length,
     },
-    images: images.map(img => ({
-      id: img.id,
-      fileName: img.fileName,
-      archiveFileName: `${img.id}-${img.fileName}`,
-      width: img.width,
-      height: img.height,
-      sortOrder: img.sortOrder,
-      viewport: img.viewport,
-    })),
+    images: images.map(img => {
+      const entry: ProjectManifestV2['images'][0] = {
+        id: img.id,
+        fileName: img.fileName,
+        archiveFileName: `${img.id}-${img.fileName}`,
+        width: img.width,
+        height: img.height,
+        sortOrder: img.sortOrder,
+        viewport: img.viewport,
+      };
+      // Add per-image settings if present
+      const override = imageSettingsOverrides?.get(img.id);
+      if (override && Object.keys(override).length > 0) {
+        entry.detectionSettings = override;
+      }
+      return entry;
+    }),
+    // Add global settings if present
+    ...(globalSettings && {
+      settings: { detection: globalSettings }
+    }),
   };
 
   const annotations: AnnotationsFileV2 = {
@@ -289,6 +304,8 @@ export async function parseImportV2(result: {
 }): Promise<{
   loadedImages: ProjectImage[];
   loadedFollicles: Follicle[];
+  globalSettings?: DetectionSettingsExport;
+  imageSettingsMap?: Map<string, Partial<DetectionSettingsExport>>;
 }> {
   if (result.version === '1.0') {
     // V1 migration: create a single ProjectImage and assign imageId to all annotations
@@ -299,7 +316,7 @@ export async function parseImportV2(result: {
     const imageId = generateImageId();
     const blob = new Blob([result.imageData]);
     const imageSrc = URL.createObjectURL(blob);
-    const imageBitmap = await createImageBitmap(blob);
+    const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
 
     const loadedImage: ProjectImage = {
       id: imageId,
@@ -317,7 +334,8 @@ export async function parseImportV2(result: {
     // Parse annotations with the new imageId
     const loadedFollicles = parseImport(result.jsonData, imageId);
 
-    return { loadedImages: [loadedImage], loadedFollicles };
+    // V1 files don't have settings - return undefined (will use defaults)
+    return { loadedImages: [loadedImage], loadedFollicles, globalSettings: undefined, imageSettingsMap: undefined };
   } else {
     // V2 format
     if (!result.manifest || !result.annotations || !result.images) {
@@ -335,7 +353,7 @@ export async function parseImportV2(result: {
 
       const blob = new Blob([imageData.data]);
       const imageSrc = URL.createObjectURL(blob);
-      const imageBitmap = await createImageBitmap(blob);
+      const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
 
       loadedImages.push({
         id: imageData.id,
@@ -403,7 +421,16 @@ export async function parseImportV2(result: {
       }
     });
 
-    return { loadedImages, loadedFollicles };
+    // Extract settings (V2 only)
+    const globalSettings = manifest.settings?.detection;
+    const imageSettingsMap = new Map<string, Partial<DetectionSettingsExport>>();
+    for (const entry of manifest.images) {
+      if (entry.detectionSettings) {
+        imageSettingsMap.set(entry.id, entry.detectionSettings);
+      }
+    }
+
+    return { loadedImages, loadedFollicles, globalSettings, imageSettingsMap };
   }
 }
 
