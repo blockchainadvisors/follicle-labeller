@@ -12,6 +12,7 @@ import {
   DetectionModelInfo,
   DetectionDatasetValidation,
   YoloDetectionStatus,
+  TensorRTStatus,
   DEFAULT_DETECTION_TRAINING_CONFIG,
 } from '../types';
 
@@ -337,12 +338,12 @@ export class YOLODetectionService {
    *
    * @param imageBase64 Base64-encoded image data
    * @param confidenceThreshold Minimum confidence threshold (default: 0.5)
-   * @returns Array of detection predictions
+   * @returns Object with predictions array and backend used
    */
   async predict(
     imageBase64: string,
     confidenceThreshold: number = 0.5
-  ): Promise<DetectionPrediction[]> {
+  ): Promise<{ predictions: DetectionPrediction[]; backend: string }> {
     try {
       const result = await withRetry(
         () => window.electronAPI.yoloDetection.predict(imageBase64, confidenceThreshold),
@@ -355,10 +356,10 @@ export class YOLODetectionService {
       );
 
       if (!result.success) {
-        return [];
+        return { predictions: [], backend: 'pytorch' };
       }
 
-      return result.detections.map((d) => ({
+      const predictions = result.detections.map((d) => ({
         x: d.x,
         y: d.y,
         width: d.width,
@@ -367,9 +368,11 @@ export class YOLODetectionService {
         classId: d.classId,
         className: d.className,
       }));
+
+      return { predictions, backend: result.backend || 'pytorch' };
     } catch (error) {
       console.error('Detection prediction failed:', error);
-      return [];
+      return { predictions: [], backend: 'pytorch' };
     }
   }
 
@@ -385,7 +388,7 @@ export class YOLODetectionService {
    * @param overlap Pixel overlap between tiles (default: 128)
    * @param nmsThreshold IoU threshold for NMS merging (default: 0.5)
    * @param scaleFactor Upscale factor for images with smaller objects (default: 1.0)
-   * @returns Array of detection predictions
+   * @returns Object with predictions array and backend used
    */
   async predictTiled(
     imageBase64: string,
@@ -394,7 +397,7 @@ export class YOLODetectionService {
     overlap: number = 128,
     nmsThreshold: number = 0.5,
     scaleFactor: number = 1.0
-  ): Promise<DetectionPrediction[]> {
+  ): Promise<{ predictions: DetectionPrediction[]; backend: string }> {
     try {
       const result = await withRetry(
         () => window.electronAPI.yoloDetection.predictTiled(
@@ -414,12 +417,12 @@ export class YOLODetectionService {
       );
 
       if (!result.success) {
-        return [];
+        return { predictions: [], backend: 'pytorch' };
       }
 
-      console.log(`Tiled prediction: ${result.count} detections (tile_size=${result.tileSize}, overlap=${result.overlap}, scale=${result.scaleFactor})`);
+      console.log(`Tiled prediction: ${result.count} detections (tile_size=${result.tileSize}, overlap=${result.overlap}, scale=${result.scaleFactor}, backend=${result.backend})`);
 
-      return result.detections.map((d) => ({
+      const predictions = result.detections.map((d) => ({
         x: d.x,
         y: d.y,
         width: d.width,
@@ -428,9 +431,11 @@ export class YOLODetectionService {
         classId: d.classId,
         className: d.className,
       }));
+
+      return { predictions, backend: result.backend || 'pytorch' };
     } catch (error) {
       console.error('Tiled detection prediction failed:', error);
-      return [];
+      return { predictions: [], backend: 'pytorch' };
     }
   }
 
@@ -537,6 +542,58 @@ export class YOLODetectionService {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to write dataset',
+      };
+    }
+  }
+
+  /**
+   * Check if TensorRT is available on this system.
+   *
+   * TensorRT provides GPU-optimized inference for faster detection
+   * on NVIDIA GPUs.
+   *
+   * @returns TensorRT availability status
+   */
+  async checkTensorRTAvailable(): Promise<TensorRTStatus> {
+    try {
+      return await window.electronAPI.yoloDetection.checkTensorRTAvailable();
+    } catch (error) {
+      console.error('Failed to check TensorRT availability:', error);
+      return { available: false, version: null };
+    }
+  }
+
+  /**
+   * Export a PyTorch model to TensorRT engine format.
+   *
+   * TensorRT provides GPU-optimized inference for faster detection.
+   * The exported .engine file is GPU-architecture specific and not
+   * portable between different GPU types.
+   *
+   * @param modelPath Path to the source .pt model
+   * @param outputPath Optional path for output .engine file
+   * @param half Use FP16 precision (default: true, recommended for consumer GPUs)
+   * @param imgsz Input image size for the engine (default: 640)
+   * @returns Export result with engine path or error
+   */
+  async exportToTensorRT(
+    modelPath: string,
+    outputPath?: string,
+    half: boolean = true,
+    imgsz: number = 640
+  ): Promise<{ success: boolean; engine_path?: string; error?: string }> {
+    try {
+      return await window.electronAPI.yoloDetection.exportToTensorRT(
+        modelPath,
+        outputPath,
+        half,
+        imgsz
+      );
+    } catch (error) {
+      console.error('TensorRT export failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'TensorRT export failed',
       };
     }
   }

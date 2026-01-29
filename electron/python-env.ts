@@ -548,6 +548,145 @@ export async function installGPUPackages(
 }
 
 /**
+ * TensorRT Info type
+ */
+export interface TensorRTInfo {
+  available: boolean;
+  version: string | null;
+  canInstall: boolean; // True if CUDA is available (required for TensorRT)
+}
+
+/**
+ * Check if TensorRT is available.
+ */
+export async function checkTensorRT(): Promise<TensorRTInfo> {
+  const pythonPath = getVenvPythonPath();
+
+  if (!fs.existsSync(pythonPath)) {
+    return { available: false, version: null, canInstall: false };
+  }
+
+  const checkCode = `
+import sys
+import json
+result = {"available": False, "version": None, "cuda_available": False}
+try:
+    import torch
+    result["cuda_available"] = torch.cuda.is_available()
+except:
+    pass
+try:
+    import tensorrt
+    result["available"] = True
+    result["version"] = tensorrt.__version__
+except ImportError:
+    pass
+print(json.dumps(result))
+`;
+
+  return new Promise((resolve) => {
+    const proc = spawn(pythonPath, ["-c", checkCode], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30000,
+    });
+
+    let stdout = "";
+
+    proc.stdout?.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        try {
+          const result = JSON.parse(stdout.trim());
+          resolve({
+            available: result.available,
+            version: result.version,
+            canInstall: result.cuda_available,
+          });
+        } catch {
+          resolve({ available: false, version: null, canInstall: false });
+        }
+      } else {
+        resolve({ available: false, version: null, canInstall: false });
+      }
+    });
+
+    proc.on("error", () => {
+      resolve({ available: false, version: null, canInstall: false });
+    });
+  });
+}
+
+/**
+ * Install TensorRT packages for GPU-optimized YOLO inference.
+ * Requires CUDA to be available.
+ */
+export async function installTensorRT(
+  onProgress?: (message: string, percent?: number) => void
+): Promise<{ success: boolean; error?: string }> {
+  const pythonPath = getVenvPythonPath();
+
+  if (!fs.existsSync(pythonPath)) {
+    return { success: false, error: "Python virtual environment not found" };
+  }
+
+  // Check if CUDA is available first
+  const trtInfo = await checkTensorRT();
+  if (!trtInfo.canInstall) {
+    return {
+      success: false,
+      error: "CUDA is not available. TensorRT requires an NVIDIA GPU with CUDA support.",
+    };
+  }
+
+  // TensorRT packages - tensorrt is the main package, tensorrt-cu12 provides CUDA 12 bindings
+  // Note: tensorrt-cu12-bindings and tensorrt-cu12-libs are typically pulled as dependencies
+  const packages = ["tensorrt>=10.0.0"];
+  onProgress?.("Installing TensorRT for GPU-optimized inference (~500MB)...", 0);
+
+  return new Promise((resolve) => {
+    const proc = spawn(pythonPath, ["-m", "pip", "install", ...packages], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+
+    proc.stdout?.on("data", (data) => {
+      const line = data.toString();
+      if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+        onProgress?.(line.trim().substring(0, 100), undefined);
+      }
+    });
+
+    proc.stderr?.on("data", (data) => {
+      stderr += data.toString();
+      const line = data.toString();
+      if (line.includes("Downloading") || line.includes("Installing") || line.includes("Collecting")) {
+        onProgress?.(line.trim().substring(0, 100), undefined);
+      }
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        onProgress?.("TensorRT installation complete!", 100);
+        resolve({ success: true });
+      } else {
+        resolve({
+          success: false,
+          error: `Installation failed with code ${code}: ${stderr.substring(0, 500)}`,
+        });
+      }
+    });
+
+    proc.on("error", (err) => {
+      resolve({ success: false, error: `Failed to start pip: ${err.message}` });
+    });
+  });
+}
+
+/**
  * YOLO Dependencies Info type
  */
 export interface YOLODependenciesInfo {

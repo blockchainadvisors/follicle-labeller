@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw } from 'lucide-react';
+import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap } from 'lucide-react';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
-import { DetectionModelInfo } from '../../types';
+import { DetectionModelInfo, TensorRTStatus } from '../../types';
 import './YOLODetectionModelManager.css';
 
 interface YOLODetectionModelManagerProps {
@@ -14,9 +14,11 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
   const [loading, setLoading] = useState(true);
   const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const [exportingModel, setExportingModel] = useState<string | null>(null);
+  const [exportingTensorRT, setExportingTensorRT] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
 
   // Load models on mount
   const loadModels = useCallback(async () => {
@@ -31,6 +33,10 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
       if (status.loadedModel) {
         setLoadedModelPath(status.loadedModel);
       }
+
+      // Check TensorRT availability
+      const trtStatus = await yoloDetectionService.checkTensorRTAvailable();
+      setTensorrtStatus(trtStatus);
     } catch (err) {
       setError('Failed to load models');
       console.error('Failed to load models:', err);
@@ -90,6 +96,42 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
       setExportingModel(null);
     }
   }, []);
+
+  // Export model to TensorRT
+  const handleExportTensorRT = useCallback(async (model: DetectionModelInfo) => {
+    setError(null);
+    try {
+      // Confirm export since it can take a while
+      if (!confirm(`Export "${model.name}" to TensorRT?\n\nThis may take several minutes. The .engine file will be saved alongside the model.`)) {
+        return;
+      }
+
+      setExportingTensorRT(model.id);
+
+      // Generate output path next to the .pt file
+      const outputPath = model.path.replace(/\.pt$/, '.engine');
+
+      const result = await yoloDetectionService.exportToTensorRT(
+        model.path,
+        outputPath,
+        true, // half precision
+        model.imgSize // use same image size as training
+      );
+
+      if (result.success && result.engine_path) {
+        alert(`TensorRT engine exported to:\n${result.engine_path}`);
+        // Refresh model list to show the engine file
+        loadModels();
+      } else {
+        setError(result.error || 'TensorRT export failed');
+      }
+    } catch (err) {
+      setError('TensorRT export failed');
+      console.error('TensorRT export failed:', err);
+    } finally {
+      setExportingTensorRT(null);
+    }
+  }, [loadModels]);
 
   // Delete model
   const handleDeleteModel = useCallback(async (model: DetectionModelInfo) => {
@@ -207,6 +249,22 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
                         <Cpu size={16} />
                       )}
                     </button>
+
+                    {/* TensorRT Export Button - only show if TensorRT is available */}
+                    {tensorrtStatus?.available && (
+                      <button
+                        className="action-button export-tensorrt"
+                        onClick={() => handleExportTensorRT(model)}
+                        disabled={exportingTensorRT === model.id}
+                        title="Export to TensorRT (faster GPU inference)"
+                      >
+                        {exportingTensorRT === model.id ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Zap size={16} />
+                        )}
+                      </button>
+                    )}
 
                     <button
                       className="action-button export"

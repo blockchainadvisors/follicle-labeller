@@ -205,6 +205,16 @@
   color: var(--success);
 }
 
+.yolo-detection-model-manager .action-button.export-tensorrt {
+  color: #f59e0b; /* amber/yellow for TensorRT/lightning */
+}
+
+.yolo-detection-model-manager .action-button.export-tensorrt:hover:not(:disabled) {
+  color: #d97706;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
 .yolo-detection-model-manager .action-button.delete:hover:not(:disabled) {
   color: var(--danger);
   border-color: var(--danger);

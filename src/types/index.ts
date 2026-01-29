@@ -273,6 +273,7 @@ export interface DetectionSettingsExport {
   yoloAutoScaleMode: 'auto' | 'none';
   yoloTrainingImageSize: number;
   yoloTrainingAnnotationSize: number;
+  yoloInferenceBackend: 'pytorch' | 'tensorrt';  // Inference backend selection
 
   // Basic size parameters (for blob detection)
   minWidth: number;
@@ -465,6 +466,14 @@ declare global {
         installPackages: () => Promise<{ success: boolean; error?: string }>;
         onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
       };
+      // File system utilities
+      fileExists: (filePath: string) => Promise<boolean>;
+      // TensorRT Installation API
+      tensorrt: {
+        check: () => Promise<{ available: boolean; version: string | null; canInstall: boolean }>;
+        install: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+      };
       // YOLO Keypoint Training API
       yoloKeypoint: {
         getStatus: () => Promise<YoloKeypointStatus>;
@@ -640,6 +649,13 @@ declare global {
         writeDatasetToTemp: (
           files: Array<{ path: string; content: ArrayBuffer | string }>
         ) => Promise<{ success: boolean; datasetPath?: string; error?: string }>;
+        checkTensorRTAvailable: () => Promise<TensorRTStatus>;
+        exportToTensorRT: (
+          modelPath: string,
+          outputPath?: string,
+          half?: boolean,
+          imgsz?: number
+        ) => Promise<{ success: boolean; engine_path?: string; error?: string }>;
       };
     };
   }
@@ -955,6 +971,19 @@ export interface YoloDetectionStatus {
   /** Currently loaded model path */
   loadedModel: string | null;
 }
+
+/**
+ * TensorRT availability status.
+ */
+export interface TensorRTStatus {
+  /** Whether TensorRT is available on this system */
+  available: boolean;
+  /** TensorRT version if available */
+  version: string | null;
+}
+
+/** Inference backend for YOLO detection */
+export type YoloInferenceBackend = 'pytorch' | 'tensorrt';
 
 /**
  * Extended detection settings including YOLO configuration.

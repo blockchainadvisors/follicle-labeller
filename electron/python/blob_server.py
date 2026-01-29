@@ -107,7 +107,7 @@ if sys.platform == 'win32':
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -1823,7 +1823,8 @@ async def yolo_detect_predict(req: DetectionPredictRequest):
     return {
         'success': True,
         'detections': [r.to_dict() for r in results],
-        'count': len(results)
+        'count': len(results),
+        'backend': service.get_loaded_model_backend()
     }
 
 
@@ -1860,7 +1861,8 @@ async def yolo_detect_predict_tiled(req: DetectionPredictTiledRequest):
         'method': 'tiled',
         'tileSize': req.tileSize or 1024,
         'overlap': req.overlap or 128,
-        'scaleFactor': req.scaleFactor or 1.0
+        'scaleFactor': req.scaleFactor or 1.0,
+        'backend': service.get_loaded_model_backend()
     }
 
 
@@ -1931,6 +1933,60 @@ async def yolo_detect_resumable_models():
     return {
         'models': models
     }
+
+
+@app.get('/yolo-detect/check-tensorrt')
+async def yolo_detect_check_tensorrt():
+    """
+    Check if TensorRT is available on this system.
+
+    Returns:
+        Dict with 'available' bool and 'version' string (or None)
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.check_tensorrt_available()
+
+
+@app.post('/yolo-detect/export-tensorrt')
+async def yolo_detect_export_tensorrt(request: Request):
+    """
+    Export a PyTorch model to TensorRT engine format.
+
+    TensorRT provides GPU-optimized inference for faster detection
+    on NVIDIA GPUs. The exported .engine file is GPU-architecture
+    specific and not portable between different GPU types.
+
+    Body:
+        modelPath: str - Path to source .pt model
+        outputPath: str (optional) - Path for output .engine file
+        half: bool (default True) - Use FP16 precision
+        imgsz: int (default 640) - Input image size for the engine
+
+    Returns:
+        Dict with 'success' bool and 'engine_path' string
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    body = await request.json()
+    model_path = body.get('modelPath')
+    output_path = body.get('outputPath')
+    half = body.get('half', True)
+    imgsz = body.get('imgsz', 640)
+
+    if not model_path:
+        raise HTTPException(status_code=400, detail='modelPath is required')
+
+    service = get_yolo_detection_service()
+    result = service.export_tensorrt(model_path, output_path, half, imgsz)
+
+    if not result.get('success'):
+        raise HTTPException(status_code=500, detail=result.get('error', 'TensorRT export failed'))
+
+    return result
 
 
 # ============================================

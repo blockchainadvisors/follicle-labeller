@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain } from 'lucide-react';
-import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, DetectionModelInfo, DetectionMethod } from '../../types';
+import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, DetectionModelInfo, DetectionMethod, TensorRTStatus, YoloInferenceBackend } from '../../types';
 import { blobService } from '../../services/blobService';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
@@ -72,6 +72,9 @@ export interface DetectionSettings {
 
   // YOLO Keypoint prediction (auto-predict origins for detected follicles)
   useKeypointPrediction: boolean;
+
+  // YOLO inference backend selection (PyTorch or TensorRT)
+  yoloInferenceBackend: YoloInferenceBackend;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -128,6 +131,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   softNMSThreshold: 0.1,
   // YOLO Keypoint prediction (disabled by default - requires loaded model)
   useKeypointPrediction: false,
+  // YOLO inference backend - default to PyTorch
+  yoloInferenceBackend: 'pytorch',
 };
 
 // Install state that can be managed by parent for persistence
@@ -182,6 +187,19 @@ export function DetectionSettingsDialog({
   const [detectionModels, setDetectionModels] = useState<DetectionModelInfo[]>([]);
   const [yoloDetectionAvailable, setYoloDetectionAvailable] = useState(false);
   const [loadingDetectionModels, setLoadingDetectionModels] = useState(false);
+
+  // TensorRT state
+  const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
+  const [tensorrtInstalling, setTensorrtInstalling] = useState(false);
+  const [tensorrtInstallProgress, setTensorrtInstallProgress] = useState<string>('');
+  const [tensorrtInstallError, setTensorrtInstallError] = useState<string | null>(null);
+  const [tensorrtCanInstall, setTensorrtCanInstall] = useState(false);
+
+  // TensorRT export state (for exporting .pt to .engine)
+  const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
+  const [enginePath, setEnginePath] = useState<string | null>(null);
+  const [isExportingEngine, setIsExportingEngine] = useState(false);
+  const [exportEngineError, setExportEngineError] = useState<string | null>(null);
 
   // Draggable dialog state
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -313,7 +331,7 @@ export function DetectionSettingsDialog({
     checkKeypointModels();
   }, []);
 
-  // Check for available YOLO detection models
+  // Check for available YOLO detection models and TensorRT status
   useEffect(() => {
     const checkDetectionModels = async () => {
       setLoadingDetectionModels(true);
@@ -323,7 +341,13 @@ export function DetectionSettingsDialog({
         if (status.available) {
           const models = await yoloDetectionService.listModels();
           setDetectionModels(models);
+          // Check TensorRT availability via Python service
+          const trtStatus = await yoloDetectionService.checkTensorRTAvailable();
+          setTensorrtStatus(trtStatus);
         }
+        // Also check via native API for install capability
+        const nativeTrtStatus = await window.electronAPI.tensorrt.check();
+        setTensorrtCanInstall(nativeTrtStatus.canInstall && !nativeTrtStatus.available);
       } catch (error) {
         console.error('Failed to check detection models:', error);
       } finally {
@@ -331,7 +355,84 @@ export function DetectionSettingsDialog({
       }
     };
     checkDetectionModels();
+
+    // Listen for TensorRT install progress
+    const cleanup = window.electronAPI.tensorrt.onInstallProgress(({ message }) => {
+      setTensorrtInstallProgress(message);
+    });
+
+    return cleanup;
   }, []);
+
+  // Check if TensorRT engine file exists for the current model
+  useEffect(() => {
+    const checkEngineAvailability = async () => {
+      // Only check if TensorRT is available and we have a custom model selected
+      if (!tensorrtStatus?.available) {
+        setEngineAvailable(null);
+        setEnginePath(null);
+        return;
+      }
+
+      // Get the model path
+      let modelPath: string | null = null;
+      if (settings.yoloModelId && settings.yoloModelSource === 'custom') {
+        const selectedModel = detectionModels.find(m => m.id === settings.yoloModelId);
+        if (selectedModel) {
+          modelPath = selectedModel.path;
+        }
+      }
+
+      if (!modelPath) {
+        // Pre-trained model - engine would need to be created differently
+        setEngineAvailable(null);
+        setEnginePath(null);
+        return;
+      }
+
+      // Check if .engine file exists (replace .pt with .engine)
+      const expectedEnginePath = modelPath.replace(/\.pt$/i, '.engine');
+      try {
+        const exists = await window.electronAPI.fileExists(expectedEnginePath);
+        setEngineAvailable(exists);
+        setEnginePath(exists ? expectedEnginePath : modelPath);
+      } catch (error) {
+        console.error('Failed to check engine file:', error);
+        setEngineAvailable(false);
+        setEnginePath(modelPath);
+      }
+    };
+
+    checkEngineAvailability();
+  }, [settings.yoloModelId, settings.yoloModelSource, tensorrtStatus?.available, detectionModels]);
+
+  // Handle TensorRT engine export
+  const handleExportEngine = async () => {
+    if (!enginePath || isExportingEngine) return;
+
+    const modelPath = enginePath.endsWith('.engine')
+      ? enginePath.replace(/\.engine$/i, '.pt')
+      : enginePath;
+
+    setIsExportingEngine(true);
+    setExportEngineError(null);
+
+    try {
+      const result = await yoloDetectionService.exportToTensorRT(modelPath);
+
+      if (result.success && result.engine_path) {
+        setEngineAvailable(true);
+        setEnginePath(result.engine_path);
+        console.log('TensorRT engine exported:', result.engine_path);
+      } else {
+        setExportEngineError(result.error || 'Export failed');
+      }
+    } catch (error) {
+      setExportEngineError(error instanceof Error ? error.message : 'Export failed');
+    } finally {
+      setIsExportingEngine(false);
+    }
+  };
 
   // Handle GPU package installation
   const handleInstallGPU = async () => {
@@ -362,6 +463,40 @@ export function DetectionSettingsDialog({
       }
     } catch (error) {
       updateInstallState({ isInstalling: false, error: error instanceof Error ? error.message : 'Installation failed' });
+    }
+  };
+
+  // Handle TensorRT installation
+  const handleInstallTensorRT = async () => {
+    setTensorrtInstalling(true);
+    setTensorrtInstallError(null);
+    setTensorrtInstallProgress('Starting TensorRT installation...');
+
+    try {
+      const result = await window.electronAPI.tensorrt.install();
+
+      if (result.success) {
+        setTensorrtInstallProgress('Restarting detection server...');
+        // Restart the blob server to pick up new packages
+        await window.electronAPI.blob.restartServer();
+
+        // Notify parent to recreate session
+        onServerRestarted?.();
+
+        // Refresh TensorRT status
+        const trtStatus = await yoloDetectionService.checkTensorRTAvailable();
+        setTensorrtStatus(trtStatus);
+        setTensorrtCanInstall(false);
+
+        setTensorrtInstalling(false);
+        setTensorrtInstallProgress('');
+      } else {
+        setTensorrtInstalling(false);
+        setTensorrtInstallError(result.error || 'TensorRT installation failed');
+      }
+    } catch (error) {
+      setTensorrtInstalling(false);
+      setTensorrtInstallError(error instanceof Error ? error.message : 'TensorRT installation failed');
     }
   };
 
@@ -534,6 +669,101 @@ export function DetectionSettingsDialog({
                     Using pre-trained model or select another model.
                   </span>
                 </div>
+              )}
+
+              {/* Inference Backend Selection */}
+              <div className="settings-row">
+                <label>Inference Backend</label>
+                <select
+                  value={settings.yoloInferenceBackend}
+                  onChange={e => handleChange('yoloInferenceBackend', e.target.value as YoloInferenceBackend)}
+                  disabled={!tensorrtStatus?.available && settings.yoloInferenceBackend !== 'tensorrt'}
+                >
+                  <option value="pytorch">PyTorch (Default)</option>
+                  <option value="tensorrt" disabled={!tensorrtStatus?.available}>
+                    TensorRT {tensorrtStatus?.available ? `(v${tensorrtStatus.version})` : '(Not installed)'}
+                  </option>
+                </select>
+              </div>
+              {/* TensorRT Install Section */}
+              {!tensorrtStatus?.available && tensorrtCanInstall && !tensorrtInstalling && !tensorrtInstallError && (
+                <div className="tensorrt-install-section">
+                  <div className="tensorrt-install-info">
+                    <Zap size={14} />
+                    <span>TensorRT can speed up inference on NVIDIA GPUs</span>
+                  </div>
+                  <button className="tensorrt-install-btn" onClick={handleInstallTensorRT}>
+                    <Download size={14} />
+                    Install TensorRT (~500MB)
+                  </button>
+                </div>
+              )}
+              {tensorrtInstalling && (
+                <div className="tensorrt-install-section installing">
+                  <Loader2 size={14} className="spin" />
+                  <span>{tensorrtInstallProgress || 'Installing TensorRT...'}</span>
+                </div>
+              )}
+              {tensorrtInstallError && !tensorrtInstalling && (
+                <div className="tensorrt-install-section error">
+                  <AlertCircle size={14} />
+                  <span>{tensorrtInstallError}</span>
+                  <button className="tensorrt-retry-btn" onClick={handleInstallTensorRT}>
+                    Retry
+                  </button>
+                </div>
+              )}
+              {!tensorrtStatus?.available && !tensorrtCanInstall && gpuHardware?.hardware.nvidia.found && (
+                <p className="setting-hint tensorrt-hint">
+                  <Zap size={12} />
+                  TensorRT requires CUDA. Install GPU packages first to enable TensorRT support.
+                </p>
+              )}
+              {/* TensorRT engine status for selected model */}
+              {settings.yoloInferenceBackend === 'tensorrt' && tensorrtStatus?.available && settings.yoloModelSource === 'custom' && (
+                <>
+                  {engineAvailable === false && !isExportingEngine && !exportEngineError && (
+                    <div className="tensorrt-export-section">
+                      <div className="tensorrt-export-warning">
+                        <AlertCircle size={14} />
+                        <span>No TensorRT engine found for "{settings.yoloModelName || settings.yoloModelId}"</span>
+                      </div>
+                      <button className="tensorrt-export-btn" onClick={handleExportEngine}>
+                        <Zap size={14} />
+                        Export to TensorRT
+                      </button>
+                      <p className="setting-hint">
+                        Export creates a GPU-optimized .engine file for faster inference.
+                      </p>
+                    </div>
+                  )}
+                  {isExportingEngine && (
+                    <div className="tensorrt-export-section exporting">
+                      <Loader2 size={14} className="spin" />
+                      <span>Exporting to TensorRT... (this may take a few minutes)</span>
+                    </div>
+                  )}
+                  {exportEngineError && !isExportingEngine && (
+                    <div className="tensorrt-export-section error">
+                      <AlertCircle size={14} />
+                      <span>{exportEngineError}</span>
+                      <button className="tensorrt-retry-btn" onClick={handleExportEngine}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  {engineAvailable === true && (
+                    <p className="setting-hint tensorrt-ready">
+                      <Zap size={12} />
+                      TensorRT engine ready. Using GPU-optimized inference.
+                    </p>
+                  )}
+                </>
+              )}
+              {settings.yoloInferenceBackend === 'tensorrt' && tensorrtStatus?.available && settings.yoloModelSource === 'pretrained' && (
+                <p className="setting-hint">
+                  TensorRT requires a custom trained model. Train a model first, then export it to TensorRT.
+                </p>
               )}
 
               {/* Confidence Threshold */}

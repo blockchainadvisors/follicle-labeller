@@ -171,6 +171,7 @@ class YOLODetectionService:
     - Model loading/unloading
     - Inference on full images
     - ONNX export
+    - TensorRT export and inference
     - Model storage
     """
 
@@ -193,6 +194,7 @@ class YOLODetectionService:
         # Currently loaded model for inference
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
+        self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
@@ -665,8 +667,11 @@ class YOLODetectionService:
         """
         Load a trained model for inference.
 
+        Supports both PyTorch (.pt) and TensorRT (.engine) formats.
+        Ultralytics handles TensorRT engines directly.
+
         Args:
-            model_path: Path to model .pt file
+            model_path: Path to model file (.pt or .engine)
 
         Returns:
             True if loaded successfully
@@ -681,12 +686,21 @@ class YOLODetectionService:
                 del self._loaded_model
                 self._loaded_model = None
                 self._loaded_model_path = None
+                self._loaded_model_backend = 'pytorch'
 
-            # Load new model
+            # Detect backend from file extension
+            model_ext = Path(model_path).suffix.lower()
+            if model_ext == '.engine':
+                backend = 'tensorrt'
+            else:
+                backend = 'pytorch'
+
+            # Load new model (Ultralytics handles both .pt and .engine)
             self._loaded_model = YOLO(model_path)
             self._loaded_model_path = model_path
+            self._loaded_model_backend = backend
 
-            logger.info(f"Loaded model: {model_path}")
+            logger.info(f"Loaded model: {model_path} (backend: {backend})")
             return True
 
         except Exception as e:
@@ -1310,6 +1324,86 @@ class YOLODetectionService:
     def get_loaded_model_path(self) -> Optional[str]:
         """Get the path of the currently loaded model."""
         return self._loaded_model_path
+
+    def get_loaded_model_backend(self) -> str:
+        """Get the backend of the currently loaded model ('pytorch' or 'tensorrt')."""
+        return self._loaded_model_backend
+
+    def check_tensorrt_available(self) -> Dict[str, Any]:
+        """
+        Check if TensorRT is available on this system.
+
+        Returns:
+            Dict with 'available' bool and 'version' string (or None)
+        """
+        try:
+            import tensorrt
+            return {"available": True, "version": tensorrt.__version__}
+        except ImportError:
+            return {"available": False, "version": None}
+
+    def export_tensorrt(
+        self,
+        model_path: str,
+        output_path: Optional[str] = None,
+        half: bool = True,
+        imgsz: int = 640
+    ) -> Dict[str, Any]:
+        """
+        Export a PyTorch model to TensorRT engine format.
+
+        TensorRT provides GPU-optimized inference for faster detection
+        on NVIDIA GPUs. The exported .engine file is GPU-architecture
+        specific and not portable between different GPU types.
+
+        Args:
+            model_path: Path to source .pt model
+            output_path: Optional path for output .engine file.
+                        If None, saves alongside the .pt file.
+            half: Use FP16 precision (recommended for consumer GPUs)
+            imgsz: Input image size for the engine
+
+        Returns:
+            Dict with 'success' bool and 'engine_path' string
+        """
+        if not YOLO_AVAILABLE:
+            return {"success": False, "error": "Ultralytics not installed"}
+
+        try:
+            # Check TensorRT availability first
+            trt_status = self.check_tensorrt_available()
+            if not trt_status["available"]:
+                return {
+                    "success": False,
+                    "error": "TensorRT is not installed. Install it with: pip install tensorrt"
+                }
+
+            logger.info(f"Exporting {model_path} to TensorRT (half={half}, imgsz={imgsz})")
+
+            # Load the PyTorch model
+            model = YOLO(model_path)
+
+            # Export to TensorRT format
+            # Ultralytics handles the conversion internally
+            engine_path = model.export(format='engine', half=half, imgsz=imgsz)
+
+            if engine_path and Path(engine_path).exists():
+                # If custom output path requested, move the file
+                if output_path:
+                    output_path = Path(output_path)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.move(engine_path, output_path)
+                    engine_path = str(output_path)
+
+                logger.info(f"TensorRT export successful: {engine_path}")
+                return {"success": True, "engine_path": str(engine_path)}
+            else:
+                return {"success": False, "error": "Export completed but engine file not found"}
+
+        except Exception as e:
+            logger.exception(f"TensorRT export failed: {model_path}")
+            return {"success": False, "error": str(e)}
 
 
 # Singleton instance

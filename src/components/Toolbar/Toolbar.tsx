@@ -1101,13 +1101,41 @@ export const Toolbar: React.FC = () => {
     setIsDetecting(true);
 
     try {
-      // Load model if needed
+      // Load model if needed - select .pt or .engine based on backend setting
       if (detectionSettings.yoloModelId) {
         // Load custom trained model
         const models = await yoloDetectionService.listModels();
         const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
         if (selectedModel) {
-          const loaded = await yoloDetectionService.loadModel(selectedModel.path);
+          let modelPath = selectedModel.path;
+
+          // Check if TensorRT backend is selected
+          if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
+            // Try to use .engine file if it exists
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            const engineExists = await window.electronAPI.fileExists(enginePath);
+            if (engineExists) {
+              modelPath = enginePath;
+              console.log('Using TensorRT engine:', enginePath);
+            } else {
+              console.warn('TensorRT backend selected but no .engine file found. Using PyTorch model.');
+            }
+          } else {
+            // PyTorch backend - ensure we use .pt file
+            if (modelPath.endsWith('.engine')) {
+              const ptPath = modelPath.replace(/\.engine$/i, '.pt');
+              const ptExists = await window.electronAPI.fileExists(ptPath);
+              if (ptExists) {
+                modelPath = ptPath;
+                console.log('Using PyTorch model:', ptPath);
+              } else {
+                // No .pt file - will use .engine file (Ultralytics will use TensorRT for it)
+                console.warn('PyTorch backend selected but no .pt file found. Using TensorRT engine instead.');
+              }
+            }
+          }
+
+          const loaded = await yoloDetectionService.loadModel(modelPath);
           if (!loaded) {
             throw new Error('Failed to load selected YOLO model');
           }
@@ -1120,6 +1148,9 @@ export const Toolbar: React.FC = () => {
 
       // Run YOLO detection (tiled or regular based on settings)
       let predictions: DetectionPrediction[];
+      let actualBackend: string;
+      const inferenceStartTime = performance.now();
+
       if (detectionSettings.yoloUseTiledInference) {
         // Calculate scale factor based on mode
         // "Automatic Detection" always uses imageSize-based scaling
@@ -1144,7 +1175,7 @@ export const Toolbar: React.FC = () => {
         // else mode === 'none', use manual scaleFactor from settings
 
         // Use tiled inference for large images
-        predictions = await yoloDetectionService.predictTiled(
+        const result = await yoloDetectionService.predictTiled(
           imageBase64,
           detectionSettings.yoloConfidenceThreshold,
           detectionSettings.yoloTileSize,
@@ -1152,13 +1183,20 @@ export const Toolbar: React.FC = () => {
           detectionSettings.yoloNmsThreshold,
           scaleFactor
         );
-        console.log(`Tiled YOLO detection: ${predictions.length} follicles (tile_size=${detectionSettings.yoloTileSize}, scale=${scaleFactor}x)`);
+        predictions = result.predictions;
+        actualBackend = result.backend;
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] YOLO (${actualBackend}) tiled inference: ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections (tile_size=${detectionSettings.yoloTileSize}, scale=${scaleFactor}x)`);
       } else {
         // Use regular inference (scales full image)
-        predictions = await yoloDetectionService.predict(
+        const result = await yoloDetectionService.predict(
           imageBase64,
           detectionSettings.yoloConfidenceThreshold
         );
+        predictions = result.predictions;
+        actualBackend = result.backend;
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] YOLO (${actualBackend}) inference: ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections`);
       }
 
       if (predictions.length === 0) {
@@ -1231,6 +1269,7 @@ export const Toolbar: React.FC = () => {
     detectionSettings.yoloScaleFactor,
     detectionSettings.yoloAutoScaleMode,
     detectionSettings.yoloTrainingImageSize,
+    detectionSettings.yoloInferenceBackend,
     getImageBase64,
   ]);
 
@@ -1249,12 +1288,40 @@ export const Toolbar: React.FC = () => {
     setIsDetecting(true);
 
     try {
-      // Load model if needed
+      // Load model if needed - select .pt or .engine based on backend setting
       if (detectionSettings.yoloModelId) {
         const models = await yoloDetectionService.listModels();
         const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
         if (selectedModel) {
-          const loaded = await yoloDetectionService.loadModel(selectedModel.path);
+          let modelPath = selectedModel.path;
+
+          // Check if TensorRT backend is selected
+          if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
+            // Try to use .engine file if it exists
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            const engineExists = await window.electronAPI.fileExists(enginePath);
+            if (engineExists) {
+              modelPath = enginePath;
+              console.log('Using TensorRT engine:', enginePath);
+            } else {
+              console.warn('TensorRT backend selected but no .engine file found. Using PyTorch model.');
+            }
+          } else {
+            // PyTorch backend - ensure we use .pt file
+            if (modelPath.endsWith('.engine')) {
+              const ptPath = modelPath.replace(/\.engine$/i, '.pt');
+              const ptExists = await window.electronAPI.fileExists(ptPath);
+              if (ptExists) {
+                modelPath = ptPath;
+                console.log('Using PyTorch model:', ptPath);
+              } else {
+                // No .pt file - will use .engine file (Ultralytics will use TensorRT for it)
+                console.warn('PyTorch backend selected but no .pt file found. Using TensorRT engine instead.');
+              }
+            }
+          }
+
+          const loaded = await yoloDetectionService.loadModel(modelPath);
           if (!loaded) {
             throw new Error('Failed to load selected YOLO model');
           }
@@ -1294,7 +1361,8 @@ export const Toolbar: React.FC = () => {
       console.log(`YOLO Learn from Selection: ${selectedFollicles.length} selected, avg size ${avgSize.toFixed(1)}px, training ref ${trainingAnnotationSize}px, scale=${scaleFactor}x`);
 
       // Run tiled inference with annotation-based scale factor
-      const predictions = await yoloDetectionService.predictTiled(
+      const inferenceStartTime = performance.now();
+      const result = await yoloDetectionService.predictTiled(
         imageBase64,
         detectionSettings.yoloConfidenceThreshold,
         detectionSettings.yoloTileSize,
@@ -1302,6 +1370,10 @@ export const Toolbar: React.FC = () => {
         detectionSettings.yoloNmsThreshold,
         scaleFactor
       );
+      const predictions = result.predictions;
+      const actualBackend = result.backend;
+      const inferenceTime = performance.now() - inferenceStartTime;
+      console.log(`[BENCHMARK] YOLO Learn from Selection (${actualBackend}): ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections (scale=${scaleFactor}x)`);
 
       if (predictions.length === 0) {
         console.log("No follicles detected by YOLO");
@@ -1371,6 +1443,7 @@ export const Toolbar: React.FC = () => {
     detectionSettings.yoloTileOverlap,
     detectionSettings.yoloNmsThreshold,
     detectionSettings.yoloTrainingAnnotationSize,
+    detectionSettings.yoloInferenceBackend,
     getImageBase64,
   ]);
 
@@ -1412,6 +1485,7 @@ export const Toolbar: React.FC = () => {
       let predictedOrigins: Map<string, FollicleOrigin> | null = null;
       let count = 0;
 
+      const inferenceStartTime = performance.now();
       if (detectionSettings.useKeypointPrediction) {
         const result = await blobService.detectWithKeypoints(blobSessionId, detectSettings);
         detections = result.detections;
@@ -1422,6 +1496,8 @@ export const Toolbar: React.FC = () => {
         detections = result.detections;
         count = result.count;
       }
+      const inferenceTime = performance.now() - inferenceStartTime;
+      console.log(`[BENCHMARK] SimpleBlobDetector: ${inferenceTime.toFixed(0)}ms - ${count} detections`);
 
       if (count === 0) {
         console.log("No follicles detected");
@@ -1550,6 +1626,7 @@ export const Toolbar: React.FC = () => {
         let predictedOrigins: Map<string, FollicleOrigin> | null = null;
         let count = 0;
 
+        const inferenceStartTime = performance.now();
         if (detectionSettings.useKeypointPrediction) {
           const result = await blobService.detectWithKeypoints(blobSessionId, learnedDetectSettings);
           detections = result.detections;
@@ -1560,6 +1637,8 @@ export const Toolbar: React.FC = () => {
           detections = result.detections;
           count = result.count;
         }
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] Learned Blob Detection: ${inferenceTime.toFixed(0)}ms - ${count} detections (tolerance: ${settings.tolerance}%)`);
 
         if (count === 0) {
           console.log("No follicles detected");

@@ -325,6 +325,34 @@ const electronAPI = {
     },
   },
 
+  // File system utilities
+  fileExists: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke("file:exists", filePath),
+
+  // TensorRT Installation API
+  tensorrt: {
+    // Check TensorRT availability and CUDA support
+    check: (): Promise<{
+      available: boolean;
+      version: string | null;
+      canInstall: boolean;
+    }> => ipcRenderer.invoke("tensorrt:check"),
+
+    // Install TensorRT packages
+    install: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("tensorrt:install"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("tensorrt:installProgress", handler);
+      return () => ipcRenderer.removeListener("tensorrt:installProgress", handler);
+    },
+  },
+
   // YOLO Keypoint Training API
   yoloKeypoint: {
     // Check if YOLO dependencies are installed
@@ -777,6 +805,19 @@ const electronAPI = {
       files: Array<{ path: string; content: ArrayBuffer | string }>
     ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
       ipcRenderer.invoke("yolo-detection:writeDatasetToTemp", files),
+
+    // Check if TensorRT is available on this system
+    checkTensorRTAvailable: (): Promise<{ available: boolean; version: string | null }> =>
+      ipcRenderer.invoke("yolo-detection:checkTensorRT"),
+
+    // Export model to TensorRT engine format
+    exportToTensorRT: (
+      modelPath: string,
+      outputPath?: string,
+      half?: boolean,
+      imgsz?: number
+    ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-detection:exportTensorRT", modelPath, outputPath, half, imgsz),
   },
 };
 

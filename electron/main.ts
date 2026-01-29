@@ -22,6 +22,8 @@ import {
   checkYOLODependencies,
   installYOLODependencies,
   upgradePyTorchToCUDA,
+  checkTensorRT,
+  installTensorRT,
 } from "./python-env";
 
 // Set Windows AppUserModelId for proper notifications (must be early)
@@ -1173,6 +1175,36 @@ ipcMain.handle("yolo:upgradeToCUDA", async () => {
 });
 
 // ============================================
+// File System Utilities
+// ============================================
+
+// Check if a file exists
+ipcMain.handle("file:exists", async (_event, filePath: string) => {
+  try {
+    await fs.promises.access(filePath, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+// ============================================
+// TensorRT Installation
+// ============================================
+
+// Check TensorRT availability
+ipcMain.handle("tensorrt:check", async () => {
+  return checkTensorRT();
+});
+
+// Install TensorRT packages
+ipcMain.handle("tensorrt:install", async () => {
+  return installTensorRT((message, percent) => {
+    mainWindow?.webContents.send("tensorrt:installProgress", { message, percent });
+  });
+});
+
+// ============================================
 // YOLO Keypoint Training API
 // ============================================
 
@@ -1840,6 +1872,29 @@ ipcMain.handle("yolo-detection:deleteModel", async (_, modelId: string) => {
     req.end();
   });
 });
+
+// Check TensorRT availability
+ipcMain.handle("yolo-detection:checkTensorRT", async () => {
+  return makeBlobServerRequest("/yolo-detect/check-tensorrt", "GET");
+});
+
+// Export model to TensorRT engine format
+ipcMain.handle(
+  "yolo-detection:exportTensorRT",
+  async (_, modelPath: string, outputPath?: string, half?: boolean, imgsz?: number) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/export-tensorrt",
+      "POST",
+      {
+        modelPath,
+        outputPath,
+        half: half ?? true,
+        imgsz: imgsz ?? 640,
+      },
+      600000 // 10 minute timeout for TensorRT export (can be slow)
+    );
+  }
+);
 
 // Write detection dataset files to temp directory
 ipcMain.handle(

@@ -799,6 +799,172 @@
   line-height: var(--leading-normal);
 }
 
+.setting-hint.tensorrt-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 4px;
+  color: #92400e;
+  margin-top: 8px;
+}
+
+.setting-hint.tensorrt-hint svg {
+  flex-shrink: 0;
+  color: #f59e0b;
+}
+
+/* TensorRT Install Section */
+.tensorrt-install-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  margin-top: 12px;
+}
+
+.tensorrt-install-section.installing {
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--accent, #3b82f6);
+}
+
+.tensorrt-install-section.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #991b1b;
+}
+
+.tensorrt-install-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  color: #92400e;
+  font-size: var(--text-sm);
+}
+
+.tensorrt-install-info svg {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.tensorrt-install-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tensorrt-install-btn:hover {
+  background: #d97706;
+}
+
+.tensorrt-retry-btn {
+  padding: 4px 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #333);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.tensorrt-retry-btn:hover {
+  background: var(--bg-hover, #eee);
+}
+
+/* TensorRT Export Section (for exporting models to .engine) */
+.tensorrt-export-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  margin-top: 12px;
+}
+
+.tensorrt-export-section.exporting {
+  flex-direction: row;
+  align-items: center;
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: var(--accent, #3b82f6);
+}
+
+.tensorrt-export-section.error {
+  flex-direction: row;
+  align-items: center;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #991b1b;
+}
+
+.tensorrt-export-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #92400e;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.tensorrt-export-warning svg {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.tensorrt-export-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #f59e0b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.tensorrt-export-btn:hover {
+  background: #d97706;
+}
+
+.setting-hint.tensorrt-ready {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(34, 197, 94, 0.1);
+  border-radius: 4px;
+  color: #166534;
+  margin-top: 8px;
+}
+
+.setting-hint.tensorrt-ready svg {
+  flex-shrink: 0;
+  color: #22c55e;
+}
+
 .yolo-warning {
   display: flex;
   align-items: center;
