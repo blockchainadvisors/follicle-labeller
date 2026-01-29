@@ -613,6 +613,7 @@ declare global {
             className: string;
           }>;
           count: number;
+          backend?: string;
         }>;
         predictTiled: (
           imageData: string,
@@ -637,6 +638,7 @@ declare global {
           tileSize: number;
           overlap: number;
           scaleFactor: number;
+          backend?: string;
         }>;
         showExportDialog: (
           defaultFileName: string
