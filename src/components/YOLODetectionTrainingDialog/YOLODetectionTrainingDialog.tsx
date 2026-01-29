@@ -578,12 +578,12 @@ export function YOLODetectionTrainingDialog({ onClose }: YOLODetectionTrainingDi
                 {systemInfo.gpu_memory_total_gb && (
                   <div className="gpu-memory">
                     <span>GPU Memory:</span>
-                    <span>{systemInfo.gpu_memory_used_gb?.toFixed(1) || 0} / {systemInfo.gpu_memory_total_gb.toFixed(1)} GB</span>
+                    <span>{systemInfo.gpu_memory_used_gb?.toFixed(1) || '0'} / {systemInfo.gpu_memory_total_gb?.toFixed(1) || '0'} GB</span>
                   </div>
                 )}
                 <div className="system-memory">
                   <span>System Memory:</span>
-                  <span>{systemInfo.memory_used_gb.toFixed(1)} / {systemInfo.memory_total_gb.toFixed(1)} GB</span>
+                  <span>{systemInfo.memory_used_gb?.toFixed(1) || '0'} / {systemInfo.memory_total_gb?.toFixed(1) || '0'} GB</span>
                 </div>
               </div>
 
