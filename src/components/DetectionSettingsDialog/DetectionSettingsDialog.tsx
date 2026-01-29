@@ -1,12 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair } from 'lucide-react';
-import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo } from '../../types';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain } from 'lucide-react';
+import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, DetectionModelInfo, DetectionMethod } from '../../types';
 import { blobService } from '../../services/blobService';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
+import { yoloDetectionService } from '../../services/yoloDetectionService';
 import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
-  // Basic size parameters
+  // Detection method: 'blob' (SimpleBlobDetector) or 'yolo' (YOLO AI)
+  detectionMethod: DetectionMethod;
+
+  // YOLO Detection settings
+  yoloModelId: string | null;  // Selected model ID (null = pre-trained/default)
+  yoloConfidenceThreshold: number;  // Confidence threshold for YOLO (0-1)
+
+  // Basic size parameters (for blob detection)
   minWidth: number;
   maxWidth: number;
   minHeight: number;
@@ -57,6 +65,12 @@ export interface DetectionSettings {
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
+  // Detection method - default to blob detection
+  detectionMethod: 'blob',
+  // YOLO Detection settings
+  yoloModelId: null,
+  yoloConfidenceThreshold: 0.5,
+  // Blob detection size parameters
   minWidth: 10,
   maxWidth: 200,
   minHeight: 10,
@@ -128,6 +142,11 @@ export function DetectionSettingsDialog({
   const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
   const [loadedKeypointModel, setLoadedKeypointModel] = useState<ModelInfo | null>(null);
   const [keypointModelsAvailable, setKeypointModelsAvailable] = useState(false);
+
+  // YOLO Detection models state
+  const [detectionModels, setDetectionModels] = useState<DetectionModelInfo[]>([]);
+  const [yoloDetectionAvailable, setYoloDetectionAvailable] = useState(false);
+  const [loadingDetectionModels, setLoadingDetectionModels] = useState(false);
 
   // Draggable dialog state
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -259,6 +278,26 @@ export function DetectionSettingsDialog({
     checkKeypointModels();
   }, []);
 
+  // Check for available YOLO detection models
+  useEffect(() => {
+    const checkDetectionModels = async () => {
+      setLoadingDetectionModels(true);
+      try {
+        const status = await yoloDetectionService.getStatus();
+        setYoloDetectionAvailable(status.available);
+        if (status.available) {
+          const models = await yoloDetectionService.listModels();
+          setDetectionModels(models);
+        }
+      } catch (error) {
+        console.error('Failed to check detection models:', error);
+      } finally {
+        setLoadingDetectionModels(false);
+      }
+    };
+    checkDetectionModels();
+  }, []);
+
   // Handle GPU package installation
   const handleInstallGPU = async () => {
     updateInstallState({ isInstalling: true, error: null, progress: 'Starting installation...' });
@@ -322,6 +361,87 @@ export function DetectionSettingsDialog({
         </div>
 
         <div className="dialog-content">
+          {/* Detection Method Toggle */}
+          <section className="settings-section detection-method-section">
+            <h3>Detection Method</h3>
+            <div className="detection-method-toggle">
+              <button
+                className={`method-btn ${localSettings.detectionMethod === 'blob' ? 'active' : ''}`}
+                onClick={() => handleChange('detectionMethod', 'blob')}
+              >
+                <Box size={16} />
+                SimpleBlobDetector
+              </button>
+              <button
+                className={`method-btn ${localSettings.detectionMethod === 'yolo' ? 'active' : ''}`}
+                onClick={() => handleChange('detectionMethod', 'yolo')}
+              >
+                <Brain size={16} />
+                YOLO (AI)
+              </button>
+            </div>
+            <p className="method-description">
+              {localSettings.detectionMethod === 'blob'
+                ? 'Uses OpenCV SimpleBlobDetector for classical computer vision based detection. Fast and reliable for uniform images.'
+                : 'Uses YOLO neural network for AI-powered detection. Better for complex images and varied lighting.'}
+            </p>
+          </section>
+
+          {/* YOLO Detection Settings (shown when YOLO method selected) */}
+          {localSettings.detectionMethod === 'yolo' && (
+            <section className="settings-section yolo-detection-section">
+              <h3>YOLO Detection Settings</h3>
+
+              {/* Model Selection */}
+              <div className="settings-row">
+                <label>Model</label>
+                <select
+                  value={localSettings.yoloModelId || 'pretrained'}
+                  onChange={e => handleChange('yoloModelId', e.target.value === 'pretrained' ? null : e.target.value)}
+                  disabled={loadingDetectionModels}
+                >
+                  <option value="pretrained">Pre-trained (yolo11n.pt)</option>
+                  {detectionModels.map(model => (
+                    <option key={model.id} value={model.id}>
+                      {model.name} ({model.epochsTrained} epochs)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Confidence Threshold */}
+              <div className="settings-row">
+                <label>Confidence Threshold</label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="0.9"
+                  step="0.05"
+                  value={localSettings.yoloConfidenceThreshold}
+                  onChange={e => handleChange('yoloConfidenceThreshold', parseFloat(e.target.value))}
+                />
+                <span className="value-display">{(localSettings.yoloConfidenceThreshold * 100).toFixed(0)}%</span>
+              </div>
+              <p className="setting-hint">
+                Higher threshold = fewer but more confident detections. Lower = more detections but possible false positives.
+              </p>
+
+              {/* Service status */}
+              {!yoloDetectionAvailable && (
+                <div className="yolo-warning">
+                  <AlertCircle size={14} />
+                  <span>YOLO service not available. Make sure YOLO dependencies are installed.</span>
+                </div>
+              )}
+
+              {detectionModels.length === 0 && yoloDetectionAvailable && (
+                <div className="yolo-info">
+                  <span>No custom models trained yet. Using pre-trained model for detection.</span>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* GPU Status Indicator */}
           {/* State 1: GPU Active - packages installed and working */}
           {gpuInfo && gpuInfo.activeBackend !== 'cpu' && (

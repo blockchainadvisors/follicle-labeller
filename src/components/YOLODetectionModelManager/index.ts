@@ -1,0 +1,1 @@
+export { YOLODetectionModelManager } from './YOLODetectionModelManager';

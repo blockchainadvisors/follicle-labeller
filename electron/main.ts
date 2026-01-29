@@ -1559,6 +1559,323 @@ ipcMain.handle(
 );
 
 // ============================================
+// YOLO Detection API
+// ============================================
+
+// Active SSE connections for detection training progress
+const activeDetectionSseConnections: Map<string, { request: any; closed: boolean }> =
+  new Map();
+
+// Get YOLO detection service status
+ipcMain.handle("yolo-detection:getStatus", async () => {
+  try {
+    return await makeBlobServerRequest("/yolo-detect/status", "GET");
+  } catch (error) {
+    return {
+      available: false,
+      sseAvailable: false,
+      activeTrainingJobs: 0,
+      loadedModel: null,
+    };
+  }
+});
+
+// Validate detection dataset
+ipcMain.handle("yolo-detection:validateDataset", async (_, datasetPath: string) => {
+  return makeBlobServerRequest("/yolo-detect/validate-dataset", "POST", {
+    datasetPath,
+  });
+});
+
+// Start detection training
+ipcMain.handle(
+  "yolo-detection:startTraining",
+  async (_, datasetPath: string, config: any, modelName?: string) => {
+    return makeBlobServerRequest("/yolo-detect/train/start", "POST", {
+      datasetPath,
+      config,
+      modelName,
+    });
+  }
+);
+
+// Stop detection training
+ipcMain.handle("yolo-detection:stopTraining", async (_, jobId: string) => {
+  return makeBlobServerRequest(`/yolo-detect/train/stop/${jobId}`, "POST");
+});
+
+// Subscribe to detection training progress via SSE
+ipcMain.handle(
+  "yolo-detection:subscribeProgress",
+  async (event, jobId: string) => {
+    const http = require("http");
+
+    // Close any existing connection for this job
+    const existing = activeDetectionSseConnections.get(jobId);
+    if (existing && !existing.closed) {
+      existing.request.destroy();
+      existing.closed = true;
+    }
+
+    return new Promise<void>((resolve) => {
+      const req = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: BLOB_SERVER_PORT,
+          path: `/yolo-detect/train/progress/${jobId}`,
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+            "Cache-Control": "no-cache",
+            Connection: "keep-alive",
+          },
+        },
+        (res: any) => {
+          if (res.statusCode !== 200) {
+            console.error(`Detection SSE connection failed with status ${res.statusCode}`);
+            event.sender.send("yolo-detection:progress-error", jobId, `HTTP ${res.statusCode}`);
+            resolve();
+            return;
+          }
+
+          res.setEncoding("utf8");
+          let buffer = "";
+
+          res.on("data", (chunk: string) => {
+            buffer += chunk;
+            buffer = buffer.replace(/\r\n/g, "\n");
+
+            const events = buffer.split("\n\n");
+            buffer = events.pop() || "";
+
+            for (const eventBlock of events) {
+              if (!eventBlock.trim()) continue;
+
+              const lines = eventBlock.split("\n");
+              let eventType = "message";
+              let eventData = "";
+
+              for (const line of lines) {
+                if (line.startsWith("event:")) {
+                  eventType = line.slice(6).trim();
+                } else if (line.startsWith("data:")) {
+                  eventData = line.slice(5).trim();
+                }
+              }
+
+              if (eventType === "progress" && eventData) {
+                try {
+                  const progress = JSON.parse(eventData);
+                  event.sender.send("yolo-detection:progress", jobId, progress);
+
+                  if (
+                    ["completed", "failed", "stopped"].includes(progress.status)
+                  ) {
+                    event.sender.send("yolo-detection:progress-complete", jobId);
+                    req.destroy();
+                    activeDetectionSseConnections.delete(jobId);
+                  }
+                } catch (e) {
+                  console.error("Failed to parse detection SSE progress:", e);
+                }
+              }
+            }
+          });
+
+          res.on("end", () => {
+            activeDetectionSseConnections.delete(jobId);
+            event.sender.send("yolo-detection:progress-complete", jobId);
+          });
+
+          res.on("error", (err: Error) => {
+            console.error("Detection SSE response error:", err);
+            event.sender.send("yolo-detection:progress-error", jobId, err.message);
+            activeDetectionSseConnections.delete(jobId);
+          });
+
+          resolve();
+        }
+      );
+
+      req.on("error", (err: Error) => {
+        console.error("Detection SSE request error:", err);
+        event.sender.send("yolo-detection:progress-error", jobId, err.message);
+        activeDetectionSseConnections.delete(jobId);
+        resolve();
+      });
+
+      activeDetectionSseConnections.set(jobId, { request: req, closed: false });
+      req.end();
+    });
+  }
+);
+
+// Unsubscribe from detection training progress
+ipcMain.handle("yolo-detection:unsubscribeProgress", async (_, jobId: string) => {
+  const connection = activeDetectionSseConnections.get(jobId);
+  if (connection && !connection.closed) {
+    connection.request.destroy();
+    connection.closed = true;
+  }
+  activeDetectionSseConnections.delete(jobId);
+});
+
+// List detection models
+ipcMain.handle("yolo-detection:listModels", async () => {
+  return makeBlobServerRequest("/yolo-detect/models", "GET");
+});
+
+// Get resumable models (incomplete training with last.pt)
+ipcMain.handle("yolo-detection:getResumableModels", async () => {
+  return makeBlobServerRequest("/yolo-detect/resumable-models", "GET");
+});
+
+// Load detection model
+ipcMain.handle("yolo-detection:loadModel", async (_, modelPath: string) => {
+  return makeBlobServerRequest("/yolo-detect/load-model", "POST", {
+    modelPath,
+  });
+});
+
+// Run detection prediction on full image
+ipcMain.handle(
+  "yolo-detection:predict",
+  async (_, imageData: string, confidenceThreshold: number = 0.5) => {
+    return makeBlobServerRequest("/yolo-detect/predict", "POST", {
+      imageData,
+      confidenceThreshold,
+    });
+  }
+);
+
+// Show save dialog for ONNX export (detection)
+ipcMain.handle(
+  "yolo-detection:showExportDialog",
+  async (_, defaultFileName: string) => {
+    const window = BrowserWindow.getFocusedWindow();
+    if (!window) return { canceled: true };
+
+    const result = await dialog.showSaveDialog(window, {
+      defaultPath: defaultFileName,
+      filters: [{ name: "ONNX Model", extensions: ["onnx"] }],
+    });
+
+    return {
+      canceled: result.canceled,
+      filePath: result.filePath,
+    };
+  }
+);
+
+// Export detection model to ONNX
+ipcMain.handle(
+  "yolo-detection:exportONNX",
+  async (_, modelPath: string, outputPath: string) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/export-onnx",
+      "POST",
+      {
+        modelPath,
+        outputPath,
+      },
+      300000 // 5 minute timeout for ONNX export
+    );
+  }
+);
+
+// Delete detection model
+ipcMain.handle("yolo-detection:deleteModel", async (_, modelId: string) => {
+  const http = require("http");
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: BLOB_SERVER_PORT,
+        path: `/yolo-detect/models/${modelId}`,
+        method: "DELETE",
+        timeout: 10000,
+      },
+      (res: any) => {
+        let data = "";
+        res.on("data", (chunk: string) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch {
+            resolve({ success: res.statusCode < 400 });
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Request timed out"));
+    });
+    req.end();
+  });
+});
+
+// Write detection dataset files to temp directory
+ipcMain.handle(
+  "yolo-detection:writeDatasetToTemp",
+  async (
+    _,
+    files: Array<{ path: string; content: ArrayBuffer | string }>
+  ) => {
+    try {
+      const os = require("os");
+      const crypto = require("crypto");
+      const fsPromises = require("fs").promises;
+
+      // Create unique temp directory
+      const tempId = crypto.randomBytes(8).toString("hex");
+      const datasetPath = path.join(
+        os.tmpdir(),
+        "follicle-labeller-datasets",
+        `detection_dataset_${tempId}`
+      );
+
+      // Create base directory
+      await fsPromises.mkdir(datasetPath, { recursive: true });
+
+      // Write all files
+      for (const file of files) {
+        const filePath = path.join(datasetPath, file.path);
+        const fileDir = path.dirname(filePath);
+
+        // Ensure directory exists
+        await fsPromises.mkdir(fileDir, { recursive: true });
+
+        // Write file content - fix data.yaml to use absolute path
+        if (typeof file.content === "string") {
+          let content = file.content;
+          if (file.path === "data.yaml") {
+            const absolutePath = datasetPath.replace(/\\/g, "/");
+            content = content.replace(/^path:\s*\.?\s*$/m, `path: ${absolutePath}`);
+          }
+          await fsPromises.writeFile(filePath, content, "utf8");
+        } else {
+          await fsPromises.writeFile(filePath, Buffer.from(file.content));
+        }
+      }
+
+      console.log(`[YOLO Detection Dataset] Written ${files.length} files to ${datasetPath}`);
+
+      return { success: true, datasetPath };
+    } catch (error) {
+      console.error("[YOLO Detection Dataset] Error writing dataset:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to write dataset",
+      };
+    }
+  }
+);
+
+// ============================================
 // File Handling
 // ============================================
 

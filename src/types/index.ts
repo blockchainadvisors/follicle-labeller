@@ -444,6 +444,103 @@ declare global {
         ) => Promise<{ success: boolean; outputPath?: string }>;
         deleteModel: (modelId: string) => Promise<{ success: boolean }>;
       };
+      // YOLO Detection Training API
+      yoloDetection: {
+        getStatus: () => Promise<YoloDetectionStatus>;
+        validateDataset: (datasetPath: string) => Promise<{
+          valid: boolean;
+          train_images: number;
+          val_images: number;
+          train_labels: number;
+          val_labels: number;
+          errors: string[];
+          warnings: string[];
+        }>;
+        startTraining: (
+          datasetPath: string,
+          config: {
+            modelSize?: string;
+            epochs?: number;
+            imgSize?: number;
+            batchSize?: number;
+            patience?: number;
+            device?: string;
+            resumeFrom?: string;
+          },
+          modelName?: string
+        ) => Promise<{ jobId: string; status: string }>;
+        stopTraining: (jobId: string) => Promise<{ success: boolean }>;
+        subscribeProgress: (
+          jobId: string,
+          onProgress: (progress: {
+            status: string;
+            epoch: number;
+            totalEpochs: number;
+            loss: number;
+            boxLoss: number;
+            clsLoss: number;
+            dflLoss: number;
+            metrics: Record<string, number>;
+            eta: string;
+            message: string;
+          }) => void,
+          onError: (error: string) => void,
+          onComplete: () => void
+        ) => () => void;
+        listModels: () => Promise<{
+          models: Array<{
+            id: string;
+            name: string;
+            path: string;
+            createdAt: string;
+            epochsTrained: number;
+            imgSize: number;
+            metrics: Record<string, number>;
+          }>;
+        }>;
+        getResumableModels: () => Promise<{
+          models: Array<{
+            id: string;
+            name: string;
+            path: string;
+            createdAt: string;
+            epochsTrained: number;
+            imgSize: number;
+            metrics: Record<string, number>;
+            epochsCompleted: number;
+            totalEpochs: number;
+            canResume: boolean;
+          }>;
+        }>;
+        loadModel: (modelPath: string) => Promise<{ success: boolean }>;
+        predict: (
+          imageData: string,
+          confidenceThreshold?: number
+        ) => Promise<{
+          success: boolean;
+          detections: Array<{
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+            classId: number;
+            className: string;
+          }>;
+          count: number;
+        }>;
+        showExportDialog: (
+          defaultFileName: string
+        ) => Promise<{ canceled: boolean; filePath?: string }>;
+        exportONNX: (
+          modelPath: string,
+          outputPath: string
+        ) => Promise<{ success: boolean; outputPath?: string }>;
+        deleteModel: (modelId: string) => Promise<{ success: boolean }>;
+        writeDatasetToTemp: (
+          files: Array<{ path: string; content: ArrayBuffer | string }>
+        ) => Promise<{ success: boolean; datasetPath?: string; error?: string }>;
+      };
     };
   }
 }
@@ -609,3 +706,204 @@ export interface YoloKeypointStatus {
   /** Number of active training jobs */
   activeTrainingJobs: number;
 }
+
+// ============================================
+// YOLO Detection Training Types
+// ============================================
+
+/** Detection method for auto-detect feature */
+export type DetectionMethod = 'blob' | 'yolo';
+
+/**
+ * Configuration for YOLO detection model training.
+ */
+export interface DetectionTrainingConfig {
+  /** Model size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large) */
+  modelSize: 'n' | 's' | 'm' | 'l';
+  /** Number of training epochs */
+  epochs: number;
+  /** Input image size */
+  imgSize: number;
+  /** Batch size */
+  batchSize: number;
+  /** Early stopping patience */
+  patience: number;
+  /** Training device: 'auto', 'cuda', 'mps', 'cpu' */
+  device: 'auto' | 'cuda' | 'mps' | 'cpu';
+  /** Model ID to resume training from (uses last.pt checkpoint) */
+  resumeFrom?: string;
+}
+
+/**
+ * Default detection training configuration.
+ */
+export const DEFAULT_DETECTION_TRAINING_CONFIG: DetectionTrainingConfig = {
+  modelSize: 'n',
+  epochs: 100,
+  imgSize: 640,
+  batchSize: 16,
+  patience: 50,
+  device: 'auto',
+};
+
+/**
+ * Detection training progress update.
+ */
+export interface DetectionTrainingProgress {
+  /** Current status */
+  status: 'preparing' | 'training' | 'completed' | 'failed' | 'stopped';
+  /** Current epoch */
+  epoch: number;
+  /** Total epochs */
+  totalEpochs: number;
+  /** Total loss */
+  loss: number;
+  /** Box loss */
+  boxLoss: number;
+  /** Classification loss */
+  clsLoss: number;
+  /** Distribution focal loss */
+  dflLoss: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Estimated time remaining */
+  eta: string;
+  /** Status message */
+  message: string;
+}
+
+/**
+ * Single detection prediction (bounding box).
+ */
+export interface DetectionPrediction {
+  /** Top-left X coordinate (pixels) */
+  x: number;
+  /** Top-left Y coordinate (pixels) */
+  y: number;
+  /** Bounding box width (pixels) */
+  width: number;
+  /** Bounding box height (pixels) */
+  height: number;
+  /** Detection confidence (0-1) */
+  confidence: number;
+  /** Class ID (usually 0 for follicle) */
+  classId: number;
+  /** Class name */
+  className: string;
+}
+
+/**
+ * Information about a trained detection model.
+ */
+export interface DetectionModelInfo {
+  /** Model ID (unique identifier) */
+  id: string;
+  /** Model name */
+  name: string;
+  /** Path to model file */
+  path: string;
+  /** Creation timestamp (ISO string) */
+  createdAt: string;
+  /** Number of epochs trained */
+  epochsTrained: number;
+  /** Training image size */
+  imgSize: number;
+  /** Training metrics (mAP50, precision, recall) */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Number of epochs completed (for resumable models) */
+  epochsCompleted?: number;
+  /** Total epochs configured (for resumable models) */
+  totalEpochs?: number;
+  /** Whether this model can be resumed (has last.pt) */
+  canResume?: boolean;
+}
+
+/**
+ * Detection dataset validation result.
+ */
+export interface DetectionDatasetValidation {
+  /** Whether the dataset is valid */
+  valid: boolean;
+  /** Number of training images */
+  trainImages: number;
+  /** Number of validation images */
+  valImages: number;
+  /** Number of training labels */
+  trainLabels: number;
+  /** Number of validation labels */
+  valLabels: number;
+  /** Validation errors */
+  errors: string[];
+  /** Validation warnings */
+  warnings: string[];
+}
+
+/**
+ * YOLO Detection service status.
+ */
+export interface YoloDetectionStatus {
+  /** Whether the service is available */
+  available: boolean;
+  /** Whether SSE streaming is available */
+  sseAvailable: boolean;
+  /** Number of active training jobs */
+  activeTrainingJobs: number;
+  /** Currently loaded model path */
+  loadedModel: string | null;
+}
+
+/**
+ * Extended detection settings including YOLO configuration.
+ */
+export interface DetectionSettings {
+  /** Detection method: 'blob' or 'yolo' */
+  detectionMethod: DetectionMethod;
+  /** Selected YOLO model ID (null = use default/pre-trained) */
+  yoloModelId: string | null;
+  /** YOLO confidence threshold (0-1) */
+  yoloConfidenceThreshold: number;
+  // Blob detection settings
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  useCLAHE: boolean;
+  claheClipLimit: number;
+  claheTileSize: number;
+  darkBlobs: boolean;
+  filterByCircularity: boolean;
+  minCircularity: number;
+  filterByInertia: boolean;
+  minInertiaRatio: number;
+  maxInertiaRatio: number;
+  filterByConvexity: boolean;
+  minConvexity: number;
+}
+
+/**
+ * Default detection settings.
+ */
+export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
+  detectionMethod: 'blob',
+  yoloModelId: null,
+  yoloConfidenceThreshold: 0.5,
+  minWidth: 10,
+  maxWidth: 200,
+  minHeight: 10,
+  maxHeight: 200,
+  useCLAHE: true,
+  claheClipLimit: 3.0,
+  claheTileSize: 8,
+  darkBlobs: true,
+  filterByCircularity: false,
+  minCircularity: 0.1,
+  filterByInertia: true,
+  minInertiaRatio: 0.01,
+  maxInertiaRatio: 1.0,
+  filterByConvexity: false,
+  minConvexity: 0.5,
+};

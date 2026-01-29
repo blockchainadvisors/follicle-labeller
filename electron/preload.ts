@@ -545,6 +545,205 @@ const electronAPI = {
     ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
       ipcRenderer.invoke("yolo-keypoint:writeDatasetToTemp", files),
   },
+
+  // YOLO Detection Training API (for follicle bounding box detection)
+  yoloDetection: {
+    // Get service status
+    getStatus: (): Promise<{
+      available: boolean;
+      sseAvailable: boolean;
+      activeTrainingJobs: number;
+      loadedModel: string | null;
+    }> => ipcRenderer.invoke("yolo-detection:getStatus"),
+
+    // Validate dataset
+    validateDataset: (
+      datasetPath: string
+    ): Promise<{
+      valid: boolean;
+      train_images: number;
+      val_images: number;
+      train_labels: number;
+      val_labels: number;
+      errors: string[];
+      warnings: string[];
+    }> => ipcRenderer.invoke("yolo-detection:validateDataset", datasetPath),
+
+    // Start training
+    startTraining: (
+      datasetPath: string,
+      config: {
+        modelSize?: string;
+        epochs?: number;
+        imgSize?: number;
+        batchSize?: number;
+        patience?: number;
+        device?: string;
+      },
+      modelName?: string
+    ): Promise<{ jobId: string; status: string }> =>
+      ipcRenderer.invoke("yolo-detection:startTraining", datasetPath, config, modelName),
+
+    // Stop training
+    stopTraining: (jobId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:stopTraining", jobId),
+
+    // Subscribe to training progress via IPC (main process proxies SSE)
+    subscribeProgress: (
+      jobId: string,
+      onProgress: (progress: {
+        status: string;
+        epoch: number;
+        totalEpochs: number;
+        loss: number;
+        boxLoss: number;
+        clsLoss: number;
+        dflLoss: number;
+        metrics: Record<string, number>;
+        eta: string;
+        message: string;
+      }) => void,
+      onError: (error: string) => void,
+      onComplete: () => void
+    ): (() => void) => {
+      const progressHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        progress: any
+      ) => {
+        if (receivedJobId !== jobId) return;
+        // Map snake_case to camelCase
+        onProgress({
+          status: progress.status || "",
+          epoch: progress.epoch || 0,
+          totalEpochs: progress.total_epochs || 0,
+          loss: progress.loss || 0,
+          boxLoss: progress.box_loss || 0,
+          clsLoss: progress.cls_loss || 0,
+          dflLoss: progress.dfl_loss || 0,
+          metrics: progress.metrics || {},
+          eta: progress.eta || "",
+          message: progress.message || "",
+        });
+      };
+
+      const errorHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        error: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        onError(error);
+      };
+
+      const completeHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        cleanup();
+        onComplete();
+      };
+
+      // Register listeners
+      ipcRenderer.on("yolo-detection:progress", progressHandler);
+      ipcRenderer.on("yolo-detection:progress-error", errorHandler);
+      ipcRenderer.on("yolo-detection:progress-complete", completeHandler);
+
+      // Start the SSE subscription in main process
+      ipcRenderer.invoke("yolo-detection:subscribeProgress", jobId);
+
+      // Cleanup function
+      const cleanup = () => {
+        ipcRenderer.removeListener("yolo-detection:progress", progressHandler);
+        ipcRenderer.removeListener(
+          "yolo-detection:progress-error",
+          errorHandler
+        );
+        ipcRenderer.removeListener(
+          "yolo-detection:progress-complete",
+          completeHandler
+        );
+        ipcRenderer.invoke("yolo-detection:unsubscribeProgress", jobId);
+      };
+
+      return cleanup;
+    },
+
+    // List trained models
+    listModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+      }>;
+    }> => ipcRenderer.invoke("yolo-detection:listModels"),
+
+    // Get resumable models (incomplete training with last.pt)
+    getResumableModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+        epochsCompleted: number;
+        totalEpochs: number;
+        canResume: boolean;
+      }>;
+    }> => ipcRenderer.invoke("yolo-detection:getResumableModels"),
+
+    // Load model for inference
+    loadModel: (modelPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:loadModel", modelPath),
+
+    // Run detection prediction on full image
+    predict: (
+      imageData: string,
+      confidenceThreshold?: number
+    ): Promise<{
+      success: boolean;
+      detections: Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        confidence: number;
+        classId: number;
+        className: string;
+      }>;
+      count: number;
+    }> => ipcRenderer.invoke("yolo-detection:predict", imageData, confidenceThreshold),
+
+    // Show save dialog for ONNX export
+    showExportDialog: (
+      defaultFileName: string
+    ): Promise<{ canceled: boolean; filePath?: string }> =>
+      ipcRenderer.invoke("yolo-detection:showExportDialog", defaultFileName),
+
+    // Export to ONNX
+    exportONNX: (
+      modelPath: string,
+      outputPath: string
+    ): Promise<{ success: boolean; outputPath?: string }> =>
+      ipcRenderer.invoke("yolo-detection:exportONNX", modelPath, outputPath),
+
+    // Delete model
+    deleteModel: (modelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:deleteModel", modelId),
+
+    // Write dataset files to temp directory (for training from current project)
+    writeDatasetToTemp: (
+      files: Array<{ path: string; content: ArrayBuffer | string }>
+    ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-detection:writeDatasetToTemp", files),
+  },
 };
 
 // Expose the API to the renderer process

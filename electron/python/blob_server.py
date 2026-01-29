@@ -1116,6 +1116,21 @@ except ImportError:
     TrainingProgress = None
     logger.warning("YOLO keypoint service not available")
 
+# Import YOLO detection service
+try:
+    from yolo_detection_service import (
+        get_yolo_detection_service,
+        DetectionTrainingConfig,
+        DetectionTrainingProgress,
+        YOLO_AVAILABLE as YOLO_DETECTION_AVAILABLE
+    )
+except ImportError:
+    YOLO_DETECTION_AVAILABLE = False
+    get_yolo_detection_service = None
+    DetectionTrainingConfig = None
+    DetectionTrainingProgress = None
+    logger.warning("YOLO detection service not available")
+
 # SSE support for training progress
 try:
     from sse_starlette.sse import EventSourceResponse
@@ -1125,8 +1140,11 @@ except ImportError:
     EventSourceResponse = None
     logger.warning("sse-starlette not installed. Training progress streaming will not be available.")
 
-# Training progress queues (for SSE)
+# Training progress queues (for SSE) - shared between keypoint and detection
 training_progress_queues: Dict[str, asyncio.Queue] = {}
+
+# Detection training progress queues (for SSE)
+detection_training_queues: Dict[str, asyncio.Queue] = {}
 
 
 class ValidateDatasetRequest(BaseModel):
@@ -1453,6 +1471,295 @@ async def yolo_system_info():
         logger.warning(f"Error getting torch info: {e}")
 
     return info
+
+
+# ============================================
+# YOLO Detection Training Endpoints
+# ============================================
+
+class DetectionPredictRequest(BaseModel):
+    imageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+
+
+class DetectionValidateDatasetRequest(BaseModel):
+    datasetPath: str
+
+
+class DetectionStartTrainingRequest(BaseModel):
+    datasetPath: str
+    config: Optional[Dict[str, Any]] = None
+    modelName: Optional[str] = None
+
+
+class DetectionLoadModelRequest(BaseModel):
+    modelPath: str
+
+
+class DetectionExportONNXRequest(BaseModel):
+    modelPath: str
+    outputPath: str
+
+
+@app.post('/yolo-detect/validate-dataset')
+async def yolo_detect_validate_dataset(req: DetectionValidateDatasetRequest):
+    """
+    Validate a YOLO detection dataset structure.
+
+    Returns validation result with image/label counts and any errors.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    result = service.validate_dataset(req.datasetPath)
+
+    return result.to_dict()
+
+
+@app.post('/yolo-detect/train/start')
+async def yolo_detect_start_training(req: DetectionStartTrainingRequest):
+    """
+    Start YOLO detection model training.
+
+    Returns job_id for progress tracking.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+
+    # Parse config
+    config_dict = req.config or {}
+    config = DetectionTrainingConfig(
+        model_size=config_dict.get('modelSize', 'n'),
+        epochs=config_dict.get('epochs', 100),
+        img_size=config_dict.get('imgSize', 640),
+        batch_size=config_dict.get('batchSize', 16),
+        patience=config_dict.get('patience', 50),
+        device=config_dict.get('device', 'auto'),
+        resume_from=config_dict.get('resumeFrom'),  # Model ID to resume from
+    )
+
+    # Create progress queue for this job
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    # Capture the event loop BEFORE starting the training thread
+    main_loop = asyncio.get_running_loop()
+
+    def progress_callback(progress: DetectionTrainingProgress):
+        try:
+            logger.info(f"Detection training progress: epoch {progress.epoch}/{progress.total_epochs}, status={progress.status}")
+            asyncio.run_coroutine_threadsafe(
+                progress_queue.put(progress.to_dict()),
+                main_loop
+            )
+        except Exception as e:
+            logger.warning(f"Failed to queue detection progress update: {e}")
+
+    # Start training
+    job_id, _ = await service.train(
+        dataset_path=req.datasetPath,
+        config=config,
+        progress_callback=progress_callback,
+        model_name=req.modelName
+    )
+
+    if job_id:
+        detection_training_queues[job_id] = progress_queue
+
+    return {
+        'jobId': job_id,
+        'status': 'started',
+        'config': config_dict
+    }
+
+
+@app.get('/yolo-detect/train/progress/{job_id}')
+async def yolo_detect_training_progress(job_id: str):
+    """
+    Stream detection training progress via Server-Sent Events.
+    """
+    if not SSE_AVAILABLE:
+        raise HTTPException(status_code=503, detail='SSE not available. Install sse-starlette.')
+
+    if job_id not in detection_training_queues:
+        raise HTTPException(status_code=404, detail='Training job not found')
+
+    queue = detection_training_queues[job_id]
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    # Wait for progress update with timeout
+                    progress = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield {
+                        'event': 'progress',
+                        'data': json.dumps(progress)
+                    }
+
+                    # Check if training is done
+                    status = progress.get('status', '')
+                    if status in ('completed', 'failed', 'stopped'):
+                        break
+
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield {
+                        'event': 'heartbeat',
+                        'data': json.dumps({'status': 'alive'})
+                    }
+
+        finally:
+            # Cleanup queue
+            if job_id in detection_training_queues:
+                del detection_training_queues[job_id]
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post('/yolo-detect/train/stop/{job_id}')
+async def yolo_detect_stop_training(job_id: str):
+    """
+    Stop a running detection training job.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    success = service.stop_training(job_id)
+
+    return {
+        'success': success,
+        'jobId': job_id
+    }
+
+
+@app.get('/yolo-detect/models')
+async def yolo_detect_list_models():
+    """
+    List all trained YOLO detection models.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    models = service.list_models()
+
+    return {
+        'models': [m.to_dict() for m in models]
+    }
+
+
+@app.post('/yolo-detect/load-model')
+async def yolo_detect_load_model(req: DetectionLoadModelRequest):
+    """
+    Load a trained detection model for inference.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    success = service.load_model(req.modelPath)
+
+    return {
+        'success': success,
+        'modelPath': req.modelPath
+    }
+
+
+@app.post('/yolo-detect/predict')
+async def yolo_detect_predict(req: DetectionPredictRequest):
+    """
+    Run detection prediction on a full image.
+    Returns list of bounding boxes with confidence.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+
+    # Run prediction
+    results = service.predict_base64(
+        req.imageData,
+        confidence_threshold=req.confidenceThreshold or 0.5
+    )
+
+    return {
+        'success': True,
+        'detections': [r.to_dict() for r in results],
+        'count': len(results)
+    }
+
+
+@app.post('/yolo-detect/export-onnx')
+async def yolo_detect_export_onnx(req: DetectionExportONNXRequest):
+    """
+    Export a trained detection model to ONNX format.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    output_path = service.export_onnx(req.modelPath, req.outputPath)
+
+    return {
+        'success': output_path is not None,
+        'outputPath': output_path
+    }
+
+
+@app.delete('/yolo-detect/models/{model_id}')
+async def yolo_detect_delete_model(model_id: str):
+    """
+    Delete a trained detection model.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    success = service.delete_model(model_id)
+
+    return {
+        'success': success,
+        'modelId': model_id
+    }
+
+
+@app.get('/yolo-detect/status')
+async def yolo_detect_status():
+    """
+    Get YOLO detection service status.
+    """
+    loaded_model = None
+    if YOLO_DETECTION_AVAILABLE and get_yolo_detection_service:
+        service = get_yolo_detection_service()
+        loaded_model = service.get_loaded_model_path()
+
+    return {
+        'available': YOLO_DETECTION_AVAILABLE,
+        'sseAvailable': SSE_AVAILABLE,
+        'activeTrainingJobs': len(detection_training_queues),
+        'jobIds': list(detection_training_queues.keys()),
+        'loadedModel': loaded_model
+    }
+
+
+@app.get('/yolo-detect/resumable-models')
+async def yolo_detect_resumable_models():
+    """
+    Get list of models that can be resumed (have last.pt and incomplete training).
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    models = service.get_resumable_models()
+
+    return {
+        'models': models
+    }
 
 
 # ============================================

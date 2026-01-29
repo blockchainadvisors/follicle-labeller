@@ -24,6 +24,8 @@ import {
   Brain,
   Database,
   FileUp,
+  Scan,
+  FolderCog,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -60,13 +62,16 @@ import { ShapeToolDropdown } from "../ShapeToolDropdown/ShapeToolDropdown";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
 import { YOLOTrainingDialog } from "../YOLOTrainingDialog";
 import { YOLOModelManager } from "../YOLOModelManager";
+import { YOLODetectionTrainingDialog } from "../YOLODetectionTrainingDialog";
+import { YOLODetectionModelManager } from "../YOLODetectionModelManager";
 import {
   ImportAnnotationsDialog,
   ImportAnalysis,
   ImportOptions,
 } from "../ImportAnnotationsDialog/ImportAnnotationsDialog";
-import { ProjectImage, RectangleAnnotation, FollicleOrigin } from "../../types";
+import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
 import type { BlobDetection } from "../../services/blobService";
+import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { generateId } from "../../utils/id-generator";
 
 // Reusable icon button component
@@ -203,6 +208,8 @@ export const Toolbar: React.FC = () => {
   // State for YOLO training dialogs
   const [showYOLOTraining, setShowYOLOTraining] = useState(false);
   const [showYOLOModelManager, setShowYOLOModelManager] = useState(false);
+  const [showYOLODetectionTraining, setShowYOLODetectionTraining] = useState(false);
+  const [showYOLODetectionModelManager, setShowYOLODetectionModelManager] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
 
@@ -976,8 +983,113 @@ export const Toolbar: React.FC = () => {
     "#00CEC9",
   ];
 
-  // Auto-detect follicles using manual settings
-  const handleSettingsDetect = useCallback(async () => {
+  // Helper to get image as base64
+  const getImageBase64 = useCallback(async (image: ProjectImage): Promise<string> => {
+    // Convert ArrayBuffer to base64
+    const bytes = new Uint8Array(image.imageData);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    // Determine mime type from filename
+    const ext = image.fileName.toLowerCase().split('.').pop();
+    let mimeType = 'image/jpeg';
+    if (ext === 'png') mimeType = 'image/png';
+    else if (ext === 'webp') mimeType = 'image/webp';
+    else if (ext === 'tiff' || ext === 'tif') mimeType = 'image/tiff';
+    else if (ext === 'bmp') mimeType = 'image/bmp';
+
+    return `data:${mimeType};base64,${base64}`;
+  }, []);
+
+  // Auto-detect follicles using YOLO detection
+  const handleYoloDetect = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    setIsDetecting(true);
+
+    try {
+      // Load model if needed
+      if (detectionSettings.yoloModelId) {
+        // Load custom trained model
+        const models = await yoloDetectionService.listModels();
+        const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
+        if (selectedModel) {
+          const loaded = await yoloDetectionService.loadModel(selectedModel.path);
+          if (!loaded) {
+            throw new Error('Failed to load selected YOLO model');
+          }
+        }
+      }
+      // If no model ID is set, the pre-trained model will be downloaded/used automatically
+
+      // Get image as base64
+      const imageBase64 = await getImageBase64(activeImage);
+
+      // Run YOLO detection
+      const predictions = await yoloDetectionService.predict(
+        imageBase64,
+        detectionSettings.yoloConfidenceThreshold
+      );
+
+      if (predictions.length === 0) {
+        console.log("No follicles detected by YOLO");
+        alert("No follicles detected. Try lowering the confidence threshold.");
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert predictions to RECTANGLE annotations
+      const existingCount = follicles.filter(
+        (f) => f.imageId === activeImageId,
+      ).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = predictions.map(
+        (detection: DetectionPrediction, i: number) => ({
+          id: generateId(),
+          imageId: activeImageId,
+          shape: "rectangle" as const,
+          x: detection.x,
+          y: detection.y,
+          width: detection.width,
+          height: detection.height,
+          label: `YOLO ${existingCount + i + 1}`,
+          notes: `YOLO detection (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+          color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+
+      // Import all at once (supports undo as single action)
+      const allFollicles = [...follicles, ...newFollicles];
+      importFollicles(allFollicles);
+
+      console.log(`YOLO detected ${predictions.length} follicles`);
+    } catch (error) {
+      console.error("YOLO detection failed:", error);
+      alert(
+        `YOLO detection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      setIsDetecting(false);
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isDetecting,
+    follicles,
+    importFollicles,
+    detectionSettings.yoloModelId,
+    detectionSettings.yoloConfidenceThreshold,
+    getImageBase64,
+  ]);
+
+  // Auto-detect follicles using manual settings (blob detection)
+  const handleBlobDetect = useCallback(async () => {
     if (!activeImage || !activeImageId || isDetecting) return;
 
     // Check if server is connected
@@ -1088,6 +1200,15 @@ export const Toolbar: React.FC = () => {
     blobSessionId,
     detectionSettings,
   ]);
+
+  // Auto-detect follicles - routes to YOLO or blob based on settings
+  const handleSettingsDetect = useCallback(async () => {
+    if (detectionSettings.detectionMethod === 'yolo') {
+      await handleYoloDetect();
+    } else {
+      await handleBlobDetect();
+    }
+  }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
   // Handle learned detection (from annotations)
   const handleLearnedDetect = useCallback(
@@ -1518,8 +1639,8 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* YOLO Training controls */}
-      <div className="toolbar-group" role="group" aria-label="YOLO Training">
+      {/* YOLO Keypoint Training controls */}
+      <div className="toolbar-group" role="group" aria-label="YOLO Keypoint Training">
         <IconButton
           icon={<Brain size={18} />}
           tooltip="YOLO Keypoint Training"
@@ -1527,8 +1648,24 @@ export const Toolbar: React.FC = () => {
         />
         <IconButton
           icon={<Database size={18} />}
-          tooltip="Manage YOLO Models"
+          tooltip="Manage Keypoint Models"
           onClick={() => setShowYOLOModelManager(true)}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* YOLO Detection Training controls */}
+      <div className="toolbar-group" role="group" aria-label="YOLO Detection Training">
+        <IconButton
+          icon={<Scan size={18} />}
+          tooltip="YOLO Detection Training"
+          onClick={() => setShowYOLODetectionTraining(true)}
+        />
+        <IconButton
+          icon={<FolderCog size={18} />}
+          tooltip="Manage Detection Models"
+          onClick={() => setShowYOLODetectionModelManager(true)}
         />
       </div>
 
@@ -1692,6 +1829,21 @@ export const Toolbar: React.FC = () => {
           onModelLoaded={(modelPath) => {
             console.log('Model loaded:', modelPath);
             setShowYOLOModelManager(false);
+          }}
+        />
+      )}
+
+      {/* YOLO Detection Training Dialog */}
+      {showYOLODetectionTraining && (
+        <YOLODetectionTrainingDialog onClose={() => setShowYOLODetectionTraining(false)} />
+      )}
+
+      {/* YOLO Detection Model Manager Dialog */}
+      {showYOLODetectionModelManager && (
+        <YOLODetectionModelManager
+          onClose={() => setShowYOLODetectionModelManager(false)}
+          onModelLoaded={() => {
+            setShowYOLODetectionModelManager(false);
           }}
         />
       )}
