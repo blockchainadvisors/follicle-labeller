@@ -25,6 +25,22 @@ export interface BlobDetectionOptions {
   useSoftNMS?: boolean;   // Use Soft-NMS instead of Union-Find (default: true)
   softNMSSigma?: number;  // Soft-NMS Gaussian decay sigma (default: 0.5)
   softNMSThreshold?: number; // Soft-NMS minimum score threshold (default: 0.1)
+  // Gaussian blur preprocessing (matches OpenCV pipeline)
+  useGaussianBlur?: boolean;   // Enable Gaussian blur (default: true)
+  gaussianKernelSize?: number; // Kernel size, must be odd (default: 5)
+  // Morphological opening to separate touching objects
+  useMorphOpen?: boolean;      // Enable morphological opening (default: true)
+  morphKernelSize?: number;    // Structuring element size (default: 3)
+  // Circularity filter (DISABLE for elongated shapes like hair follicles)
+  filterByCircularity?: boolean; // Enable circularity filtering (default: false for hair follicles)
+  minCircularity?: number;       // Minimum circularity 0-1, 1=perfect circle (default: 0.2)
+  // Inertia filter (for elongated shapes like hair follicles)
+  filterByInertia?: boolean;     // Enable inertia filtering (default: true for hair follicles)
+  minInertiaRatio?: number;      // Min inertia ratio 0-1, low=elongated OK (default: 0.01)
+  maxInertiaRatio?: number;      // Max inertia ratio 0-1, 1=circular (default: 1.0)
+  // Convexity filter
+  filterByConvexity?: boolean;   // Enable convexity filtering (default: false)
+  minConvexity?: number;         // Minimum convexity 0-1, 1=perfectly convex (default: 0.5)
 }
 
 export interface DetectedBlob {
@@ -97,6 +113,13 @@ export interface CircleAnnotation extends BaseAnnotation {
   radius: number;
 }
 
+// Follicle origin data (where follicle enters skin and growth direction)
+export interface FollicleOrigin {
+  originPoint: Point;      // Where follicle enters skin (image coordinates)
+  directionAngle: number;  // Direction in radians
+  directionLength: number; // Arrow length in pixels
+}
+
 // Rectangle annotation
 export interface RectangleAnnotation extends BaseAnnotation {
   shape: 'rectangle';
@@ -104,6 +127,7 @@ export interface RectangleAnnotation extends BaseAnnotation {
   y: number;           // Top-left y
   width: number;
   height: number;
+  origin?: FollicleOrigin;  // When set, rectangle is "locked" (no resize)
 }
 
 // Linear annotation (rotated rectangle defined by centerline + half-width)
@@ -198,6 +222,11 @@ export interface AnnotationExport {
   y?: number;
   width?: number;
   height?: number;
+  // Rectangle origin properties (follicle entry point and direction)
+  originX?: number;
+  originY?: number;
+  directionAngle?: number;
+  directionLength?: number;
   // Linear properties
   startX?: number;
   startY?: number;
@@ -226,6 +255,81 @@ export interface AnnotationExportV2 extends AnnotationExport {
   imageId: ImageId;
 }
 
+// Detection settings export format (for project file persistence)
+export interface DetectionSettingsExport {
+  // Detection method
+  detectionMethod: 'blob' | 'yolo';
+
+  // YOLO Detection settings
+  yoloModelId: string | null;
+  yoloModelName: string | null;  // Human-readable model name for cross-machine display
+  yoloModelSource: 'pretrained' | 'custom';  // Model type for validation
+  yoloConfidenceThreshold: number;
+  yoloUseTiledInference: boolean;
+  yoloTileSize: number;
+  yoloTileOverlap: number;
+  yoloNmsThreshold: number;
+  yoloScaleFactor: number;
+  yoloAutoScaleMode: 'auto' | 'none';
+  yoloTrainingImageSize: number;
+  yoloTrainingAnnotationSize: number;
+  yoloInferenceBackend: 'pytorch' | 'tensorrt';  // Inference backend selection
+
+  // Basic size parameters (for blob detection)
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  darkBlobs: boolean;
+
+  // Backend selection
+  forceCPU: boolean;
+
+  // Gaussian blur preprocessing
+  useGaussianBlur: boolean;
+  gaussianKernelSize: number;
+
+  // Morphological opening
+  useMorphOpen: boolean;
+  morphKernelSize: number;
+
+  // Circularity filter
+  useCircularityFilter: boolean;
+  minCircularity: number;
+
+  // Inertia filter
+  useInertiaFilter: boolean;
+  minInertiaRatio: number;
+  maxInertiaRatio: number;
+
+  // Convexity filter
+  useConvexityFilter: boolean;
+  minConvexity: number;
+
+  // CLAHE preprocessing
+  useCLAHE: boolean;
+  claheClipLimit: number;
+  claheTileSize: number;
+
+  // SAHI-style tiling
+  useSAHI: boolean;
+  tileSize: number;
+  tileOverlap: number;
+
+  // Soft-NMS
+  useSoftNMS: boolean;
+  softNMSSigma: number;
+  softNMSThreshold: number;
+
+  // YOLO Keypoint prediction
+  useKeypointPrediction: boolean;
+}
+
+// Project settings container
+export interface ProjectSettings {
+  detection?: DetectionSettingsExport;
+}
+
 export interface ImageManifestEntry {
   id: ImageId;
   fileName: string;
@@ -234,6 +338,7 @@ export interface ImageManifestEntry {
   height: number;
   sortOrder: number;
   viewport: Viewport;
+  detectionSettings?: Partial<DetectionSettingsExport>;  // Optional per-image override
 }
 
 export interface ProjectManifestV2 {
@@ -245,6 +350,7 @@ export interface ProjectManifestV2 {
     annotationCount: number;
   };
   images: ImageManifestEntry[];
+  settings?: ProjectSettings;  // Optional global settings (backward compatible)
 }
 
 export interface AnnotationsFileV2 {
@@ -257,6 +363,11 @@ declare global {
     electronAPI: {
       // Single image dialog (for adding images)
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
+      // Generic file dialog with filters
+      openFileDialog: (options: {
+        filters?: Array<{ name: string; extensions: string[] }>;
+        title?: string;
+      }) => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
       // Legacy V1 operations (still supported for backward compatibility)
       saveProject: (imageData: ArrayBuffer, imageFileName: string, jsonData: string) => Promise<boolean>;
       loadProject: () => Promise<{ imageFileName: string; imageData: ArrayBuffer; jsonData: string } | null>;
@@ -337,6 +448,716 @@ declare global {
         checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
         getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
       };
+      // BLOB Detection Server API
+      blob: {
+        startServer: () => Promise<{ success: boolean; error?: string }>;
+        stopServer: () => Promise<{ success: boolean }>;
+        isAvailable: () => Promise<boolean>;
+        checkPython: () => Promise<{ available: boolean; version?: string; error?: string }>;
+        getServerInfo: () => Promise<{ port: number; running: boolean; scriptPath: string }>;
+        getSetupStatus: () => Promise<string>;
+        onSetupProgress: (callback: (status: string) => void) => () => void;
+        getGPUInfo: () => Promise<GPUInfo>;
+        restartServer: () => Promise<{ success: boolean; error?: string }>;
+      };
+      // GPU Hardware Detection & Package Installation API
+      gpu: {
+        getHardwareInfo: () => Promise<GPUHardwareInfo>;
+        installPackages: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+      };
+      // File system utilities
+      fileExists: (filePath: string) => Promise<boolean>;
+      // TensorRT Installation API
+      tensorrt: {
+        check: () => Promise<{ available: boolean; version: string | null; canInstall: boolean }>;
+        install: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+      };
+      // Model Export/Import API
+      model: {
+        exportPackage: (
+          modelId: string,
+          modelPath: string,
+          config: Record<string, unknown>
+        ) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
+        previewPackage: () => Promise<{
+          valid: boolean;
+          filePath?: string;
+          config?: Record<string, unknown>;
+          hasEngine?: boolean;
+          canceled?: boolean;
+          error?: string;
+        }>;
+        importPackage: (
+          filePath: string,
+          newModelName?: string
+        ) => Promise<{
+          success: boolean;
+          modelId?: string;
+          modelPath?: string;
+          modelName?: string;
+          error?: string;
+        }>;
+      };
+      // YOLO Keypoint Training API
+      yoloKeypoint: {
+        getStatus: () => Promise<YoloKeypointStatus>;
+        getSystemInfo: () => Promise<{
+          python_version: string;
+          platform: string;
+          cpu_count: number;
+          cpu_percent: number;
+          memory_total_gb: number;
+          memory_used_gb: number;
+          memory_percent: number;
+          device: string;
+          device_name: string;
+          cuda_available: boolean;
+          mps_available: boolean;
+          torch_version: string | null;
+          gpu_memory_total_gb: number | null;
+          gpu_memory_used_gb: number | null;
+        }>;
+        checkDependencies: () => Promise<YoloDependenciesInfo>;
+        installDependencies: () => Promise<{ success: boolean; error?: string }>;
+        upgradeToCUDA: () => Promise<{ success: boolean; error?: string }>;
+        onInstallProgress: (callback: (data: { message: string; percent?: number }) => void) => () => void;
+        validateDataset: (datasetPath: string) => Promise<DatasetValidation>;
+        writeDatasetToTemp: (
+          files: Array<{ path: string; content: ArrayBuffer | string }>
+        ) => Promise<{ success: boolean; datasetPath?: string; error?: string }>;
+        startTraining: (
+          datasetPath: string,
+          config: TrainingConfig,
+          modelName?: string
+        ) => Promise<{ jobId: string; status: string }>;
+        stopTraining: (jobId: string) => Promise<{ success: boolean }>;
+        subscribeProgress: (
+          jobId: string,
+          onProgress: (progress: TrainingProgress) => void,
+          onError: (error: string) => void,
+          onComplete: () => void
+        ) => () => void;
+        listModels: () => Promise<{ models: ModelInfo[] }>;
+        loadModel: (modelPath: string) => Promise<{ success: boolean }>;
+        predict: (imageData: string) => Promise<{
+          success: boolean;
+          prediction?: KeypointPrediction;
+          message?: string;
+        }>;
+        showExportDialog: (
+          defaultFileName: string
+        ) => Promise<{ canceled: boolean; filePath?: string }>;
+        exportONNX: (
+          modelPath: string,
+          outputPath: string
+        ) => Promise<{ success: boolean; outputPath?: string }>;
+        deleteModel: (modelId: string) => Promise<{ success: boolean }>;
+      };
+      // YOLO Detection Training API
+      yoloDetection: {
+        getStatus: () => Promise<YoloDetectionStatus>;
+        validateDataset: (datasetPath: string) => Promise<{
+          valid: boolean;
+          train_images: number;
+          val_images: number;
+          train_labels: number;
+          val_labels: number;
+          errors: string[];
+          warnings: string[];
+        }>;
+        startTraining: (
+          datasetPath: string,
+          config: {
+            modelSize?: string;
+            epochs?: number;
+            imgSize?: number;
+            batchSize?: number;
+            patience?: number;
+            device?: string;
+            resumeFrom?: string;
+          },
+          modelName?: string
+        ) => Promise<{ jobId: string; status: string }>;
+        stopTraining: (jobId: string) => Promise<{ success: boolean }>;
+        subscribeProgress: (
+          jobId: string,
+          onProgress: (progress: {
+            status: string;
+            epoch: number;
+            totalEpochs: number;
+            loss: number;
+            boxLoss: number;
+            clsLoss: number;
+            dflLoss: number;
+            metrics: Record<string, number>;
+            eta: string;
+            message: string;
+          }) => void,
+          onError: (error: string) => void,
+          onComplete: () => void
+        ) => () => void;
+        listModels: () => Promise<{
+          models: Array<{
+            id: string;
+            name: string;
+            path: string;
+            createdAt: string;
+            epochsTrained: number;
+            imgSize: number;
+            metrics: Record<string, number>;
+          }>;
+        }>;
+        getResumableModels: () => Promise<{
+          models: Array<{
+            id: string;
+            name: string;
+            path: string;
+            createdAt: string;
+            epochsTrained: number;
+            imgSize: number;
+            metrics: Record<string, number>;
+            epochsCompleted: number;
+            totalEpochs: number;
+            canResume: boolean;
+          }>;
+        }>;
+        loadModel: (modelPath: string) => Promise<{ success: boolean }>;
+        predict: (
+          imageData: string,
+          confidenceThreshold?: number
+        ) => Promise<{
+          success: boolean;
+          detections: Array<{
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+            classId: number;
+            className: string;
+          }>;
+          count: number;
+          backend?: string;
+        }>;
+        predictTiled: (
+          imageData: string,
+          confidenceThreshold?: number,
+          tileSize?: number,
+          overlap?: number,
+          nmsThreshold?: number,
+          scaleFactor?: number
+        ) => Promise<{
+          success: boolean;
+          detections: Array<{
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            confidence: number;
+            classId: number;
+            className: string;
+          }>;
+          count: number;
+          method: string;
+          tileSize: number;
+          overlap: number;
+          scaleFactor: number;
+          backend?: string;
+        }>;
+        showExportDialog: (
+          defaultFileName: string
+        ) => Promise<{ canceled: boolean; filePath?: string }>;
+        exportONNX: (
+          modelPath: string,
+          outputPath: string
+        ) => Promise<{ success: boolean; outputPath?: string }>;
+        deleteModel: (modelId: string) => Promise<{ success: boolean }>;
+        writeDatasetToTemp: (
+          files: Array<{ path: string; content: ArrayBuffer | string }>
+        ) => Promise<{ success: boolean; datasetPath?: string; error?: string }>;
+        checkTensorRTAvailable: () => Promise<TensorRTStatus>;
+        exportToTensorRT: (
+          modelPath: string,
+          outputPath?: string,
+          half?: boolean,
+          imgsz?: number
+        ) => Promise<{ success: boolean; engine_path?: string; error?: string }>;
+      };
     };
   }
 }
+
+// GPU Backend Info
+export interface GPUInfo {
+  activeBackend: 'cuda' | 'mps' | 'cpu';
+  deviceName: string;
+  memoryGB?: number;
+  available: {
+    cuda: boolean;
+    mps: boolean;
+  };
+}
+
+// GPU Hardware Info (for detection before packages installed)
+export interface GPUHardwareInfo {
+  hardware: {
+    nvidia: { found: boolean; name?: string; driver_version?: string };
+    apple_silicon: { found: boolean; chip?: string };
+  };
+  packages: { cupy: boolean; torch: boolean };
+  canEnableGpu: boolean;
+  gpuEnabled: boolean;
+}
+
+// ============================================
+// YOLO Keypoint Training Types
+// ============================================
+
+/**
+ * Configuration for YOLO keypoint model training.
+ */
+export interface TrainingConfig {
+  /** Model size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large) */
+  modelSize: 'n' | 's' | 'm' | 'l';
+  /** Number of training epochs */
+  epochs: number;
+  /** Input image size */
+  imgSize: number;
+  /** Batch size */
+  batchSize: number;
+  /** Early stopping patience */
+  patience: number;
+  /** Training device: 'auto', 'cuda', 'mps', 'cpu' */
+  device: 'auto' | 'cuda' | 'mps' | 'cpu';
+}
+
+/**
+ * Default training configuration.
+ */
+export const DEFAULT_TRAINING_CONFIG: TrainingConfig = {
+  modelSize: 'n',
+  epochs: 100,
+  imgSize: 640,
+  batchSize: 16,
+  patience: 50,
+  device: 'auto',
+};
+
+/**
+ * Training progress update.
+ */
+export interface TrainingProgress {
+  /** Current status */
+  status: 'preparing' | 'training' | 'completed' | 'failed' | 'stopped';
+  /** Current epoch */
+  epoch: number;
+  /** Total epochs */
+  totalEpochs: number;
+  /** Total loss */
+  loss: number;
+  /** Box loss */
+  boxLoss: number;
+  /** Pose/keypoint loss */
+  poseLoss: number;
+  /** Keypoint objectness loss */
+  kobjLoss: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Estimated time remaining */
+  eta: string;
+  /** Status message */
+  message: string;
+}
+
+/**
+ * Keypoint prediction result.
+ */
+export interface KeypointPrediction {
+  /** Origin point (where follicle enters skin) */
+  origin: Point;
+  /** Direction endpoint (indicates growth direction) */
+  directionEndpoint: Point;
+  /** Prediction confidence */
+  confidence: number;
+}
+
+/**
+ * Information about a trained model.
+ */
+export interface ModelInfo {
+  /** Model ID (unique identifier) */
+  id: string;
+  /** Model name */
+  name: string;
+  /** Path to model file */
+  path: string;
+  /** Creation timestamp (ISO string) */
+  createdAt: string;
+  /** Number of epochs trained */
+  epochsTrained: number;
+  /** Training image size */
+  imgSize: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+}
+
+/**
+ * Dataset validation result.
+ */
+export interface DatasetValidation {
+  /** Whether the dataset is valid */
+  valid: boolean;
+  /** Number of training images */
+  trainImages: number;
+  /** Number of validation images */
+  valImages: number;
+  /** Number of training labels */
+  trainLabels: number;
+  /** Number of validation labels */
+  valLabels: number;
+  /** Validation errors */
+  errors: string[];
+  /** Validation warnings */
+  warnings: string[];
+}
+
+/**
+ * YOLO dependencies installation status.
+ */
+export interface YoloDependenciesInfo {
+  /** Whether all dependencies are installed */
+  installed: boolean;
+  /** List of missing packages */
+  missing: string[];
+  /** Estimated download size */
+  estimatedSize: string;
+}
+
+/**
+ * YOLO Keypoint service status.
+ */
+export interface YoloKeypointStatus {
+  /** Whether the service is available */
+  available: boolean;
+  /** Whether SSE streaming is available */
+  sseAvailable: boolean;
+  /** Number of active training jobs */
+  activeTrainingJobs: number;
+}
+
+// ============================================
+// YOLO Detection Training Types
+// ============================================
+
+/** Detection method for auto-detect feature */
+export type DetectionMethod = 'blob' | 'yolo';
+
+/**
+ * Configuration for YOLO detection model training.
+ */
+export interface DetectionTrainingConfig {
+  /** Model size: 'n' (nano), 's' (small), 'm' (medium), 'l' (large) */
+  modelSize: 'n' | 's' | 'm' | 'l';
+  /** Number of training epochs */
+  epochs: number;
+  /** Input image size */
+  imgSize: number;
+  /** Batch size */
+  batchSize: number;
+  /** Early stopping patience */
+  patience: number;
+  /** Training device: 'auto', 'cuda', 'mps', 'cpu' */
+  device: 'auto' | 'cuda' | 'mps' | 'cpu';
+  /** Model ID to resume training from (uses last.pt checkpoint) */
+  resumeFrom?: string;
+}
+
+/**
+ * Default detection training configuration.
+ */
+export const DEFAULT_DETECTION_TRAINING_CONFIG: DetectionTrainingConfig = {
+  modelSize: 'n',
+  epochs: 100,
+  imgSize: 640,
+  batchSize: 16,
+  patience: 50,
+  device: 'auto',
+};
+
+/**
+ * Detection training progress update.
+ */
+export interface DetectionTrainingProgress {
+  /** Current status */
+  status: 'preparing' | 'training' | 'completed' | 'failed' | 'stopped';
+  /** Current epoch */
+  epoch: number;
+  /** Total epochs */
+  totalEpochs: number;
+  /** Total loss */
+  loss: number;
+  /** Box loss */
+  boxLoss: number;
+  /** Classification loss */
+  clsLoss: number;
+  /** Distribution focal loss */
+  dflLoss: number;
+  /** Training metrics */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Estimated time remaining */
+  eta: string;
+  /** Status message */
+  message: string;
+}
+
+/**
+ * Single detection prediction (bounding box).
+ */
+export interface DetectionPrediction {
+  /** Top-left X coordinate (pixels) */
+  x: number;
+  /** Top-left Y coordinate (pixels) */
+  y: number;
+  /** Bounding box width (pixels) */
+  width: number;
+  /** Bounding box height (pixels) */
+  height: number;
+  /** Detection confidence (0-1) */
+  confidence: number;
+  /** Class ID (usually 0 for follicle) */
+  classId: number;
+  /** Class name */
+  className: string;
+}
+
+/**
+ * Information about a trained detection model.
+ */
+export interface DetectionModelInfo {
+  /** Model ID (unique identifier) */
+  id: string;
+  /** Model name */
+  name: string;
+  /** Path to model file */
+  path: string;
+  /** Creation timestamp (ISO string) */
+  createdAt: string;
+  /** Number of epochs trained */
+  epochsTrained: number;
+  /** Training image size */
+  imgSize: number;
+  /** Training metrics (mAP50, precision, recall) */
+  metrics: {
+    [key: string]: number;
+  };
+  /** Number of epochs completed (for resumable models) */
+  epochsCompleted?: number;
+  /** Total epochs configured (for resumable models) */
+  totalEpochs?: number;
+  /** Whether this model can be resumed (has last.pt) */
+  canResume?: boolean;
+}
+
+/**
+ * Detection dataset validation result.
+ */
+export interface DetectionDatasetValidation {
+  /** Whether the dataset is valid */
+  valid: boolean;
+  /** Number of training images */
+  trainImages: number;
+  /** Number of validation images */
+  valImages: number;
+  /** Number of training labels */
+  trainLabels: number;
+  /** Number of validation labels */
+  valLabels: number;
+  /** Validation errors */
+  errors: string[];
+  /** Validation warnings */
+  warnings: string[];
+}
+
+/**
+ * YOLO Detection service status.
+ */
+export interface YoloDetectionStatus {
+  /** Whether the service is available */
+  available: boolean;
+  /** Whether SSE streaming is available */
+  sseAvailable: boolean;
+  /** Number of active training jobs */
+  activeTrainingJobs: number;
+  /** Currently loaded model path */
+  loadedModel: string | null;
+}
+
+/**
+ * TensorRT availability status.
+ */
+export interface TensorRTStatus {
+  /** Whether TensorRT is available on this system */
+  available: boolean;
+  /** TensorRT version if available */
+  version: string | null;
+}
+
+/** Inference backend for YOLO detection */
+export type YoloInferenceBackend = 'pytorch' | 'tensorrt';
+
+// ============================================
+// COCO JSON Format Types
+// ============================================
+
+/**
+ * COCO format info section
+ */
+export interface COCOInfo {
+  description: string;
+  version: string;
+  year?: number;
+  contributor?: string;
+  date_created?: string;
+}
+
+/**
+ * COCO format image entry
+ */
+export interface COCOImage {
+  id: number;
+  file_name: string;
+  width: number;
+  height: number;
+  date_captured?: string;
+}
+
+/**
+ * COCO format annotation entry
+ */
+export interface COCOAnnotation {
+  id: number;
+  image_id: number;
+  category_id: number;
+  /** Bounding box in [x, y, width, height] format (top-left origin) */
+  bbox: [number, number, number, number];
+  /** Area of the bounding box */
+  area: number;
+  /** 0 = single object, 1 = crowd */
+  iscrowd: 0 | 1;
+  /** Optional segmentation (not used for bounding box detection) */
+  segmentation?: number[][] | { counts: number[]; size: [number, number] };
+  /**
+   * Optional keypoints in [x1, y1, v1, x2, y2, v2, ...] format
+   * v = 0: not labeled, 1: labeled but not visible, 2: labeled and visible
+   */
+  keypoints?: number[];
+  /** Number of keypoints with v > 0 */
+  num_keypoints?: number;
+}
+
+/**
+ * COCO format category entry
+ */
+export interface COCOCategory {
+  id: number;
+  name: string;
+  supercategory?: string;
+  /** Keypoint names for pose estimation */
+  keypoints?: string[];
+  /** Skeleton connections for visualization */
+  skeleton?: [number, number][];
+}
+
+/**
+ * Complete COCO dataset format
+ */
+export interface COCODataset {
+  info: COCOInfo;
+  images: COCOImage[];
+  annotations: COCOAnnotation[];
+  categories: COCOCategory[];
+  /** Optional licenses */
+  licenses?: Array<{
+    id: number;
+    name: string;
+    url: string;
+  }>;
+}
+
+/**
+ * Options for COCO export
+ */
+export interface COCOExportOptions {
+  /** Include keypoints (origin/direction) in export */
+  includeKeypoints: boolean;
+  /** Export images alongside JSON (creates ZIP) */
+  exportImages: boolean;
+  /** Category name for annotations (default: "follicle") */
+  categoryName?: string;
+}
+
+/**
+ * Extended detection settings including YOLO configuration.
+ */
+export interface DetectionSettings {
+  /** Detection method: 'blob' or 'yolo' */
+  detectionMethod: DetectionMethod;
+  /** Selected YOLO model ID (null = use default/pre-trained) */
+  yoloModelId: string | null;
+  /** Human-readable model name for display */
+  yoloModelName: string | null;
+  /** Model type: 'pretrained' or 'custom' */
+  yoloModelSource: 'pretrained' | 'custom';
+  /** YOLO confidence threshold (0-1) */
+  yoloConfidenceThreshold: number;
+  // Blob detection settings
+  minWidth: number;
+  maxWidth: number;
+  minHeight: number;
+  maxHeight: number;
+  useCLAHE: boolean;
+  claheClipLimit: number;
+  claheTileSize: number;
+  darkBlobs: boolean;
+  filterByCircularity: boolean;
+  minCircularity: number;
+  filterByInertia: boolean;
+  minInertiaRatio: number;
+  maxInertiaRatio: number;
+  filterByConvexity: boolean;
+  minConvexity: number;
+}
+
+/**
+ * Default detection settings.
+ */
+export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
+  detectionMethod: 'blob',
+  yoloModelId: null,
+  yoloModelName: null,
+  yoloModelSource: 'pretrained',
+  yoloConfidenceThreshold: 0.5,
+  minWidth: 10,
+  maxWidth: 200,
+  minHeight: 10,
+  maxHeight: 200,
+  useCLAHE: true,
+  claheClipLimit: 3.0,
+  claheTileSize: 8,
+  darkBlobs: true,
+  filterByCircularity: false,
+  minCircularity: 0.1,
+  filterByInertia: true,
+  minInertiaRatio: 0.01,
+  maxInertiaRatio: 1.0,
+  filterByConvexity: false,
+  minConvexity: 0.5,
+};

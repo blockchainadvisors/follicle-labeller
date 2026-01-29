@@ -1,6 +1,6 @@
 {
   "name": "follicle-labeller",
-  "version": "1.2.1",
+  "version": "2.2.1",
   "description": "Medical image follicle annotation tool",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,8 @@
     "electron:build": "npm run version:sync && npm run build && electron-builder",
     "electron:build:win": "npm run version:sync && npm run build && electron-builder --win",
     "electron:build:mac": "npm run version:sync && npm run build && electron-builder --mac",
-    "electron:build:all": "npm run version:sync && npm run build && electron-builder --win --mac"
+    "electron:build:all": "npm run version:sync && npm run build && electron-builder --win --mac",
+    "test:benchmark": "tsx test/blob-detection-benchmark/index.ts"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",
@@ -41,6 +42,7 @@
     "icns-lib": "^1.0.1",
     "png-to-ico": "^3.0.1",
     "sharp": "^0.34.5",
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.10",
     "vite-plugin-electron": "^0.28.0",

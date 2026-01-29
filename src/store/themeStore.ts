@@ -6,6 +6,7 @@ export interface ThemeColors {
   bgPrimary: string;
   bgSecondary: string;
   bgTertiary: string;
+  bgHover: string;     // Hover state background
   textPrimary: string;
   textSecondary: string;
   accent: string;
@@ -54,6 +55,7 @@ interface BackgroundColors {
   bgPrimary: string;
   bgSecondary: string;
   bgTertiary: string;
+  bgHover: string;    // Hover state background
   textPrimary: string;
   textSecondary: string;
   border: string;
@@ -70,6 +72,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#1a1a2e',
     bgSecondary: '#16213e',
     bgTertiary: '#0f3460',
+    bgHover: '#2a2a4a',
     textPrimary: '#ffffff',
     textSecondary: '#a0a0a0',
     border: '#2a2a4a',
@@ -83,6 +86,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#1a1a1a',
     bgSecondary: '#252525',
     bgTertiary: '#333333',
+    bgHover: '#3a3a3a',
     textPrimary: '#ffffff',
     textSecondary: '#a0a0a0',
     border: '#404040',
@@ -96,6 +100,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#1a2e1a',
     bgSecondary: '#1e3e1e',
     bgTertiary: '#2a4a2a',
+    bgHover: '#3a5a3a',
     textPrimary: '#ffffff',
     textSecondary: '#a0b0a0',
     border: '#3a5a3a',
@@ -109,6 +114,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#0f172a',
     bgSecondary: '#1e293b',
     bgTertiary: '#334155',
+    bgHover: '#475569',
     textPrimary: '#f8fafc',
     textSecondary: '#94a3b8',
     border: '#475569',
@@ -122,6 +128,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#1e1e2e',
     bgSecondary: '#282838',
     bgTertiary: '#363648',
+    bgHover: '#45475a',
     textPrimary: '#cdd6f4',
     textSecondary: '#9399b2',
     border: '#45475a',
@@ -136,6 +143,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#f5f5f5',
     bgSecondary: '#ffffff',
     bgTertiary: '#e8e8e8',
+    bgHover: '#f0f0f0',
     textPrimary: '#1a1a2e',
     textSecondary: '#666666',
     border: '#d1d5db',
@@ -149,6 +157,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#faf8f5',
     bgSecondary: '#fffcf7',
     bgTertiary: '#f5f0e8',
+    bgHover: '#f0ebe0',
     textPrimary: '#2d2a26',
     textSecondary: '#6b6560',
     border: '#e0d8cc',
@@ -162,6 +171,7 @@ const backgroundThemes: Record<BackgroundTheme, BackgroundColors> = {
     bgPrimary: '#f0f4f8',
     bgSecondary: '#f8fafc',
     bgTertiary: '#e2e8f0',
+    bgHover: '#edf2f7',
     textPrimary: '#1a202c',
     textSecondary: '#4a5568',
     border: '#cbd5e0',
@@ -181,6 +191,7 @@ function getThemeColors(background: BackgroundTheme, accent: AccentColor): Theme
     bgPrimary: bgTheme.bgPrimary,
     bgSecondary: bgTheme.bgSecondary,
     bgTertiary: bgTheme.bgTertiary,
+    bgHover: bgTheme.bgHover,
     textPrimary: bgTheme.textPrimary,
     textSecondary: bgTheme.textSecondary,
     border: bgTheme.border,
@@ -198,6 +209,7 @@ function applyTheme(colors: ThemeColors, mode: ThemeMode): void {
   root.style.setProperty('--bg-primary', colors.bgPrimary);
   root.style.setProperty('--bg-secondary', colors.bgSecondary);
   root.style.setProperty('--bg-tertiary', colors.bgTertiary);
+  root.style.setProperty('--bg-hover', colors.bgHover);
   root.style.setProperty('--text-primary', colors.textPrimary);
   root.style.setProperty('--text-secondary', colors.textSecondary);
   root.style.setProperty('--accent', colors.accent);

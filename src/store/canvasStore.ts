@@ -1,6 +1,9 @@
-import { create } from 'zustand';
-import { InteractionMode, ShapeType, SelectionToolType } from '../types';
-import type { ColormapType, HeatmapOptions } from '../services/heatmapGenerator';
+import { create } from "zustand";
+import { InteractionMode, ShapeType, SelectionToolType } from "../types";
+import type {
+  ColormapType,
+  HeatmapOptions,
+} from "../services/heatmapGenerator";
 
 // Canvas store now only manages UI state
 // Image/viewport state has moved to projectStore for multi-image support
@@ -39,16 +42,16 @@ interface CanvasState {
 }
 
 export const useCanvasStore = create<CanvasState>((set) => ({
-  mode: 'select',
-  currentShapeType: 'circle',
-  selectionToolType: 'marquee',
-  showLabels: true,
+  mode: "select",
+  currentShapeType: "rectangle",
+  selectionToolType: "marquee",
+  showLabels: false, // Default off for better performance with many annotations
   showShapes: true,
   showHelp: false,
   showHeatmap: false,
   heatmapOptions: {
     sigma: 30,
-    colormap: 'jet' as ColormapType,
+    colormap: "jet" as ColormapType,
     alpha: 0.7,
     maxValue: 0,
     intensityScale: 1.5,
@@ -68,28 +71,28 @@ export const useCanvasStore = create<CanvasState>((set) => ({
   },
 
   toggleLabels: () => {
-    set(state => ({ showLabels: !state.showLabels }));
+    set((state) => ({ showLabels: !state.showLabels }));
   },
 
   toggleShapes: () => {
-    set(state => ({ showShapes: !state.showShapes }));
+    set((state) => ({ showShapes: !state.showShapes }));
   },
 
   toggleHelp: () => {
-    set(state => ({ showHelp: !state.showHelp }));
+    set((state) => ({ showHelp: !state.showHelp }));
   },
 
   toggleHeatmap: () => {
-    set(state => ({ showHeatmap: !state.showHeatmap }));
+    set((state) => ({ showHeatmap: !state.showHeatmap }));
   },
 
   setHeatmapOptions: (options) => {
-    set(state => ({
+    set((state) => ({
       heatmapOptions: { ...state.heatmapOptions, ...options },
     }));
   },
 
   toggleStatistics: () => {
-    set(state => ({ showStatistics: !state.showStatistics }));
+    set((state) => ({ showStatistics: !state.showStatistics }));
   },
 }));

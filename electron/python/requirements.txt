@@ -1,22 +1,35 @@
-# SAM 2 Backend Dependencies
+# BLOB Detection Backend Dependencies
 # Install with: pip install -r requirements.txt
 
 # Core dependencies
-torch>=2.1.0
-torchvision>=0.16.0
 numpy>=1.24.0
 pillow>=10.0.0
+opencv-python>=4.8.0
 
-# Web server
-flask>=3.0.0
-flask-cors>=4.0.0
+# Web server (FastAPI for async support)
+fastapi>=0.109.0
+uvicorn>=0.27.0
+sse-starlette>=1.6.0
 
-# SAM 2 from Facebook Research
-# Note: Install separately with:
-# pip install git+https://github.com/facebookresearch/segment-anything-2.git
-# Or clone and install locally:
-# git clone https://github.com/facebookresearch/segment-anything-2.git
-# cd segment-anything-2 && pip install -e .
+# YOLO Training (for keypoint/pose model training)
+ultralytics>=8.3.0
 
-# Optional: For CPU-only inference (if no GPU)
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# ONNX Export (for model deployment)
+onnx>=1.15.0
+onnxruntime>=1.16.0
+
+# ==============================================
+# GPU Acceleration (Optional)
+# ==============================================
+# These packages provide GPU acceleration for image processing.
+# The server will automatically detect and use the best available backend.
+#
+# CUDA (Windows/Linux with NVIDIA GPU):
+#   pip install cupy-cuda12x   # For CUDA 12.x
+#   pip install cupy-cuda11x   # For CUDA 11.x
+#
+# Metal/MPS (macOS with Apple Silicon):
+#   pip install torch kornia
+#
+# The GPU backends are optional - the server will fall back to CPU (OpenCV)
+# if no GPU packages are installed.

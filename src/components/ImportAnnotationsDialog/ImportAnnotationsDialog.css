@@ -1,0 +1,296 @@
+.import-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.import-dialog {
+  background: var(--bg-primary, #ffffff);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
+  width: 520px;
+  max-width: 90vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.import-dialog .dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.import-dialog .dialog-header h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary, #333);
+}
+
+.import-dialog .close-button {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-secondary, #666);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.import-dialog .close-button:hover {
+  background: var(--bg-hover, #f0f0f0);
+  color: var(--text-primary, #333);
+}
+
+.import-dialog .dialog-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.import-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 16px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.summary-total {
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  color: var(--text-primary, #333);
+}
+
+/* Import sections */
+.import-section {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 8px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.import-section:last-child {
+  margin-bottom: 0;
+}
+
+.import-section:has(input:checked) {
+  border-color: var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.import-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.import-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  cursor: pointer;
+  accent-color: var(--accent, #3b82f6);
+  flex-shrink: 0;
+}
+
+.option-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.option-icon.new {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+}
+
+.option-icon.augmentable {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.option-icon.already-augmented {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.option-icon.duplicate {
+  background: rgba(156, 163, 175, 0.15);
+  color: #6b7280;
+}
+
+.option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.option-title {
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  color: var(--text-primary, #333);
+}
+
+.option-description {
+  font-size: var(--text-sm);
+  color: var(--text-secondary, #666);
+  line-height: var(--leading-normal);
+}
+
+.option-description strong {
+  color: var(--text-primary, #333);
+}
+
+/* Warning box */
+.import-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  color: #92400e;
+  font-size: var(--text-sm);
+}
+
+.import-warning svg {
+  flex-shrink: 0;
+  color: #f59e0b;
+}
+
+/* Footer */
+.import-dialog .dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border, #e0e0e0);
+  background: var(--bg-secondary, #f5f5f5);
+}
+
+.import-preview {
+  font-size: var(--text-sm);
+  color: var(--text-secondary, #666);
+}
+
+.import-preview .no-actions {
+  color: var(--text-tertiary, #999);
+  font-style: italic;
+}
+
+.footer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.import-dialog .button-primary,
+.import-dialog .button-secondary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.import-dialog .button-primary {
+  background: var(--accent, #3b82f6);
+  color: white;
+  border: 1px solid var(--accent, #3b82f6);
+}
+
+.import-dialog .button-primary:hover:not(:disabled) {
+  background: var(--accent-hover, #2563eb);
+  border-color: var(--accent-hover, #2563eb);
+}
+
+.import-dialog .button-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.import-dialog .button-secondary {
+  background: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #333);
+  border: 1px solid var(--border, #e0e0e0);
+}
+
+.import-dialog .button-secondary:hover {
+  background: var(--bg-hover, #f0f0f0);
+  border-color: var(--border, #ccc);
+}
+
+/* Dark theme */
+[data-theme="dark"] .import-dialog {
+  background: var(--bg-primary, #1e1e1e);
+}
+
+[data-theme="dark"] .import-dialog .dialog-header {
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .import-summary {
+  background: var(--bg-secondary, #2d2d2d);
+}
+
+[data-theme="dark"] .import-section {
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .import-section:has(input:checked) {
+  border-color: var(--accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+[data-theme="dark"] .option-description strong {
+  color: var(--text-primary, #e0e0e0);
+}
+
+[data-theme="dark"] .import-warning {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .import-dialog .dialog-footer {
+  background: var(--bg-secondary, #2d2d2d);
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .import-dialog .button-secondary {
+  background: var(--bg-secondary, #2d2d2d);
+  border-color: var(--border, #444);
+  color: var(--text-primary, #e0e0e0);
+}
+
+[data-theme="dark"] .import-dialog .button-secondary:hover {
+  background: var(--bg-tertiary, #3d3d3d);
+}

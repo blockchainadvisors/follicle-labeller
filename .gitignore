@@ -44,3 +44,13 @@ nul
 
 # python-Ali
 hair_follicle_detection-main
+
+# __pycache__ files
+electron/python/__pycache__/
+
+# YOLO models and training outputs
+electron/python/models/
+electron/python/*.pt
+
+# TypeScript build cache
+*.tsbuildinfo
