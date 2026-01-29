@@ -1441,3 +1441,28 @@
   background: var(--bg-tertiary, #3d3d3d);
   border-color: var(--border, #444);
 }
+
+/* Dark theme text colors */
+[data-theme="dark"] .unified-yolo-training-dialog .loading-state,
+[data-theme="dark"] .unified-yolo-training-dialog .section-description,
+[data-theme="dark"] .unified-yolo-training-dialog .model-meta,
+[data-theme="dark"] .unified-yolo-training-dialog .install-progress,
+[data-theme="dark"] .unified-yolo-training-dialog .gpu-status-device,
+[data-theme="dark"] .unified-yolo-training-dialog .gpu-status-memory,
+[data-theme="dark"] .unified-yolo-training-dialog .log-hint {
+  color: var(--text-secondary, #a0a0a0);
+}
+
+[data-theme="dark"] .unified-yolo-training-dialog h3,
+[data-theme="dark"] .unified-yolo-training-dialog h4,
+[data-theme="dark"] .unified-yolo-training-dialog .dialog-header h2,
+[data-theme="dark"] .unified-yolo-training-dialog .gpu-status-label,
+[data-theme="dark"] .unified-yolo-training-dialog .config-label,
+[data-theme="dark"] .unified-yolo-training-dialog .dependencies-info h4,
+[data-theme="dark"] .unified-yolo-training-dialog .tab-button {
+  color: var(--text-primary, #e0e0e0);
+}
+
+[data-theme="dark"] .unified-yolo-training-dialog .dependencies-info p {
+  color: var(--text-secondary, #a0a0a0);
+}

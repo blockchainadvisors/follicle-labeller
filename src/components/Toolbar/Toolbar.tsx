@@ -21,8 +21,9 @@ import {
   BarChart3,
   Settings,
   GraduationCap,
+  Brain,
+  Database,
   FileUp,
-  FolderCog,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -2149,12 +2150,12 @@ export const Toolbar: React.FC = () => {
       {/* YOLO Machine Learning */}
       <div className="toolbar-group" role="group" aria-label="YOLO Machine Learning">
         <IconButton
-          icon={<GraduationCap size={18} />}
+          icon={<Brain size={18} />}
           tooltip="YOLO Training"
           onClick={() => setShowUnifiedYOLOTraining(true)}
         />
         <IconButton
-          icon={<FolderCog size={18} />}
+          icon={<Database size={18} />}
           tooltip="Manage YOLO Models"
           onClick={() => setShowUnifiedYOLOModelManager(true)}
         />

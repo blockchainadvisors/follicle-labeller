@@ -505,6 +505,14 @@ export function DetectionTab() {
 
   return (
     <div className="training-tab-content">
+      {/* Show loading state while checking dependencies */}
+      {dependencies === null && (
+        <div className="loading-state">
+          <Loader2 size={24} className="spin" />
+          <span>Checking dependencies...</span>
+        </div>
+      )}
+
       {/* Dependencies Section */}
       {dependencies && !dependencies.installed && (
         <section className="section dependencies-section">

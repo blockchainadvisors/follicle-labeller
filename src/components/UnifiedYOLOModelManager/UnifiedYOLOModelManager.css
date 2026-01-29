@@ -352,3 +352,20 @@
   background: var(--bg-tertiary, #3d3d3d);
   border-color: var(--border, #444);
 }
+
+/* Dark theme text colors */
+[data-theme="dark"] .unified-yolo-model-manager-dialog .loading-state,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .empty-state,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-meta,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-metrics,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-count {
+  color: var(--text-secondary, #a0a0a0);
+}
+
+[data-theme="dark"] .unified-yolo-model-manager-dialog h2,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-name,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .tab-button,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .refresh-button,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .close-dialog-button {
+  color: var(--text-primary, #e0e0e0);
+}
