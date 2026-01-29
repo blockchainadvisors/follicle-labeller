@@ -1059,7 +1059,7 @@ export const ImageCanvas: React.FC = () => {
       if (result) {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
-        const bitmap = await createImageBitmap(blob);
+        const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
 
         const newImage: ProjectImage = {
           id: generateImageId(),

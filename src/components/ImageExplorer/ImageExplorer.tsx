@@ -126,7 +126,7 @@ export const ImageExplorer: React.FC = () => {
     // Create object URL and ImageBitmap
     const blob = new Blob([data]);
     const imageSrc = URL.createObjectURL(blob);
-    const imageBitmap = await createImageBitmap(blob);
+    const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
 
     const newImage: ProjectImage = {
       id: generateImageId(),
