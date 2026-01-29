@@ -92,6 +92,10 @@ export class YOLOKeypointService {
   private activeJobId: string | null = null;
   private cleanupFunction: (() => void) | null = null;
 
+  // Cache for dependencies check - only check once per application session
+  private cachedDependencies: YoloDependenciesInfo | null = null;
+  private dependenciesCheckInProgress: Promise<YoloDependenciesInfo> | null = null;
+
   private constructor() {}
 
   /**
@@ -133,8 +137,37 @@ export class YOLOKeypointService {
    * Check if YOLO training dependencies are installed.
    * These are large packages (ultralytics, onnx, etc.) that are installed on-demand.
    * Uses retry logic to handle server startup race condition.
+   *
+   * Results are cached for the application session - dependencies only need to be
+   * checked once since they don't change during runtime (except via installDependencies).
    */
   async checkDependencies(): Promise<YoloDependenciesInfo> {
+    // Return cached result if available
+    if (this.cachedDependencies !== null) {
+      return this.cachedDependencies;
+    }
+
+    // If a check is already in progress, wait for it
+    if (this.dependenciesCheckInProgress !== null) {
+      return this.dependenciesCheckInProgress;
+    }
+
+    // Start the check and cache the promise to prevent duplicate requests
+    this.dependenciesCheckInProgress = this.fetchDependencies();
+
+    try {
+      const result = await this.dependenciesCheckInProgress;
+      this.cachedDependencies = result;
+      return result;
+    } finally {
+      this.dependenciesCheckInProgress = null;
+    }
+  }
+
+  /**
+   * Internal method to actually fetch dependencies from the server.
+   */
+  private async fetchDependencies(): Promise<YoloDependenciesInfo> {
     try {
       return await withRetry(
         () => window.electronAPI.yoloKeypoint.checkDependencies(),
@@ -156,6 +189,14 @@ export class YOLOKeypointService {
   }
 
   /**
+   * Invalidate the cached dependencies, forcing a re-check on next call.
+   * Called after installing dependencies.
+   */
+  invalidateDependenciesCache(): void {
+    this.cachedDependencies = null;
+  }
+
+  /**
    * Install YOLO training dependencies.
    *
    * @param onProgress Optional callback for progress updates
@@ -174,6 +215,10 @@ export class YOLOKeypointService {
 
     try {
       const result = await window.electronAPI.yoloKeypoint.installDependencies();
+      // Invalidate cache after successful installation so next check will see updated state
+      if (result.success) {
+        this.invalidateDependenciesCache();
+      }
       return result;
     } catch (error) {
       console.error('Failed to install YOLO dependencies:', error);
@@ -206,6 +251,10 @@ export class YOLOKeypointService {
 
     try {
       const result = await window.electronAPI.yoloKeypoint.upgradeToCUDA();
+      // Invalidate cache after successful upgrade so next check will see updated state
+      if (result.success) {
+        this.invalidateDependenciesCache();
+      }
       return result;
     } catch (error) {
       console.error('Failed to upgrade PyTorch to CUDA:', error);
