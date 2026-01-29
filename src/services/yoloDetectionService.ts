@@ -374,6 +374,67 @@ export class YOLODetectionService {
   }
 
   /**
+   * Run tiled detection prediction on a large image.
+   * Splits the image into overlapping tiles, runs inference on each,
+   * and merges results with NMS. Essential for detecting small objects
+   * in large images when the model was trained on tiles.
+   *
+   * @param imageBase64 Base64-encoded image data
+   * @param confidenceThreshold Minimum confidence threshold (default: 0.5)
+   * @param tileSize Size of each tile (default: 1024 to match training)
+   * @param overlap Pixel overlap between tiles (default: 128)
+   * @param nmsThreshold IoU threshold for NMS merging (default: 0.5)
+   * @param scaleFactor Upscale factor for images with smaller objects (default: 1.0)
+   * @returns Array of detection predictions
+   */
+  async predictTiled(
+    imageBase64: string,
+    confidenceThreshold: number = 0.5,
+    tileSize: number = 1024,
+    overlap: number = 128,
+    nmsThreshold: number = 0.5,
+    scaleFactor: number = 1.0
+  ): Promise<DetectionPrediction[]> {
+    try {
+      const result = await withRetry(
+        () => window.electronAPI.yoloDetection.predictTiled(
+          imageBase64,
+          confidenceThreshold,
+          tileSize,
+          overlap,
+          nmsThreshold,
+          scaleFactor
+        ),
+        {
+          maxRetries: 3,
+          initialDelayMs: 500,
+          maxDelayMs: 2000,
+          shouldRetry: isConnectionError,
+        }
+      );
+
+      if (!result.success) {
+        return [];
+      }
+
+      console.log(`Tiled prediction: ${result.count} detections (tile_size=${result.tileSize}, overlap=${result.overlap}, scale=${result.scaleFactor})`);
+
+      return result.detections.map((d) => ({
+        x: d.x,
+        y: d.y,
+        width: d.width,
+        height: d.height,
+        confidence: d.confidence,
+        classId: d.classId,
+        className: d.className,
+      }));
+    } catch (error) {
+      console.error('Tiled detection prediction failed:', error);
+      return [];
+    }
+  }
+
+  /**
    * Show a save dialog for ONNX export.
    *
    * @param defaultFileName Default file name for the export

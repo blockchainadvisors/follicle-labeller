@@ -1748,6 +1748,29 @@ ipcMain.handle(
   }
 );
 
+// Run tiled detection prediction (for large images with small objects)
+ipcMain.handle(
+  "yolo-detection:predictTiled",
+  async (
+    _,
+    imageData: string,
+    confidenceThreshold: number = 0.5,
+    tileSize: number = 1024,
+    overlap: number = 128,
+    nmsThreshold: number = 0.5,
+    scaleFactor: number = 1.0
+  ) => {
+    return makeBlobServerRequest("/yolo-detect/predict-tiled", "POST", {
+      imageData,
+      confidenceThreshold,
+      tileSize,
+      overlap,
+      nmsThreshold,
+      scaleFactor,
+    });
+  }
+);
+
 // Show save dialog for ONNX export (detection)
 ipcMain.handle(
   "yolo-detection:showExportDialog",

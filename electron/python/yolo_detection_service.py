@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Configure logging
 logging.basicConfig(
@@ -401,6 +401,15 @@ class YOLODetectionService:
             is_resuming = config.resume_from is not None
             resume_model_path = None
 
+            # On Windows, set environment variables to avoid CUDA multiprocessing deadlocks
+            import sys
+            if sys.platform == 'win32' and is_resuming:
+                import os
+                os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+                os.environ['OMP_NUM_THREADS'] = '1'
+                os.environ['MKL_NUM_THREADS'] = '1'
+                logger.info("Set CUDA_LAUNCH_BLOCKING=1, OMP_NUM_THREADS=1, MKL_NUM_THREADS=1 for Windows resume")
+
             if is_resuming:
                 progress_callback(DetectionTrainingProgress(
                     status='preparing',
@@ -733,10 +742,18 @@ class YOLODetectionService:
         try:
             # Decode image
             image = Image.open(io.BytesIO(image_data))
+
+            # CRITICAL: Apply EXIF orientation to match what frontend sees
+            try:
+                image = ImageOps.exif_transpose(image)
+            except Exception as e:
+                logger.warning(f"Failed to apply EXIF transpose: {e}")
+
             if image.mode != 'RGB':
                 image = image.convert('RGB')
 
             img_array = np.array(image)
+            img_height, img_width = img_array.shape[:2]
 
             # Run inference
             results = self._loaded_model.predict(
@@ -759,11 +776,25 @@ class YOLODetectionService:
 
                 for i, (box, conf, cls_id) in enumerate(zip(boxes, confidences, class_ids)):
                     x1, y1, x2, y2 = box
+
+                    # Clamp to image bounds
+                    x1 = max(0, min(x1, img_width))
+                    y1 = max(0, min(y1, img_height))
+                    x2 = max(0, min(x2, img_width))
+                    y2 = max(0, min(y2, img_height))
+
+                    det_width = x2 - x1
+                    det_height = y2 - y1
+
+                    # Skip invalid boxes
+                    if det_width <= 0 or det_height <= 0:
+                        continue
+
                     predictions.append(DetectionPrediction(
                         x=float(x1),
                         y=float(y1),
-                        width=float(x2 - x1),
-                        height=float(y2 - y1),
+                        width=float(det_width),
+                        height=float(det_height),
                         confidence=float(conf),
                         class_id=int(cls_id),
                         class_name='follicle'
@@ -795,6 +826,283 @@ class YOLODetectionService:
             return self.predict(image_data, confidence_threshold)
         except Exception as e:
             logger.exception("Failed to decode base64 image")
+            return []
+
+    def predict_tiled(
+        self,
+        image_data: bytes,
+        confidence_threshold: float = 0.5,
+        tile_size: int = 1024,
+        overlap: int = 128,
+        nms_threshold: float = 0.5,
+        scale_factor: float = 1.0
+    ) -> List[DetectionPrediction]:
+        """
+        Run tiled detection prediction on a large image.
+
+        Splits the image into overlapping tiles, runs inference on each,
+        and merges results with Non-Maximum Suppression.
+
+        Args:
+            image_data: Image bytes (JPEG or PNG)
+            confidence_threshold: Minimum confidence to include detection
+            tile_size: Size of each tile (default 1024 to match training)
+            overlap: Pixel overlap between tiles (default 128)
+            nms_threshold: IoU threshold for NMS merging (default 0.5)
+            scale_factor: Factor to upscale image before inference (default 1.0)
+                         Use >1.0 for images with smaller objects than training data.
+                         Coordinates are scaled back to original image space.
+
+        Returns:
+            List of DetectionPrediction objects
+        """
+        if self._loaded_model is None:
+            logger.info("No model loaded, auto-loading pretrained yolo11n.pt...")
+            if not self._load_default_model():
+                logger.error("Failed to auto-load default model")
+                return []
+
+        try:
+            # Decode image
+            image = Image.open(io.BytesIO(image_data))
+
+            # CRITICAL: Apply EXIF orientation to match what frontend sees
+            # Without this, rotated images will have misaligned coordinates
+            try:
+                image = ImageOps.exif_transpose(image)
+            except Exception as e:
+                logger.warning(f"Failed to apply EXIF transpose: {e}")
+
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+
+            # Store original dimensions for coordinate scaling
+            original_width, original_height = image.size
+
+            # Apply upscaling if scale_factor > 1
+            if scale_factor > 1.0:
+                new_width = int(original_width * scale_factor)
+                new_height = int(original_height * scale_factor)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                logger.info(f"Upscaled image from {original_width}x{original_height} to {new_width}x{new_height} (scale={scale_factor})")
+
+            img_array = np.array(image)
+            img_height, img_width = img_array.shape[:2]
+
+            logger.info(f"Tiled inference: image {img_width}x{img_height}, tile_size={tile_size}, overlap={overlap}, scale_factor={scale_factor}")
+
+            # If image is smaller than tile size, use regular prediction
+            if img_width <= tile_size and img_height <= tile_size:
+                logger.info("Image smaller than tile size, using regular prediction")
+                return self.predict(image_data, confidence_threshold)
+
+            # Calculate tile positions
+            step = tile_size - overlap
+            all_predictions = []
+            tile_count = 0
+
+            for y in range(0, img_height, step):
+                for x in range(0, img_width, step):
+                    # Calculate tile boundaries
+                    x1 = x
+                    y1 = y
+                    x2 = min(x + tile_size, img_width)
+                    y2 = min(y + tile_size, img_height)
+
+                    # Extract tile
+                    tile = img_array[y1:y2, x1:x2]
+
+                    # Skip very small tiles at edges
+                    if tile.shape[0] < tile_size // 4 or tile.shape[1] < tile_size // 4:
+                        continue
+
+                    tile_count += 1
+
+                    # Run inference on tile
+                    results = self._loaded_model.predict(
+                        tile,
+                        conf=confidence_threshold,
+                        verbose=False
+                    )
+
+                    if results and len(results) > 0:
+                        result = results[0]
+                        if result.boxes is not None and len(result.boxes) > 0:
+                            boxes = result.boxes.xyxy.cpu().numpy()
+                            confidences = result.boxes.conf.cpu().numpy()
+                            class_ids = result.boxes.cls.cpu().numpy().astype(int)
+
+                            for box, conf, cls_id in zip(boxes, confidences, class_ids):
+                                # Adjust coordinates to full image space
+                                bx1, by1, bx2, by2 = box
+
+                                # Convert to full image coordinates
+                                full_x1 = bx1 + x1
+                                full_y1 = by1 + y1
+                                full_x2 = bx2 + x1
+                                full_y2 = by2 + y1
+
+                                # Clamp to image bounds to prevent out-of-bounds detections
+                                full_x1 = max(0, min(full_x1, img_width))
+                                full_y1 = max(0, min(full_y1, img_height))
+                                full_x2 = max(0, min(full_x2, img_width))
+                                full_y2 = max(0, min(full_y2, img_height))
+
+                                # Calculate width/height after clamping
+                                det_width = full_x2 - full_x1
+                                det_height = full_y2 - full_y1
+
+                                # Skip if box became invalid after clamping
+                                if det_width <= 0 or det_height <= 0:
+                                    continue
+
+                                all_predictions.append(DetectionPrediction(
+                                    x=float(full_x1),
+                                    y=float(full_y1),
+                                    width=float(det_width),
+                                    height=float(det_height),
+                                    confidence=float(conf),
+                                    class_id=int(cls_id),
+                                    class_name='follicle'
+                                ))
+
+            logger.info(f"Processed {tile_count} tiles, found {len(all_predictions)} raw detections")
+
+            if not all_predictions:
+                return []
+
+            # Apply Non-Maximum Suppression to merge overlapping detections
+            merged = self._apply_nms(all_predictions, nms_threshold)
+            logger.info(f"After NMS: {len(merged)} detections")
+
+            # Scale coordinates back to original image space if we upscaled
+            if scale_factor > 1.0:
+                scaled_predictions = []
+                for pred in merged:
+                    # Scale coordinates back down
+                    scaled_x = pred.x / scale_factor
+                    scaled_y = pred.y / scale_factor
+                    scaled_width = pred.width / scale_factor
+                    scaled_height = pred.height / scale_factor
+
+                    # Clamp to original image bounds
+                    scaled_x = max(0, min(scaled_x, original_width))
+                    scaled_y = max(0, min(scaled_y, original_height))
+                    scaled_width = min(scaled_width, original_width - scaled_x)
+                    scaled_height = min(scaled_height, original_height - scaled_y)
+
+                    if scaled_width > 0 and scaled_height > 0:
+                        scaled_predictions.append(DetectionPrediction(
+                            x=float(scaled_x),
+                            y=float(scaled_y),
+                            width=float(scaled_width),
+                            height=float(scaled_height),
+                            confidence=pred.confidence,
+                            class_id=pred.class_id,
+                            class_name=pred.class_name
+                        ))
+
+                logger.info(f"Scaled {len(scaled_predictions)} detections back to original image space")
+                return scaled_predictions
+
+            return merged
+
+        except Exception as e:
+            logger.exception("Tiled prediction failed")
+            return []
+
+    def _apply_nms(
+        self,
+        predictions: List[DetectionPrediction],
+        iou_threshold: float = 0.5
+    ) -> List[DetectionPrediction]:
+        """
+        Apply Non-Maximum Suppression to merge overlapping detections.
+
+        Args:
+            predictions: List of predictions to merge
+            iou_threshold: IoU threshold for considering boxes as duplicates
+
+        Returns:
+            Filtered list of predictions
+        """
+        if not predictions:
+            return []
+
+        # Convert to numpy arrays for efficient computation
+        boxes = np.array([[p.x, p.y, p.x + p.width, p.y + p.height] for p in predictions])
+        scores = np.array([p.confidence for p in predictions])
+
+        # Sort by confidence (descending)
+        indices = np.argsort(scores)[::-1]
+
+        keep = []
+        while len(indices) > 0:
+            # Keep the highest confidence detection
+            current = indices[0]
+            keep.append(current)
+
+            if len(indices) == 1:
+                break
+
+            # Calculate IoU with remaining boxes
+            current_box = boxes[current]
+            remaining_boxes = boxes[indices[1:]]
+
+            # Calculate intersection
+            x1 = np.maximum(current_box[0], remaining_boxes[:, 0])
+            y1 = np.maximum(current_box[1], remaining_boxes[:, 1])
+            x2 = np.minimum(current_box[2], remaining_boxes[:, 2])
+            y2 = np.minimum(current_box[3], remaining_boxes[:, 3])
+
+            intersection = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+
+            # Calculate union
+            current_area = (current_box[2] - current_box[0]) * (current_box[3] - current_box[1])
+            remaining_areas = (remaining_boxes[:, 2] - remaining_boxes[:, 0]) * (remaining_boxes[:, 3] - remaining_boxes[:, 1])
+            union = current_area + remaining_areas - intersection
+
+            # Calculate IoU
+            iou = intersection / (union + 1e-6)
+
+            # Keep boxes with IoU below threshold
+            mask = iou < iou_threshold
+            indices = indices[1:][mask]
+
+        return [predictions[i] for i in keep]
+
+    def predict_tiled_base64(
+        self,
+        image_base64: str,
+        confidence_threshold: float = 0.5,
+        tile_size: int = 1024,
+        overlap: int = 128,
+        nms_threshold: float = 0.5,
+        scale_factor: float = 1.0
+    ) -> List[DetectionPrediction]:
+        """
+        Run tiled detection prediction on a base64-encoded image.
+
+        Args:
+            image_base64: Base64-encoded image string
+            confidence_threshold: Minimum confidence to include detection
+            tile_size: Size of each tile (default 1024 to match training)
+            overlap: Pixel overlap between tiles (default 128)
+            nms_threshold: IoU threshold for NMS merging (default 0.5)
+            scale_factor: Factor to upscale image before inference (default 1.0)
+
+        Returns:
+            List of DetectionPrediction objects
+        """
+        try:
+            # Remove data URL prefix if present
+            if ',' in image_base64:
+                image_base64 = image_base64.split(',', 1)[1]
+
+            image_data = base64.b64decode(image_base64)
+            return self.predict_tiled(image_data, confidence_threshold, tile_size, overlap, nms_threshold, scale_factor)
+        except Exception as e:
+            logger.exception("Failed to decode base64 image for tiled prediction")
             return []
 
     def export_onnx(self, model_path: str, output_path: str) -> Optional[str]:

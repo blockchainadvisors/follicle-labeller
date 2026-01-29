@@ -721,6 +721,40 @@ const electronAPI = {
       count: number;
     }> => ipcRenderer.invoke("yolo-detection:predict", imageData, confidenceThreshold),
 
+    // Run tiled detection prediction (for large images with small objects)
+    predictTiled: (
+      imageData: string,
+      confidenceThreshold?: number,
+      tileSize?: number,
+      overlap?: number,
+      nmsThreshold?: number,
+      scaleFactor?: number
+    ): Promise<{
+      success: boolean;
+      detections: Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        confidence: number;
+        classId: number;
+        className: string;
+      }>;
+      count: number;
+      method: string;
+      tileSize: number;
+      overlap: number;
+      scaleFactor: number;
+    }> => ipcRenderer.invoke(
+      "yolo-detection:predictTiled",
+      imageData,
+      confidenceThreshold,
+      tileSize,
+      overlap,
+      nmsThreshold,
+      scaleFactor
+    ),
+
     // Show save dialog for ONNX export
     showExportDialog: (
       defaultFileName: string

@@ -13,6 +13,14 @@ export interface DetectionSettings {
   // YOLO Detection settings
   yoloModelId: string | null;  // Selected model ID (null = pre-trained/default)
   yoloConfidenceThreshold: number;  // Confidence threshold for YOLO (0-1)
+  yoloUseTiledInference: boolean;  // Use tiled inference for large images
+  yoloTileSize: number;  // Tile size for tiled inference (should match training tile size)
+  yoloTileOverlap: number;  // Overlap between tiles in pixels
+  yoloNmsThreshold: number;  // IoU threshold for NMS when merging tile results
+  yoloScaleFactor: number;  // Upscale factor for images with smaller objects than training data
+  yoloAutoScaleMode: 'auto' | 'none';  // 'auto' = infer from annotations or image size, 'none' = manual
+  yoloTrainingImageSize: number;  // Reference training image size (pixels, for imageSize mode)
+  yoloTrainingAnnotationSize: number;  // Reference annotation size from training (pixels, for annotations mode)
 
   // Basic size parameters (for blob detection)
   minWidth: number;
@@ -70,6 +78,14 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   // YOLO Detection settings
   yoloModelId: null,
   yoloConfidenceThreshold: 0.5,
+  yoloUseTiledInference: true,  // Enable by default for better results on large images
+  yoloTileSize: 1024,  // Match typical training tile size
+  yoloTileOverlap: 128,  // 128px overlap between tiles
+  yoloNmsThreshold: 0.5,  // Standard IoU threshold for NMS
+  yoloScaleFactor: 1.0,  // No upscaling by default (use 1.5-2.0 for lower res images)
+  yoloAutoScaleMode: 'auto',  // Default: auto-select based on available annotations
+  yoloTrainingImageSize: 12240,  // Reference training image size (12240x12240)
+  yoloTrainingAnnotationSize: 57,  // Average annotation size from training (~57px)
   // Blob detection size parameters
   minWidth: 10,
   maxWidth: 200,
@@ -426,6 +442,129 @@ export function DetectionSettingsDialog({
                 Higher threshold = fewer but more confident detections. Lower = more detections but possible false positives.
               </p>
 
+              {/* Tiled Inference Toggle */}
+              <div className="settings-row checkbox">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.yoloUseTiledInference}
+                    onChange={e => handleChange('yoloUseTiledInference', e.target.checked)}
+                  />
+                  Use Tiled Inference (for large images)
+                </label>
+              </div>
+              <p className="setting-hint">
+                Splits large images into overlapping tiles matching training size. Essential when model was trained on tiles.
+              </p>
+
+              {/* Tiled Inference Settings */}
+              {localSettings.yoloUseTiledInference && (
+                <>
+                  <div className="settings-row">
+                    <label>Tile Size (px)</label>
+                    <input
+                      type="number"
+                      value={localSettings.yoloTileSize}
+                      onChange={e => handleChange('yoloTileSize', parseInt(e.target.value) || 1024)}
+                      min={256}
+                      max={2048}
+                      step={64}
+                    />
+                    <span className="hint">Match training tile size</span>
+                  </div>
+                  <div className="settings-row">
+                    <label>Tile Overlap (px)</label>
+                    <input
+                      type="number"
+                      value={localSettings.yoloTileOverlap}
+                      onChange={e => handleChange('yoloTileOverlap', parseInt(e.target.value) || 128)}
+                      min={0}
+                      max={512}
+                      step={16}
+                    />
+                    <span className="hint">Overlap between tiles</span>
+                  </div>
+                  <div className="settings-row">
+                    <label>NMS Threshold</label>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="0.9"
+                      step="0.05"
+                      value={localSettings.yoloNmsThreshold}
+                      onChange={e => handleChange('yoloNmsThreshold', parseFloat(e.target.value))}
+                    />
+                    <span className="value-display">{(localSettings.yoloNmsThreshold * 100).toFixed(0)}%</span>
+                  </div>
+                  <p className="setting-hint">
+                    IoU threshold for merging detections at tile boundaries. Lower = more aggressive merging.
+                  </p>
+
+                  {/* Auto Scale Toggle */}
+                  <div className="settings-row checkbox">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={localSettings.yoloAutoScaleMode === 'auto'}
+                        onChange={e => handleChange('yoloAutoScaleMode', e.target.checked ? 'auto' : 'none')}
+                      />
+                      Auto-scale (Recommended)
+                    </label>
+                  </div>
+                  <p className="setting-hint">
+                    {localSettings.yoloAutoScaleMode === 'auto'
+                      ? 'Automatically scales based on your annotations (if 3+ exist) or image size. Uses existing follicle sizes as reference.'
+                      : 'Manually set the scale factor below.'}
+                  </p>
+
+                  {/* Manual Scale Factor (only shown when auto is off) */}
+                  {localSettings.yoloAutoScaleMode === 'none' && (
+                    <div className="settings-row">
+                      <label>Scale Factor</label>
+                      <input
+                        type="range"
+                        min="1.0"
+                        max="3.0"
+                        step="0.1"
+                        value={localSettings.yoloScaleFactor}
+                        onChange={e => handleChange('yoloScaleFactor', parseFloat(e.target.value))}
+                      />
+                      <span className="value-display">{localSettings.yoloScaleFactor.toFixed(1)}x</span>
+                    </div>
+                  )}
+
+                  {/* Reference sizes (shown when auto is on) */}
+                  {localSettings.yoloAutoScaleMode === 'auto' && (
+                    <>
+                      <div className="settings-row">
+                        <label>Training Annotation Size</label>
+                        <input
+                          type="number"
+                          value={localSettings.yoloTrainingAnnotationSize}
+                          onChange={e => handleChange('yoloTrainingAnnotationSize', parseInt(e.target.value) || 57)}
+                          min={10}
+                          max={500}
+                          step={1}
+                        />
+                        <span className="hint">pixels (for annotation mode)</span>
+                      </div>
+                      <div className="settings-row">
+                        <label>Training Image Size</label>
+                        <input
+                          type="number"
+                          value={localSettings.yoloTrainingImageSize}
+                          onChange={e => handleChange('yoloTrainingImageSize', parseInt(e.target.value) || 12240)}
+                          min={1000}
+                          max={20000}
+                          step={100}
+                        />
+                        <span className="hint">pixels (fallback if no annotations)</span>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
               {/* Service status */}
               {!yoloDetectionAvailable && (
                 <div className="yolo-warning">
@@ -545,6 +684,9 @@ export function DetectionSettingsDialog({
             </section>
           )}
 
+          {/* Blob Detection Settings (shown when Blob method selected) */}
+          {localSettings.detectionMethod === 'blob' && (
+            <>
           {/* Basic Size Parameters */}
           <section className="settings-section">
             <h3>Size Range</h3>
@@ -904,6 +1046,8 @@ export function DetectionSettingsDialog({
               </>
             )}
           </section>
+            </>
+          )}
 
           {/* YOLO Keypoint Prediction */}
           <section className="settings-section">

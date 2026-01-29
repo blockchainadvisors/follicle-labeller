@@ -106,7 +106,7 @@ if sys.platform == 'win32':
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -266,6 +266,10 @@ def decode_image(image_data: str) -> Optional[np.ndarray]:
 
         image_bytes = base64.b64decode(image_data)
         image = Image.open(io.BytesIO(image_bytes))
+
+        # Apply EXIF rotation to match frontend display
+        # This ensures coordinates from frontend match the actual pixel positions
+        image = ImageOps.exif_transpose(image)
 
         # Convert to RGB if needed
         if image.mode != 'RGB':
@@ -1603,6 +1607,15 @@ class DetectionPredictRequest(BaseModel):
     confidenceThreshold: Optional[float] = 0.5
 
 
+class DetectionPredictTiledRequest(BaseModel):
+    imageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+    tileSize: Optional[int] = 1024  # Match training tile size
+    overlap: Optional[int] = 128  # Overlap between tiles
+    nmsThreshold: Optional[float] = 0.5  # IoU threshold for NMS
+    scaleFactor: Optional[float] = 1.0  # Upscale factor for smaller objects
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -1811,6 +1824,43 @@ async def yolo_detect_predict(req: DetectionPredictRequest):
         'success': True,
         'detections': [r.to_dict() for r in results],
         'count': len(results)
+    }
+
+
+@app.post('/yolo-detect/predict-tiled')
+async def yolo_detect_predict_tiled(req: DetectionPredictTiledRequest):
+    """
+    Run tiled detection prediction on a large image.
+
+    Splits the image into overlapping tiles matching the training tile size,
+    runs inference on each tile, and merges results with NMS.
+
+    This is essential for detecting small objects in large images when the model
+    was trained on tiles rather than full images.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+
+    # Run tiled prediction
+    results = service.predict_tiled_base64(
+        req.imageData,
+        confidence_threshold=req.confidenceThreshold or 0.5,
+        tile_size=req.tileSize or 1024,
+        overlap=req.overlap or 128,
+        nms_threshold=req.nmsThreshold or 0.5,
+        scale_factor=req.scaleFactor or 1.0
+    )
+
+    return {
+        'success': True,
+        'detections': [r.to_dict() for r in results],
+        'count': len(results),
+        'method': 'tiled',
+        'tileSize': req.tileSize or 1024,
+        'overlap': req.overlap or 128,
+        'scaleFactor': req.scaleFactor or 1.0
     }
 
 
