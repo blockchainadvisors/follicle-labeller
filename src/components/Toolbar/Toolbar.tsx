@@ -24,8 +24,6 @@ import {
   Brain,
   Database,
   FileUp,
-  Scan,
-  FolderCog,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -61,10 +59,8 @@ import {
 import { ExportMenu, ExportType } from "../ExportMenu/ExportMenu";
 import { ShapeToolDropdown } from "../ShapeToolDropdown/ShapeToolDropdown";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
-import { YOLOTrainingDialog } from "../YOLOTrainingDialog";
-import { YOLOModelManager } from "../YOLOModelManager";
-import { YOLODetectionTrainingDialog } from "../YOLODetectionTrainingDialog";
-import { YOLODetectionModelManager } from "../YOLODetectionModelManager";
+import { UnifiedYOLOTraining } from "../UnifiedYOLOTraining";
+import { UnifiedYOLOModelManager } from "../UnifiedYOLOModelManager";
 import {
   ImportAnnotationsDialog,
   ImportAnalysis,
@@ -228,11 +224,9 @@ export const Toolbar: React.FC = () => {
     error: null,
   });
 
-  // State for YOLO training dialogs
-  const [showYOLOTraining, setShowYOLOTraining] = useState(false);
-  const [showYOLOModelManager, setShowYOLOModelManager] = useState(false);
-  const [showYOLODetectionTraining, setShowYOLODetectionTraining] = useState(false);
-  const [showYOLODetectionModelManager, setShowYOLODetectionModelManager] = useState(false);
+  // State for unified YOLO dialogs
+  const [showUnifiedYOLOTraining, setShowUnifiedYOLOTraining] = useState(false);
+  const [showUnifiedYOLOModelManager, setShowUnifiedYOLOModelManager] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
 
@@ -2153,33 +2147,17 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* YOLO Keypoint Training controls */}
-      <div className="toolbar-group" role="group" aria-label="YOLO Keypoint Training">
+      {/* YOLO Machine Learning */}
+      <div className="toolbar-group" role="group" aria-label="YOLO Machine Learning">
         <IconButton
           icon={<Brain size={18} />}
-          tooltip="YOLO Keypoint Training"
-          onClick={() => setShowYOLOTraining(true)}
+          tooltip="YOLO Training"
+          onClick={() => setShowUnifiedYOLOTraining(true)}
         />
         <IconButton
           icon={<Database size={18} />}
-          tooltip="Manage Keypoint Models"
-          onClick={() => setShowYOLOModelManager(true)}
-        />
-      </div>
-
-      <div className="toolbar-divider" />
-
-      {/* YOLO Detection Training controls */}
-      <div className="toolbar-group" role="group" aria-label="YOLO Detection Training">
-        <IconButton
-          icon={<Scan size={18} />}
-          tooltip="YOLO Detection Training"
-          onClick={() => setShowYOLODetectionTraining(true)}
-        />
-        <IconButton
-          icon={<FolderCog size={18} />}
-          tooltip="Manage Detection Models"
-          onClick={() => setShowYOLODetectionModelManager(true)}
+          tooltip="Manage YOLO Models"
+          onClick={() => setShowUnifiedYOLOModelManager(true)}
         />
       </div>
 
@@ -2345,33 +2323,17 @@ export const Toolbar: React.FC = () => {
         />
       )}
 
-      {/* YOLO Training Dialog */}
-      {showYOLOTraining && (
-        <YOLOTrainingDialog onClose={() => setShowYOLOTraining(false)} />
+      {/* Unified YOLO Training Dialog */}
+      {showUnifiedYOLOTraining && (
+        <UnifiedYOLOTraining onClose={() => setShowUnifiedYOLOTraining(false)} />
       )}
 
-      {/* YOLO Model Manager Dialog */}
-      {showYOLOModelManager && (
-        <YOLOModelManager
-          onClose={() => setShowYOLOModelManager(false)}
-          onModelLoaded={(modelPath) => {
-            console.log('Model loaded:', modelPath);
-            setShowYOLOModelManager(false);
-          }}
-        />
-      )}
-
-      {/* YOLO Detection Training Dialog */}
-      {showYOLODetectionTraining && (
-        <YOLODetectionTrainingDialog onClose={() => setShowYOLODetectionTraining(false)} />
-      )}
-
-      {/* YOLO Detection Model Manager Dialog */}
-      {showYOLODetectionModelManager && (
-        <YOLODetectionModelManager
-          onClose={() => setShowYOLODetectionModelManager(false)}
+      {/* Unified YOLO Model Manager Dialog */}
+      {showUnifiedYOLOModelManager && (
+        <UnifiedYOLOModelManager
+          onClose={() => setShowUnifiedYOLOModelManager(false)}
           onModelLoaded={() => {
-            setShowYOLODetectionModelManager(false);
+            setShowUnifiedYOLOModelManager(false);
           }}
         />
       )}

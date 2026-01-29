@@ -1,0 +1,371 @@
+/* Unified YOLO Model Manager Dialog */
+.unified-yolo-model-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.unified-yolo-model-manager-dialog {
+  background: var(--bg-secondary, #f5f5f5);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  width: 640px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Dialog Header */
+.unified-yolo-model-manager-dialog .dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.unified-yolo-model-manager-dialog .dialog-header h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary, #333);
+}
+
+.unified-yolo-model-manager-dialog .close-button {
+  background: none;
+  border: none;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unified-yolo-model-manager-dialog .close-button:hover {
+  color: var(--text-primary, #333);
+  background: var(--bg-hover, #e8e8e8);
+}
+
+/* Tab Bar */
+.unified-yolo-model-manager-dialog .tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  background: var(--bg-secondary, #f5f5f5);
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.unified-yolo-model-manager-dialog .tab-button {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary, #666);
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .tab-button:hover {
+  color: var(--text-primary, #333);
+  background: var(--bg-hover, #e8e8e8);
+}
+
+.unified-yolo-model-manager-dialog .tab-button.active {
+  color: var(--accent, #3b82f6);
+  border-bottom-color: var(--accent, #3b82f6);
+}
+
+/* Tab Content */
+.unified-yolo-model-manager-dialog .tab-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.unified-yolo-model-manager-dialog .model-manager-tab-content {
+  padding: 20px;
+}
+
+/* Tab Header with Refresh */
+.unified-yolo-model-manager-dialog .tab-header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+.unified-yolo-model-manager-dialog .refresh-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 6px;
+  color: var(--text-secondary, #666);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .refresh-button:hover:not(:disabled) {
+  color: var(--text-primary, #333);
+  background: var(--bg-hover, #e8e8e8);
+}
+
+.unified-yolo-model-manager-dialog .refresh-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Error Message */
+.unified-yolo-model-manager-dialog .error-message {
+  padding: 12px;
+  background: var(--danger-bg, rgba(239, 68, 68, 0.1));
+  color: var(--danger, #ef4444);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: var(--text-base);
+}
+
+/* Loading and Empty States */
+.unified-yolo-model-manager-dialog .loading-state,
+.unified-yolo-model-manager-dialog .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--text-secondary, #666);
+}
+
+.unified-yolo-model-manager-dialog .empty-state .hint {
+  font-size: var(--text-base);
+  opacity: 0.7;
+}
+
+/* Models List */
+.unified-yolo-model-manager-dialog .models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Model Card */
+.unified-yolo-model-manager-dialog .model-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .model-card:hover {
+  border-color: var(--accent, #3b82f6);
+}
+
+.unified-yolo-model-manager-dialog .model-card.loaded {
+  border-color: var(--success, #10b981);
+  background: var(--success-bg, rgba(16, 185, 129, 0.1));
+}
+
+/* Model Info */
+.unified-yolo-model-manager-dialog .model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.unified-yolo-model-manager-dialog .model-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  color: var(--text-primary, #333);
+  margin-bottom: 4px;
+}
+
+.unified-yolo-model-manager-dialog .loaded-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--success, #10b981);
+  color: white;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  border-radius: 4px;
+}
+
+.unified-yolo-model-manager-dialog .model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary, #666);
+  margin-bottom: 4px;
+}
+
+.unified-yolo-model-manager-dialog .model-metrics {
+  font-size: var(--text-sm);
+  color: var(--text-secondary, #666);
+  font-family: var(--font-mono);
+}
+
+/* Model Actions */
+.unified-yolo-model-manager-dialog .model-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.unified-yolo-model-manager-dialog .action-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 6px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .action-button:hover:not(:disabled) {
+  color: var(--text-primary, #333);
+  border-color: var(--accent, #3b82f6);
+}
+
+.unified-yolo-model-manager-dialog .action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.unified-yolo-model-manager-dialog .action-button.load:hover:not(:disabled) {
+  color: var(--accent, #3b82f6);
+}
+
+.unified-yolo-model-manager-dialog .action-button.export:hover:not(:disabled) {
+  color: var(--success, #10b981);
+}
+
+.unified-yolo-model-manager-dialog .action-button.export-tensorrt {
+  color: #f59e0b;
+}
+
+.unified-yolo-model-manager-dialog .action-button.export-tensorrt:hover:not(:disabled) {
+  color: #d97706;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.unified-yolo-model-manager-dialog .action-button.delete:hover:not(:disabled) {
+  color: var(--danger, #ef4444);
+  border-color: var(--danger, #ef4444);
+}
+
+/* Tab Footer */
+.unified-yolo-model-manager-dialog .model-manager-tab-content .tab-footer {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border, #e0e0e0);
+}
+
+.unified-yolo-model-manager-dialog .model-count {
+  font-size: var(--text-base);
+  color: var(--text-secondary, #666);
+}
+
+/* Dialog Footer */
+.unified-yolo-model-manager-dialog .dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border, #e0e0e0);
+}
+
+.unified-yolo-model-manager-dialog .close-dialog-button {
+  padding: 10px 20px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #333);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+}
+
+.unified-yolo-model-manager-dialog .close-dialog-button:hover {
+  background: var(--bg-hover, #e8e8e8);
+}
+
+/* Spinner animation */
+.unified-yolo-model-manager-dialog .spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Dark theme */
+[data-theme="dark"] .unified-yolo-model-manager-dialog {
+  background: var(--bg-secondary, #1e1e1e);
+}
+
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-card {
+  background: var(--bg-primary, #2d2d2d);
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-card.loaded {
+  background: rgba(16, 185, 129, 0.15);
+}
+
+[data-theme="dark"] .unified-yolo-model-manager-dialog .refresh-button,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .action-button {
+  background: var(--bg-tertiary, #3d3d3d);
+  border-color: var(--border, #444);
+}
+
+/* Dark theme text colors */
+[data-theme="dark"] .unified-yolo-model-manager-dialog .loading-state,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .empty-state,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-meta,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-metrics,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-count {
+  color: var(--text-secondary, #a0a0a0);
+}
+
+[data-theme="dark"] .unified-yolo-model-manager-dialog h2,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-name,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .tab-button,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .refresh-button,
+[data-theme="dark"] .unified-yolo-model-manager-dialog .close-dialog-button {
+  color: var(--text-primary, #e0e0e0);
+}

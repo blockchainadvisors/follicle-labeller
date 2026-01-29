@@ -3,14 +3,12 @@ import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap, Upload,
 import { yoloDetectionService } from '../../services/yoloDetectionService';
 import { DetectionModelInfo, TensorRTStatus } from '../../types';
 import { createModelPackageConfig, formatMetrics as formatPackageMetrics, ModelPackageConfig } from '../../utils/model-export';
-import './YOLODetectionModelManager.css';
 
-interface YOLODetectionModelManagerProps {
-  onClose: () => void;
+interface DetectionModelsTabProps {
   onModelLoaded?: (modelPath: string) => void;
 }
 
-export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetectionModelManagerProps) {
+export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
   const [models, setModels] = useState<DetectionModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingModel, setLoadingModel] = useState<string | null>(null);
@@ -275,232 +273,222 @@ export function YOLODetectionModelManager({ onClose, onModelLoaded }: YOLODetect
   };
 
   return (
-    <div className="yolo-detection-model-manager-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="yolo-detection-model-manager">
-        <div className="dialog-header">
-          <h2>YOLO Detection Models</h2>
-          <div className="header-actions">
-            <button
-              className="import-model-button"
-              onClick={handleImportPackagePreview}
-              disabled={loading || importingPackage}
-              title="Import model package"
-            >
-              {importingPackage ? (
-                <Loader2 size={16} className="animate-spin" />
-              ) : (
-                <Upload size={16} />
-              )}
-              Import Model
-            </button>
-            <button className="refresh-button" onClick={loadModels} disabled={loading}>
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            </button>
-            <button className="close-button" onClick={onClose}>
-              <X size={20} />
-            </button>
-          </div>
-        </div>
-
-        <div className="dialog-content">
-          {error && (
-            <div className="error-message">{error}</div>
-          )}
-
-          {loading ? (
-            <div className="loading-state">
-              <Loader2 size={32} className="animate-spin" />
-              <span>Loading models...</span>
-            </div>
-          ) : models.length === 0 ? (
-            <div className="empty-state">
-              <span>No trained detection models found.</span>
-              <span className="hint">Train a model using the YOLO Detection Training dialog.</span>
-            </div>
+    <div className="model-manager-tab-content">
+      <div className="tab-header">
+        <button
+          className="import-model-button"
+          onClick={handleImportPackagePreview}
+          disabled={loading || importingPackage}
+          title="Import model package"
+        >
+          {importingPackage ? (
+            <Loader2 size={16} className="spin" />
           ) : (
-            <div className="models-list">
-              {models.map((model) => (
-                <div
-                  key={model.id}
-                  className={`model-card ${loadedModelPath === model.path ? 'loaded' : ''}`}
-                >
-                  <div className="model-info">
-                    <div className="model-name">
-                      {model.name}
-                      {loadedModelPath === model.path && (
-                        <span className="loaded-badge">
-                          <CheckCircle size={12} />
-                          Loaded
-                        </span>
-                      )}
-                    </div>
-                    <div className="model-meta">
-                      <span>Created: {formatDate(model.createdAt)}</span>
-                      <span>Epochs: {model.epochsTrained}</span>
-                      <span>Size: {model.imgSize}px</span>
-                    </div>
-                    {Object.keys(model.metrics).length > 0 && (
-                      <div className="model-metrics">
-                        {formatMetrics(model.metrics)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="model-actions">
-                    <button
-                      className="action-button load"
-                      onClick={() => handleLoadModel(model)}
-                      disabled={loadingModel === model.id || loadedModelPath === model.path}
-                      title="Load for inference"
-                    >
-                      {loadingModel === model.id ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Cpu size={16} />
-                      )}
-                    </button>
-
-                    {/* TensorRT Export Button - only show if TensorRT is available */}
-                    {tensorrtStatus?.available && (
-                      <button
-                        className="action-button export-tensorrt"
-                        onClick={() => handleExportTensorRT(model)}
-                        disabled={exportingTensorRT === model.id}
-                        title="Export to TensorRT (faster GPU inference)"
-                      >
-                        {exportingTensorRT === model.id ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : (
-                          <Zap size={16} />
-                        )}
-                      </button>
-                    )}
-
-                    <button
-                      className="action-button export"
-                      onClick={() => handleExportONNX(model)}
-                      disabled={exportingModel === model.id}
-                      title="Export to ONNX"
-                    >
-                      {exportingModel === model.id ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Download size={16} />
-                      )}
-                    </button>
-
-                    <button
-                      className="action-button export-package"
-                      onClick={() => handleExportPackage(model)}
-                      disabled={exportingPackage === model.id}
-                      title="Export as portable package (ZIP)"
-                    >
-                      {exportingPackage === model.id ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Package size={16} />
-                      )}
-                    </button>
-
-                    <button
-                      className="action-button delete"
-                      onClick={() => handleDeleteModel(model)}
-                      disabled={deletingModel === model.id}
-                      title="Delete model"
-                    >
-                      {deletingModel === model.id ? (
-                        <Loader2 size={16} className="animate-spin" />
-                      ) : (
-                        <Trash2 size={16} />
-                      )}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <Upload size={16} />
           )}
+          Import Model
+        </button>
+        <button className="refresh-button" onClick={loadModels} disabled={loading}>
+          <RefreshCw size={16} className={loading ? 'spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="error-message">{error}</div>
+      )}
+
+      {loading ? (
+        <div className="loading-state">
+          <Loader2 size={32} className="spin" />
+          <span>Loading models...</span>
         </div>
-
-        <div className="dialog-footer">
-          <span className="model-count">{models.length} model{models.length !== 1 ? 's' : ''}</span>
-          <button className="close-dialog-button" onClick={onClose}>
-            Close
-          </button>
+      ) : models.length === 0 ? (
+        <div className="empty-state">
+          <span>No trained detection models found.</span>
+          <span className="hint">Train a model using the YOLO Training dialog (Detection tab).</span>
         </div>
-
-        {/* Import Preview Dialog */}
-        {importPreview && (
-          <div className="import-preview-overlay" onClick={() => setImportPreview(null)}>
-            <div className="import-preview-dialog" onClick={(e) => e.stopPropagation()}>
-              <div className="import-preview-header">
-                <h3>Import Model Package</h3>
-                <button className="close-button" onClick={() => setImportPreview(null)}>
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="import-preview-content">
-                <div className="preview-item">
-                  <span className="preview-label">Model Name:</span>
-                  <span className="preview-value">{importPreview.config.modelName}</span>
-                </div>
-                <div className="preview-item">
-                  <span className="preview-label">Training:</span>
-                  <span className="preview-value">
-                    {importPreview.config.training.epochs} epochs, {importPreview.config.training.imgSize}px
-                  </span>
-                </div>
-                <div className="preview-item">
-                  <span className="preview-label">Metrics:</span>
-                  <span className="preview-value">
-                    {formatPackageMetrics(importPreview.config.metrics)}
-                  </span>
-                </div>
-                <div className="preview-item">
-                  <span className="preview-label">Trained:</span>
-                  <span className="preview-value">
-                    {formatDate(importPreview.config.trainingDate)}
-                  </span>
-                </div>
-                {importPreview.hasEngine && (
-                  <div className="preview-warning">
-                    <Zap size={14} />
-                    <span>
-                      Package includes TensorRT engine (may not work on different GPU)
+      ) : (
+        <div className="models-list">
+          {models.map((model) => (
+            <div
+              key={model.id}
+              className={`model-card ${loadedModelPath === model.path ? 'loaded' : ''}`}
+            >
+              <div className="model-info">
+                <div className="model-name">
+                  {model.name}
+                  {loadedModelPath === model.path && (
+                    <span className="loaded-badge">
+                      <CheckCircle size={12} />
+                      Loaded
                     </span>
+                  )}
+                </div>
+                <div className="model-meta">
+                  <span>Created: {formatDate(model.createdAt)}</span>
+                  <span>Epochs: {model.epochsTrained}</span>
+                  <span>Size: {model.imgSize}px</span>
+                </div>
+                {Object.keys(model.metrics).length > 0 && (
+                  <div className="model-metrics">
+                    {formatMetrics(model.metrics)}
                   </div>
                 )}
               </div>
 
-              <div className="import-preview-footer">
+              <div className="model-actions">
                 <button
-                  className="cancel-button"
-                  onClick={() => setImportPreview(null)}
+                  className="action-button load"
+                  onClick={() => handleLoadModel(model)}
+                  disabled={loadingModel === model.id || loadedModelPath === model.path}
+                  title="Load for inference"
                 >
-                  Cancel
-                </button>
-                <button
-                  className="import-button"
-                  onClick={handleConfirmImport}
-                  disabled={importingPackage}
-                >
-                  {importingPackage ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Importing...
-                    </>
+                  {loadingModel === model.id ? (
+                    <Loader2 size={16} className="spin" />
                   ) : (
-                    <>
-                      <Upload size={16} />
-                      Import Model
-                    </>
+                    <Cpu size={16} />
+                  )}
+                </button>
+
+                {/* TensorRT Export Button - only show if TensorRT is available */}
+                {tensorrtStatus?.available && (
+                  <button
+                    className="action-button export-tensorrt"
+                    onClick={() => handleExportTensorRT(model)}
+                    disabled={exportingTensorRT === model.id}
+                    title="Export to TensorRT (faster GPU inference)"
+                  >
+                    {exportingTensorRT === model.id ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <Zap size={16} />
+                    )}
+                  </button>
+                )}
+
+                <button
+                  className="action-button export"
+                  onClick={() => handleExportONNX(model)}
+                  disabled={exportingModel === model.id}
+                  title="Export to ONNX"
+                >
+                  {exportingModel === model.id ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Download size={16} />
+                  )}
+                </button>
+
+                <button
+                  className="action-button export-package"
+                  onClick={() => handleExportPackage(model)}
+                  disabled={exportingPackage === model.id}
+                  title="Export as portable package (ZIP)"
+                >
+                  {exportingPackage === model.id ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Package size={16} />
+                  )}
+                </button>
+
+                <button
+                  className="action-button delete"
+                  onClick={() => handleDeleteModel(model)}
+                  disabled={deletingModel === model.id}
+                  title="Delete model"
+                >
+                  {deletingModel === model.id ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Trash2 size={16} />
                   )}
                 </button>
               </div>
             </div>
+          ))}
+        </div>
+      )}
+
+      {/* Import Preview Dialog */}
+      {importPreview && (
+        <div className="import-preview-overlay" onClick={() => setImportPreview(null)}>
+          <div className="import-preview-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="import-preview-header">
+              <h3>Import Model Package</h3>
+              <button className="close-button" onClick={() => setImportPreview(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="import-preview-content">
+              <div className="preview-item">
+                <span className="preview-label">Model Name:</span>
+                <span className="preview-value">{importPreview.config.modelName}</span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Training:</span>
+                <span className="preview-value">
+                  {importPreview.config.training.epochs} epochs, {importPreview.config.training.imgSize}px
+                </span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Metrics:</span>
+                <span className="preview-value">
+                  {formatPackageMetrics(importPreview.config.metrics)}
+                </span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Trained:</span>
+                <span className="preview-value">
+                  {formatDate(importPreview.config.trainingDate)}
+                </span>
+              </div>
+              {importPreview.hasEngine && (
+                <div className="preview-warning">
+                  <Zap size={14} />
+                  <span>
+                    Package includes TensorRT engine (may not work on different GPU)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="import-preview-footer">
+              <button
+                className="cancel-button"
+                onClick={() => setImportPreview(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="import-button"
+                onClick={handleConfirmImport}
+                disabled={importingPackage}
+              >
+                {importingPackage ? (
+                  <>
+                    <Loader2 size={16} className="spin" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Upload size={16} />
+                    Import Model
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-        )}
+        </div>
+      )}
+
+      <div className="tab-footer">
+        <span className="model-count">{models.length} model{models.length !== 1 ? 's' : ''}</span>
       </div>
     </div>
   );
 }
+
+export default DetectionModelsTab;
