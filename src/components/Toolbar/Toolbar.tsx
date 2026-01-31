@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
+import { useLoadingStore } from "../../store/loadingStore";
 import { useFollicleStore, useTemporalStore } from "../../store/follicleStore";
 import {
   generateExportV2,
@@ -475,17 +476,35 @@ export const Toolbar: React.FC = () => {
     blobServerConnected,
   ]);
 
+  // Loading store for global loading overlay
+  const startLoading = useLoadingStore((state) => state.startLoading);
+  const stopLoading = useLoadingStore((state) => state.stopLoading);
+
   // Handler functions
   const handleOpenImage = useCallback(async () => {
+    const controller = startLoading("Opening file...", true);
     try {
       const result = await window.electronAPI.openImageDialog();
+      if (controller?.signal.aborted) return;
+
       if (result) {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
 
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+
         // Create pre-decoded ImageBitmap for smooth rendering
         // Use imageOrientation: 'from-image' to apply EXIF rotation (matches backend)
         const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          bitmap.close();
+          return;
+        }
 
         const newImage: ProjectImage = {
           id: generateImageId(),
@@ -503,9 +522,12 @@ export const Toolbar: React.FC = () => {
         addImage(newImage);
       }
     } catch (error) {
+      if (controller?.signal.aborted) return;
       console.error("Failed to open image:", error);
+    } finally {
+      stopLoading();
     }
-  }, [addImage, imageOrder.length]);
+  }, [addImage, imageOrder.length, startLoading, stopLoading]);
 
   const handleSave = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;

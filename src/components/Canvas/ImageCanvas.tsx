@@ -4,6 +4,7 @@ import { useFollicleStore, useTemporalStore } from "../../store/follicleStore";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
 import { useThemeStore } from "../../store/themeStore";
+import { useLoadingStore } from "../../store/loadingStore";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { HeatmapOverlay } from "../HeatmapOverlay/HeatmapOverlay";
 import { FollicleOriginDialog } from "../FollicleOriginDialog";
@@ -1052,14 +1053,33 @@ export const ImageCanvas: React.FC = () => {
     };
   }, [zoom]);
 
+  // Loading store for global loading overlay
+  const startLoading = useLoadingStore((state) => state.startLoading);
+  const stopLoading = useLoadingStore((state) => state.stopLoading);
+
   // Open image dialog handler
   const handleOpenImage = useCallback(async () => {
+    const controller = startLoading("Opening file...", true);
     try {
       const result = await window.electronAPI.openImageDialog();
+      if (controller?.signal.aborted) return;
+
       if (result) {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+
         const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          bitmap.close();
+          return;
+        }
 
         const newImage: ProjectImage = {
           id: generateImageId(),
@@ -1077,9 +1097,12 @@ export const ImageCanvas: React.FC = () => {
         addImage(newImage);
       }
     } catch (error) {
+      if (controller?.signal.aborted) return;
       console.error("Failed to open image:", error);
+    } finally {
+      stopLoading();
     }
-  }, [addImage, imageOrder.length]);
+  }, [addImage, imageOrder.length, startLoading, stopLoading]);
 
   // Trigger auto-detect via custom event (handled by Toolbar)
   const triggerAutoDetect = useCallback(() => {

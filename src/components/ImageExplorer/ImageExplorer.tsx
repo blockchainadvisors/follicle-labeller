@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore } from '../../store/follicleStore';
 import { useSettingsStore } from '../../store/settingsStore';
+import { useLoadingStore } from '../../store/loadingStore';
 import { ProjectImage } from '../../types';
 import { AlertTriangle, Settings } from 'lucide-react';
 
@@ -114,6 +115,10 @@ export const ImageExplorer: React.FC = () => {
 
   const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
 
+  // Loading store for global loading overlay
+  const startLoading = useLoadingStore((state) => state.startLoading);
+  const stopLoading = useLoadingStore((state) => state.stopLoading);
+
   // State for delete confirmation dialog
   const [deleteConfirm, setDeleteConfirm] = useState<{
     imageId: string;
@@ -127,30 +132,52 @@ export const ImageExplorer: React.FC = () => {
   };
 
   const handleAddImage = async () => {
-    const result = await window.electronAPI.openImageDialog();
-    if (!result) return;
+    const controller = startLoading("Opening file...", true);
+    try {
+      const result = await window.electronAPI.openImageDialog();
+      if (controller?.signal.aborted) return;
 
-    const { fileName, data } = result;
+      if (!result) return;
 
-    // Create object URL and ImageBitmap
-    const blob = new Blob([data]);
-    const imageSrc = URL.createObjectURL(blob);
-    const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      const { fileName, data } = result;
 
-    const newImage: ProjectImage = {
-      id: generateImageId(),
-      fileName,
-      width: imageBitmap.width,
-      height: imageBitmap.height,
-      imageData: data,
-      imageBitmap,
-      imageSrc,
-      viewport: { offsetX: 0, offsetY: 0, scale: 1 },
-      createdAt: Date.now(),
-      sortOrder: imageOrder.length,
-    };
+      // Create object URL and ImageBitmap
+      const blob = new Blob([data]);
+      const imageSrc = URL.createObjectURL(blob);
 
-    addImage(newImage);
+      if (controller?.signal.aborted) {
+        URL.revokeObjectURL(imageSrc);
+        return;
+      }
+
+      const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+      if (controller?.signal.aborted) {
+        URL.revokeObjectURL(imageSrc);
+        imageBitmap.close();
+        return;
+      }
+
+      const newImage: ProjectImage = {
+        id: generateImageId(),
+        fileName,
+        width: imageBitmap.width,
+        height: imageBitmap.height,
+        imageData: data,
+        imageBitmap,
+        imageSrc,
+        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+        createdAt: Date.now(),
+        sortOrder: imageOrder.length,
+      };
+
+      addImage(newImage);
+    } catch (error) {
+      if (controller?.signal.aborted) return;
+      console.error("Failed to add image:", error);
+    } finally {
+      stopLoading();
+    }
   };
 
   // Show confirmation dialog before removing image

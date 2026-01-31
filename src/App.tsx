@@ -5,6 +5,7 @@ import { PropertyPanel } from './components/PropertyPanel/PropertyPanel';
 import { ImageExplorer } from './components/ImageExplorer/ImageExplorer';
 import { HelpPanel } from './components/HelpPanel/HelpPanel';
 import { StatisticsPanel } from './components/StatisticsPanel/StatisticsPanel';
+import { LoadingOverlay } from './components/LoadingOverlay';
 import { useThemeStore } from './store/themeStore';
 import { useCanvasStore } from './store/canvasStore';
 
@@ -28,6 +29,7 @@ const App: React.FC = () => {
       </div>
       <HelpPanel />
       {showStatistics && <StatisticsPanel onClose={toggleStatistics} />}
+      <LoadingOverlay />
     </div>
   );
 };
