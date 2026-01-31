@@ -260,16 +260,25 @@ export const Toolbar: React.FC = () => {
   // Ref to prevent duplicate server starts (React StrictMode runs effects twice)
   const serverStartAttempted = useRef(false);
 
+  // Loading store for Python initialization overlay
+  const setPythonInitializing = useLoadingStore((state) => state.setPythonInitializing);
+  const setPythonStatus = useLoadingStore((state) => state.setPythonStatus);
+
   // Start BLOB server on mount
   useEffect(() => {
     // Prevent duplicate starts from StrictMode
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
+    // Show initialization overlay immediately
+    setPythonInitializing(true);
+    setPythonStatus("Checking server status...");
+
     // Listen for setup progress events
     const cleanupProgress = window.electronAPI.blob.onSetupProgress(
       (status) => {
         setSetupStatus(status);
+        setPythonStatus(status); // Update loading overlay
       }
     );
 
@@ -283,6 +292,7 @@ export const Toolbar: React.FC = () => {
           setBlobServerConnected(true);
           setServerStarting(false);
           setSetupStatus("");
+          setPythonInitializing(false); // Hide overlay
           return;
         }
 
@@ -305,6 +315,7 @@ export const Toolbar: React.FC = () => {
         setSetupStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
       } finally {
         setServerStarting(false);
+        setPythonInitializing(false); // Hide overlay when done
       }
     };
 
