@@ -26,8 +26,8 @@ export const DuplicateDetectionDialog: React.FC<DuplicateDetectionDialogProps> =
   const hasNewDetections = report.newDetections > 0;
 
   return (
-    <div className="dialog-overlay">
-      <div className="dialog duplicate-detection-dialog">
+    <div className="duplicate-detection-overlay" onClick={() => onAction("cancel")}>
+      <div className="duplicate-detection-dialog" onClick={e => e.stopPropagation()}>
         <div className="dialog-header">
           <h2>
             {hasDuplicates ? (
@@ -37,7 +37,7 @@ export const DuplicateDetectionDialog: React.FC<DuplicateDetectionDialogProps> =
             )}
           </h2>
           <button
-            className="dialog-close"
+            className="close-button"
             onClick={() => onAction("cancel")}
             aria-label="Close"
           >
@@ -82,30 +82,32 @@ export const DuplicateDetectionDialog: React.FC<DuplicateDetectionDialogProps> =
           )}
         </div>
 
-        <div className="dialog-actions">
+        <div className="dialog-footer">
           <button
-            className="btn btn-secondary"
+            className="button-secondary"
             onClick={() => onAction("cancel")}
           >
             Cancel
           </button>
 
-          {hasDuplicates && hasNewDetections && (
-            <button
-              className="btn btn-primary"
-              onClick={() => onAction("keepNew")}
-            >
-              Keep Only New ({report.newDetections})
-            </button>
-          )}
+          <div className="footer-actions">
+            {hasDuplicates && hasNewDetections && (
+              <button
+                className="button-primary"
+                onClick={() => onAction("keepNew")}
+              >
+                Keep Only New ({report.newDetections})
+              </button>
+            )}
 
-          <button
-            className={`btn ${hasDuplicates && hasNewDetections ? "btn-secondary" : "btn-primary"}`}
-            onClick={() => onAction("keepAll")}
-            disabled={report.totalDetected === 0}
-          >
-            {hasDuplicates ? `Keep All (${report.totalDetected})` : `Add All (${report.totalDetected})`}
-          </button>
+            <button
+              className={hasDuplicates && hasNewDetections ? "button-secondary" : "button-primary"}
+              onClick={() => onAction("keepAll")}
+              disabled={report.totalDetected === 0}
+            >
+              {hasDuplicates ? `Keep All (${report.totalDetected})` : `Add All (${report.totalDetected})`}
+            </button>
+          </div>
         </div>
       </div>
     </div>
