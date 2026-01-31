@@ -260,25 +260,16 @@ export const Toolbar: React.FC = () => {
   // Ref to prevent duplicate server starts (React StrictMode runs effects twice)
   const serverStartAttempted = useRef(false);
 
-  // Loading store for Python initialization overlay
-  const setPythonInitializing = useLoadingStore((state) => state.setPythonInitializing);
-  const setPythonStatus = useLoadingStore((state) => state.setPythonStatus);
-
   // Start BLOB server on mount
   useEffect(() => {
     // Prevent duplicate starts from StrictMode
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
-    // Show initialization overlay immediately
-    setPythonInitializing(true);
-    setPythonStatus("Checking server status...");
-
     // Listen for setup progress events
     const cleanupProgress = window.electronAPI.blob.onSetupProgress(
       (status) => {
         setSetupStatus(status);
-        setPythonStatus(status); // Update loading overlay
       }
     );
 
@@ -292,7 +283,6 @@ export const Toolbar: React.FC = () => {
           setBlobServerConnected(true);
           setServerStarting(false);
           setSetupStatus("");
-          setPythonInitializing(false); // Hide overlay
           return;
         }
 
@@ -315,7 +305,6 @@ export const Toolbar: React.FC = () => {
         setSetupStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
       } finally {
         setServerStarting(false);
-        setPythonInitializing(false); // Hide overlay when done
       }
     };
 
@@ -650,19 +639,7 @@ export const Toolbar: React.FC = () => {
       // Load detection settings (uses defaults for old files without settings)
       loadSettingsFromProject(globalSettings, imageSettingsMap);
 
-      // Validate model availability after loading settings
-      // This checks if the saved YOLO model exists on this machine
-      try {
-        const models = await yoloDetectionService.listModels();
-        const modelIds = models.map(m => m.id);
-        validateModelAvailability(modelIds);
-      } catch (error) {
-        console.warn('Failed to validate YOLO models:', error);
-        // If we can't list models, we can't validate - clear any warning
-        clearMissingModelWarning();
-      }
-
-      // Add all loaded images
+      // Add all loaded images first (don't block on model validation)
       for (const image of loadedImages) {
         addImage(image);
       }
@@ -676,6 +653,19 @@ export const Toolbar: React.FC = () => {
       // Mark as clean after loading - use setTimeout to ensure it runs after
       // dirty-tracking effects have fired (addImage sets isDirty, useEffect also sets it)
       setTimeout(markClean, 0);
+
+      // Validate model availability in background (don't block UI)
+      // This checks if the saved YOLO model exists on this machine
+      yoloDetectionService.listModels()
+        .then(models => {
+          const modelIds = models.map(m => m.id);
+          validateModelAvailability(modelIds);
+        })
+        .catch(error => {
+          console.warn('Failed to validate YOLO models:', error);
+          // If we can't list models, we can't validate - clear any warning
+          clearMissingModelWarning();
+        });
     },
     [
       clearProject,

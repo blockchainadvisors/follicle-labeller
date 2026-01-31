@@ -50,22 +50,3 @@
   background-color: var(--danger);
   color: var(--text-primary);
 }
-
-/* Startup/Python initialization styles */
-.startup-dialog {
-  min-width: 280px;
-}
-
-.startup-title {
-  font-size: var(--text-lg);
-  font-weight: var(--font-semibold);
-  color: var(--text-primary);
-  margin: 0;
-}
-
-.startup-status {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  text-align: center;
-  min-height: 1.5em;
-}

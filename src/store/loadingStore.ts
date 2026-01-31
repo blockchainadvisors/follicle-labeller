@@ -6,18 +6,10 @@ interface LoadingState {
   canCancel: boolean;
   abortController: AbortController | null;
 
-  // Python initialization
-  isPythonInitializing: boolean;
-  pythonStatus: string;
-
   // Actions
   startLoading: (message: string, canCancel?: boolean) => AbortController | null;
   stopLoading: () => void;
   cancelLoading: () => void;
-
-  // Python initialization actions
-  setPythonInitializing: (initializing: boolean) => void;
-  setPythonStatus: (status: string) => void;
 }
 
 export const useLoadingStore = create<LoadingState>((set, get) => ({
@@ -25,10 +17,6 @@ export const useLoadingStore = create<LoadingState>((set, get) => ({
   message: "",
   canCancel: false,
   abortController: null,
-
-  // Python initialization
-  isPythonInitializing: false,
-  pythonStatus: "",
 
   startLoading: (message, canCancel = false) => {
     const controller = canCancel ? new AbortController() : null;
@@ -61,13 +49,5 @@ export const useLoadingStore = create<LoadingState>((set, get) => ({
       canCancel: false,
       abortController: null,
     });
-  },
-
-  setPythonInitializing: (initializing) => {
-    set({ isPythonInitializing: initializing });
-  },
-
-  setPythonStatus: (status) => {
-    set({ pythonStatus: status });
   },
 }));
