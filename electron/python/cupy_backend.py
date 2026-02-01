@@ -245,3 +245,46 @@ class CuPyBackend(BaseGPUBackend):
         centroids_array = np.array(centroids, dtype=np.float64)
 
         return (num_labels + 1, labels_cpu.astype(np.int32), stats_array, centroids_array)
+
+    def clear_memory(self) -> dict:
+        """
+        Clear CuPy GPU memory pool.
+
+        Returns:
+            Dict with memory stats before and after cleanup
+        """
+        result = {
+            "success": True,
+            "memory_before_mb": None,
+            "memory_after_mb": None,
+            "memory_freed_mb": 0
+        }
+
+        try:
+            # Get memory pool
+            mempool = cp.get_default_memory_pool()
+            pinned_mempool = cp.get_default_pinned_memory_pool()
+
+            # Get memory usage before cleanup
+            used_before = mempool.used_bytes() / (1024 * 1024)
+            total_before = mempool.total_bytes() / (1024 * 1024)
+            result["memory_before_mb"] = round(total_before, 2)
+
+            # Free all blocks in the memory pools
+            mempool.free_all_blocks()
+            pinned_mempool.free_all_blocks()
+
+            # Synchronize to ensure cleanup is complete
+            cp.cuda.Stream.null.synchronize()
+
+            # Get memory usage after cleanup
+            used_after = mempool.used_bytes() / (1024 * 1024)
+            total_after = mempool.total_bytes() / (1024 * 1024)
+            result["memory_after_mb"] = round(total_after, 2)
+            result["memory_freed_mb"] = round(total_before - total_after, 2)
+
+        except Exception as e:
+            result["success"] = False
+            result["error"] = str(e)
+
+        return result

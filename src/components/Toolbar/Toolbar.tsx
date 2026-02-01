@@ -1770,6 +1770,10 @@ export const Toolbar: React.FC = () => {
       );
     } finally {
       setIsDetecting(false);
+      // Clean up GPU memory after blob detection (CuPy preprocessing)
+      blobService.clearBlobGpuMemory().catch(err =>
+        console.warn('Failed to clear blob GPU memory:', err)
+      );
     }
   }, [
     activeImage,
@@ -1916,6 +1920,10 @@ export const Toolbar: React.FC = () => {
         );
       } finally {
         setIsLearnedDetecting(false);
+        // Clean up GPU memory after learned blob detection (CuPy preprocessing)
+        blobService.clearBlobGpuMemory().catch(err =>
+          console.warn('Failed to clear blob GPU memory:', err)
+        );
       }
     },
     [

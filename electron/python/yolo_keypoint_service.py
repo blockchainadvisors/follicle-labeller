@@ -656,6 +656,10 @@ class YOLOKeypointService:
             # Cleanup job entry
             if job_id in self._training_jobs:
                 del self._training_jobs[job_id]
+            # Clean up GPU memory after training
+            cleanup_result = self.clear_gpu_memory()
+            if cleanup_result.get('memory_freed_mb', 0) > 0:
+                logger.info(f"Post-training GPU cleanup: freed {cleanup_result['memory_freed_mb']:.1f}MB")
 
     def stop_training(self, job_id: str) -> bool:
         """
@@ -854,7 +858,10 @@ class YOLOKeypointService:
 
             # Run batch inference
             # YOLO model.predict() accepts a list of images for batch processing
-            results = self._loaded_model.predict(valid_images, verbose=False)
+            # Explicitly specify device to ensure GPU is used when available
+            import torch
+            device = 0 if torch.cuda.is_available() else 'cpu'
+            results = self._loaded_model.predict(valid_images, verbose=False, device=device)
 
             t2 = time.time()
 

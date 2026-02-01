@@ -897,6 +897,30 @@ export class BlobService {
   }
 
   /**
+   * Clear GPU memory used by blob detection preprocessing (CuPy).
+   * Frees all blocks in the CuPy memory pool.
+   */
+  async clearBlobGpuMemory(): Promise<{ success: boolean; memory_freed_mb?: number }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/clear-gpu-memory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.memory_freed_mb > 0) {
+          console.log(`[GPU] Freed ${result.memory_freed_mb}MB CuPy GPU memory after blob detection`);
+        }
+        return result;
+      }
+      return { success: false };
+    } catch (error) {
+      console.warn('Blob GPU memory cleanup request failed:', error);
+      return { success: false };
+    }
+  }
+
+  /**
    * Get the singleton instance of BlobService.
    */
   private static instance: BlobService | null = null;

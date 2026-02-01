@@ -107,6 +107,8 @@ if sys.platform == 'win32':
 import cv2
 import numpy as np
 from PIL import Image, ImageOps
+# Allow very large images (up to 500 megapixels) - required for high-res microscopy images
+Image.MAX_IMAGE_PIXELS = 500_000_000
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -935,6 +937,25 @@ async def gpu_info():
             'details': {},
             'parallel_detection': PARALLEL_BLOB_AVAILABLE,
             'parallel_threshold_pixels': PARALLEL_DETECTION_PIXEL_THRESHOLD,
+        }
+
+
+@app.post('/clear-gpu-memory')
+async def clear_gpu_memory():
+    """
+    Clear GPU memory used by blob detection preprocessing (CuPy).
+    Frees all blocks in the CuPy memory pool.
+    """
+    manager = get_gpu_backend()
+
+    if manager:
+        result = manager.clear_gpu_memory()
+        return result
+    else:
+        return {
+            "success": True,
+            "message": "No GPU backend available",
+            "memory_freed_mb": 0
         }
 
 

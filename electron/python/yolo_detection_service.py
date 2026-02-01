@@ -707,6 +707,10 @@ class YOLODetectionService:
             # Cleanup job entry
             if job_id in self._training_jobs:
                 del self._training_jobs[job_id]
+            # Clean up GPU memory after training
+            cleanup_result = self.clear_gpu_memory()
+            if cleanup_result.get('memory_freed_mb', 0) > 0:
+                logger.info(f"Post-training GPU cleanup: freed {cleanup_result['memory_freed_mb']:.1f}MB")
 
     def stop_training(self, job_id: str) -> bool:
         """

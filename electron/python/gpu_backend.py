@@ -199,6 +199,28 @@ class GPUBackendManager:
         """Get information about all available backends."""
         return self._backends.copy()
 
+    def clear_gpu_memory(self) -> Dict[str, Any]:
+        """
+        Clear GPU memory for the active backend.
+
+        Returns:
+            Dict with memory stats and cleanup result
+        """
+        backend = self.get_backend()
+
+        # Check if backend has clear_memory method
+        if hasattr(backend, 'clear_memory'):
+            result = backend.clear_memory()
+            if result.get('memory_freed_mb', 0) > 0:
+                logger.info(f"GPU memory cleanup ({backend.name}): freed {result['memory_freed_mb']:.1f}MB")
+            return result
+
+        return {
+            "success": True,
+            "message": f"Backend '{backend.name}' does not require memory cleanup",
+            "memory_freed_mb": 0
+        }
+
 
 # Singleton instance
 _manager: Optional[GPUBackendManager] = None
