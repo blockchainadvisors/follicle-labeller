@@ -2,15 +2,16 @@ import React, { useState, useCallback } from 'react';
 import { Lock, Unlock, AlertTriangle, Crosshair, Loader2 } from 'lucide-react';
 import { useFollicleStore } from '../../store/follicleStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSettingsStore } from '../../store/settingsStore';
 import { isCircle, isRectangle, isLinear, RectangleAnnotation } from '../../types';
 import { blobService } from '../../services/blobService';
-import { yoloKeypointService } from '../../services/yoloKeypointService';
 
 export const PropertyPanel: React.FC = () => {
   const [showUnlockWarning, setShowUnlockWarning] = useState(false);
   const [showBatchUnlockWarning, setShowBatchUnlockWarning] = useState(false);
   const [isPredicting, setIsPredicting] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
+  const [predictionProgress, setPredictionProgress] = useState<{ current: number; total: number } | null>(null);
 
   const selectedIds = useFollicleStore(state => state.selectedIds);
   const follicles = useFollicleStore(state => state.follicles);
@@ -23,6 +24,10 @@ export const PropertyPanel: React.FC = () => {
 
   const activeImageId = useProjectStore(state => state.activeImageId);
 
+  // Get keypoint inference settings
+  const keypointInferenceBackend = useSettingsStore(state => state.globalDetectionSettings.keypointInferenceBackend);
+  const keypointConfidenceThreshold = useSettingsStore(state => state.globalDetectionSettings.keypointConfidenceThreshold);
+
   // Get selected annotations that belong to the active image
   const selectedFollicles = follicles.filter(f => selectedIds.has(f.id) && f.imageId === activeImageId);
 
@@ -31,7 +36,7 @@ export const PropertyPanel: React.FC = () => {
     (f): f is RectangleAnnotation => isRectangle(f) && !f.origin
   );
 
-  // Handle prediction for selected rectangles
+  // Handle prediction for selected rectangles using optimized batch prediction
   const handlePredictOrigins = useCallback(async () => {
     if (rectanglesWithoutOrigins.length === 0) return;
 
@@ -43,30 +48,32 @@ export const PropertyPanel: React.FC = () => {
 
     setIsPredicting(true);
     setPredictionError(null);
+    setPredictionProgress({ current: 0, total: rectanglesWithoutOrigins.length });
 
     try {
-      // Check if models are available
-      const models = await yoloKeypointService.listModels();
-      if (models.length === 0) {
-        setPredictionError('No trained YOLO models available. Train a model first.');
-        return;
-      }
+      // Use optimized batch prediction from blobService
+      // PyTorch uses batch inference (4.9x faster), TensorRT uses sequential
+      const useTensorRT = keypointInferenceBackend === 'tensorrt';
 
-      // Predict origins for rectangles without them
-      const predictions = await blobService.predictOriginsForRectangles(
+      const origins = await blobService.predictOriginsForRectangles(
         sessionId,
-        rectanglesWithoutOrigins.map(r => ({
-          id: r.id,
-          x: r.x,
-          y: r.y,
-          width: r.width,
-          height: r.height,
-        }))
+        rectanglesWithoutOrigins.map(rect => ({
+          id: rect.id,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        })),
+        useTensorRT,
+        (current, total) => {
+          setPredictionProgress({ current: Math.ceil(current), total });
+        },
+        keypointConfidenceThreshold ?? 0.3,
       );
 
-      // Update annotations with predicted origins
+      // Apply predicted origins to rectangles
       let successCount = 0;
-      for (const [id, origin] of predictions) {
+      for (const [id, origin] of origins) {
         updateFollicle(id, { origin });
         successCount++;
       }
@@ -81,8 +88,9 @@ export const PropertyPanel: React.FC = () => {
       setPredictionError(error instanceof Error ? error.message : 'Prediction failed');
     } finally {
       setIsPredicting(false);
+      setPredictionProgress(null);
     }
-  }, [rectanglesWithoutOrigins, updateFollicle]);
+  }, [rectanglesWithoutOrigins, updateFollicle, keypointInferenceBackend, keypointConfidenceThreshold]);
 
   // No selection
   if (selectedFollicles.length === 0) {
@@ -229,23 +237,33 @@ export const PropertyPanel: React.FC = () => {
         {rectanglesWithoutOrigins.length > 0 && (
           <div className="property-group">
             <label>Origin Prediction</label>
-            <button
-              className="predict-origins-button"
-              onClick={handlePredictOrigins}
-              disabled={isPredicting}
-            >
-              {isPredicting ? (
-                <>
-                  <Loader2 size={14} className="spin" />
-                  Predicting...
-                </>
-              ) : (
-                <>
-                  <Crosshair size={14} />
-                  Predict Origins ({rectanglesWithoutOrigins.length})
-                </>
+            <div className="predict-button-wrapper">
+              <button
+                className="predict-origins-button"
+                onClick={handlePredictOrigins}
+                disabled={isPredicting}
+              >
+                {isPredicting ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    Predicting...
+                  </>
+                ) : (
+                  <>
+                    <Crosshair size={14} />
+                    Predict Origins ({rectanglesWithoutOrigins.length})
+                  </>
+                )}
+              </button>
+              {isPredicting && predictionProgress && (
+                <div className="predict-progress-bar">
+                  <div
+                    className="predict-progress-fill"
+                    style={{ width: `${(predictionProgress.current / predictionProgress.total) * 100}%` }}
+                  />
+                </div>
               )}
-            </button>
+            </div>
             {predictionError && (
               <span className="prediction-error">{predictionError}</span>
             )}
@@ -398,23 +416,33 @@ export const PropertyPanel: React.FC = () => {
           ) : (
             <div className="property-group origin-actions">
               <span className="hint-text">Double-click to set origin manually</span>
-              <button
-                className="predict-origins-button small"
-                onClick={handlePredictOrigins}
-                disabled={isPredicting}
-              >
-                {isPredicting ? (
-                  <>
-                    <Loader2 size={14} className="spin" />
-                    Predicting...
-                  </>
-                ) : (
-                  <>
-                    <Crosshair size={14} />
-                    Predict Origin
-                  </>
+              <div className="predict-button-wrapper">
+                <button
+                  className="predict-origins-button small"
+                  onClick={handlePredictOrigins}
+                  disabled={isPredicting}
+                >
+                  {isPredicting ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      Predicting...
+                    </>
+                  ) : (
+                    <>
+                      <Crosshair size={14} />
+                      Predict Origin
+                    </>
+                  )}
+                </button>
+                {isPredicting && predictionProgress && (
+                  <div className="predict-progress-bar">
+                    <div
+                      className="predict-progress-fill"
+                      style={{ width: `${(predictionProgress.current / predictionProgress.total) * 100}%` }}
+                    />
+                  </div>
                 )}
-              </button>
+              </div>
               {predictionError && (
                 <span className="prediction-error">{predictionError}</span>
               )}

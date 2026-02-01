@@ -15,6 +15,7 @@ This service handles:
 
 import asyncio
 import base64
+import gc
 import io
 import json
 import logging
@@ -200,6 +201,66 @@ class YOLODetectionService:
         self._training_jobs: Dict[str, dict] = {}
 
         logger.info(f"YOLODetectionService initialized. Models dir: {self.models_dir}")
+
+    def clear_gpu_memory(self) -> Dict[str, Any]:
+        """
+        Clear GPU memory by running garbage collection and emptying CUDA cache.
+
+        This should be called after batch detection tasks complete to free
+        up GPU memory for other operations.
+
+        Returns:
+            Dict with memory stats before and after cleanup
+        """
+        result = {
+            "success": True,
+            "memory_before": None,
+            "memory_after": None,
+            "memory_freed_mb": 0
+        }
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Get memory stats before cleanup
+                memory_before = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
+                memory_reserved_before = torch.cuda.memory_reserved() / (1024 * 1024)  # MB
+                result["memory_before"] = {
+                    "allocated_mb": round(memory_before, 2),
+                    "reserved_mb": round(memory_reserved_before, 2)
+                }
+
+                # Run Python garbage collection first
+                gc.collect()
+
+                # Empty CUDA cache
+                torch.cuda.empty_cache()
+
+                # Synchronize to ensure cleanup is complete
+                torch.cuda.synchronize()
+
+                # Get memory stats after cleanup
+                memory_after = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
+                memory_reserved_after = torch.cuda.memory_reserved() / (1024 * 1024)  # MB
+                result["memory_after"] = {
+                    "allocated_mb": round(memory_after, 2),
+                    "reserved_mb": round(memory_reserved_after, 2)
+                }
+
+                result["memory_freed_mb"] = round(memory_reserved_before - memory_reserved_after, 2)
+
+                logger.info(f"GPU memory cleanup: freed {result['memory_freed_mb']:.1f}MB "
+                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB)")
+            else:
+                result["success"] = True
+                result["message"] = "CUDA not available, no GPU memory to clear"
+
+        except Exception as e:
+            logger.error(f"GPU memory cleanup failed: {e}")
+            result["success"] = False
+            result["error"] = str(e)
+
+        return result
 
     def validate_dataset(self, dataset_path: str) -> DetectionDatasetValidation:
         """

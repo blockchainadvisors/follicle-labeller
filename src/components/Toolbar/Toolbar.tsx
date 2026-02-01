@@ -50,6 +50,7 @@ import { blobService } from "../../services/blobService";
 import {
   DetectionSettingsDialog,
   GPUInstallState,
+  TensorRTExportState,
 } from "../DetectionSettingsDialog/DetectionSettingsDialog";
 import { useSettingsStore } from "../../store/settingsStore";
 import {
@@ -74,6 +75,7 @@ import {
   findDuplicates,
 } from "../DuplicateDetectionDialog";
 import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
+import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { generateId } from "../../utils/id-generator";
@@ -223,6 +225,23 @@ export const Toolbar: React.FC = () => {
     isInstalling: false,
     progress: '',
     error: null,
+  });
+
+  // State for TensorRT export (persisted across dialog open/close)
+  const [detectionExportState, setDetectionExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
+  });
+
+  const [keypointExportState, setKeypointExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
   });
 
   // State for unified YOLO dialogs
@@ -1310,22 +1329,99 @@ export const Toolbar: React.FC = () => {
       ).length;
       const now = Date.now();
 
+      // Create follicle IDs first so we can use them for origin lookup
+      const follicleIds = predictions.map(() => generateId());
+
+      // Run keypoint prediction if enabled (before creating annotations so we can include origins)
+      let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+      if (detectionSettings.useKeypointPrediction && blobSessionId) {
+        const keypointStartTime = performance.now();
+        predictedOrigins = new Map<string, FollicleOrigin>();
+
+        // Load keypoint model with correct backend
+        const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+        const keypointModels = await yoloKeypointService.listModels();
+        if (keypointModels.length > 0) {
+          let modelPath = keypointModels[0].path;
+          if (useTensorRT) {
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            try {
+              const engineExists = await window.electronAPI.fileExists(enginePath);
+              if (engineExists) {
+                modelPath = enginePath;
+              }
+            } catch {
+              // Fall back to PyTorch
+            }
+          }
+          await yoloKeypointService.loadModel(modelPath);
+
+          // Predict keypoints for each detection
+          for (let i = 0; i < predictions.length; i++) {
+            const detection = predictions[i];
+            try {
+              // Get crop region as base64
+              const cropBase64 = await blobService.getCropBase64(blobSessionId, {
+                x: detection.x,
+                y: detection.y,
+                width: detection.width,
+                height: detection.height,
+              });
+              if (!cropBase64) continue;
+
+              // Run keypoint prediction
+              const prediction = await yoloKeypointService.predict(cropBase64);
+              if (!prediction || prediction.confidence < 0.3) continue;
+
+              // Transform from normalized crop coords (0-1) to image coords
+              const originX = detection.x + (prediction.origin.x * detection.width);
+              const originY = detection.y + (prediction.origin.y * detection.height);
+              const dirEndX = detection.x + (prediction.directionEndpoint.x * detection.width);
+              const dirEndY = detection.y + (prediction.directionEndpoint.y * detection.height);
+
+              // Calculate direction angle and length for FollicleOrigin format
+              const dx = dirEndX - originX;
+              const dy = dirEndY - originY;
+              const directionAngle = Math.atan2(dy, dx);
+              const directionLength = Math.sqrt(dx * dx + dy * dy);
+
+              predictedOrigins.set(follicleIds[i], {
+                originPoint: { x: originX, y: originY },
+                directionAngle,
+                directionLength,
+              });
+            } catch (error) {
+              console.warn(`Keypoint prediction failed for detection ${i}:`, error);
+            }
+          }
+        }
+        const keypointTime = performance.now() - keypointStartTime;
+        console.log(`[BENCHMARK] Keypoint prediction: ${keypointTime.toFixed(0)}ms - ${predictedOrigins.size}/${predictions.length} origins predicted`);
+      }
+
       const newFollicles: RectangleAnnotation[] = predictions.map(
-        (detection: DetectionPrediction, i: number) => ({
-          id: generateId(),
-          imageId: activeImageId,
-          shape: "rectangle" as const,
-          x: detection.x,
-          y: detection.y,
-          width: detection.width,
-          height: detection.height,
-          label: `YOLO ${existingCount + i + 1}`,
-          notes: `YOLO detection (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
-          color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
-          createdAt: now,
-          updatedAt: now,
-        }),
+        (detection: DetectionPrediction, i: number) => {
+          const follicleId = follicleIds[i];
+          const origin = predictedOrigins?.get(follicleId);
+          return {
+            id: follicleId,
+            imageId: activeImageId,
+            shape: "rectangle" as const,
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+            label: `YOLO ${existingCount + i + 1}`,
+            notes: `YOLO detection (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+            color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+            createdAt: now,
+            updatedAt: now,
+            origin, // Include predicted origin if available
+          };
+        },
       );
+
+      const originsCount = predictedOrigins?.size ?? 0;
 
       // Check for duplicates with existing annotations
       const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
@@ -1342,7 +1438,7 @@ export const Toolbar: React.FC = () => {
         // No duplicates, import all directly
         const allFollicles = [...follicles, ...newFollicles];
         importFollicles(allFollicles);
-        console.log(`YOLO detected ${predictions.length} follicles (no duplicates)`);
+        console.log(`YOLO detected ${predictions.length} follicles (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
       }
     } catch (error) {
       console.error("YOLO detection failed:", error);
@@ -1351,6 +1447,10 @@ export const Toolbar: React.FC = () => {
       );
     } finally {
       setIsDetecting(false);
+      // Clean up GPU memory after detection tasks complete
+      blobService.clearDetectionGpuMemory().catch(err =>
+        console.warn('Failed to clear detection GPU memory:', err)
+      );
     }
   }, [
     activeImage,
@@ -1358,6 +1458,7 @@ export const Toolbar: React.FC = () => {
     isDetecting,
     follicles,
     importFollicles,
+    blobSessionId,
     detectionSettings.yoloModelId,
     detectionSettings.yoloConfidenceThreshold,
     detectionSettings.yoloUseTiledInference,
@@ -1368,6 +1469,8 @@ export const Toolbar: React.FC = () => {
     detectionSettings.yoloAutoScaleMode,
     detectionSettings.yoloTrainingImageSize,
     detectionSettings.yoloInferenceBackend,
+    detectionSettings.useKeypointPrediction,
+    detectionSettings.keypointInferenceBackend,
     getImageBase64,
   ]);
 
@@ -1527,6 +1630,10 @@ export const Toolbar: React.FC = () => {
       );
     } finally {
       setIsDetecting(false);
+      // Clean up GPU memory after detection tasks complete
+      blobService.clearDetectionGpuMemory().catch(err =>
+        console.warn('Failed to clear detection GPU memory:', err)
+      );
     }
   }, [
     activeImage,
@@ -1585,7 +1692,8 @@ export const Toolbar: React.FC = () => {
 
       const inferenceStartTime = performance.now();
       if (detectionSettings.useKeypointPrediction) {
-        const result = await blobService.detectWithKeypoints(blobSessionId, detectSettings);
+        const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+        const result = await blobService.detectWithKeypoints(blobSessionId, detectSettings, undefined, useTensorRT);
         detections = result.detections;
         predictedOrigins = result.origins;
         count = result.count;
@@ -1726,7 +1834,8 @@ export const Toolbar: React.FC = () => {
 
         const inferenceStartTime = performance.now();
         if (detectionSettings.useKeypointPrediction) {
-          const result = await blobService.detectWithKeypoints(blobSessionId, learnedDetectSettings);
+          const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+          const result = await blobService.detectWithKeypoints(blobSessionId, learnedDetectSettings, undefined, useTensorRT);
           detections = result.detections;
           predictedOrigins = result.origins;
           count = result.count;
@@ -2315,6 +2424,11 @@ export const Toolbar: React.FC = () => {
           onServerRestarted={handleServerRestarted}
           installState={gpuInstallState}
           onInstallStateChange={setGpuInstallState}
+          // TensorRT export state (persisted across dialog open/close)
+          detectionExportState={detectionExportState}
+          onDetectionExportStateChange={setDetectionExportState}
+          keypointExportState={keypointExportState}
+          onKeypointExportStateChange={setKeypointExportState}
           // Live settings updates (changes apply immediately and mark file dirty)
           onSettingsChange={(newSettings) => {
             setGlobalDetectionSettings(newSettings);

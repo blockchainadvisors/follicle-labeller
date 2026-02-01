@@ -15,6 +15,7 @@ This service handles:
 
 import asyncio
 import base64
+import gc
 import io
 import json
 import logging
@@ -186,11 +187,72 @@ class YOLOKeypointService:
         # Currently loaded model for inference
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
+        self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
 
         logger.info(f"YOLOKeypointService initialized. Models dir: {self.models_dir}")
+
+    def clear_gpu_memory(self) -> Dict[str, Any]:
+        """
+        Clear GPU memory by running garbage collection and emptying CUDA cache.
+
+        This should be called after batch prediction tasks complete to free
+        up GPU memory for other operations.
+
+        Returns:
+            Dict with memory stats before and after cleanup
+        """
+        result = {
+            "success": True,
+            "memory_before": None,
+            "memory_after": None,
+            "memory_freed_mb": 0
+        }
+
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # Get memory stats before cleanup
+                memory_before = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
+                memory_reserved_before = torch.cuda.memory_reserved() / (1024 * 1024)  # MB
+                result["memory_before"] = {
+                    "allocated_mb": round(memory_before, 2),
+                    "reserved_mb": round(memory_reserved_before, 2)
+                }
+
+                # Run Python garbage collection first
+                gc.collect()
+
+                # Empty CUDA cache
+                torch.cuda.empty_cache()
+
+                # Synchronize to ensure cleanup is complete
+                torch.cuda.synchronize()
+
+                # Get memory stats after cleanup
+                memory_after = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
+                memory_reserved_after = torch.cuda.memory_reserved() / (1024 * 1024)  # MB
+                result["memory_after"] = {
+                    "allocated_mb": round(memory_after, 2),
+                    "reserved_mb": round(memory_reserved_after, 2)
+                }
+
+                result["memory_freed_mb"] = round(memory_reserved_before - memory_reserved_after, 2)
+
+                logger.info(f"GPU memory cleanup: freed {result['memory_freed_mb']:.1f}MB "
+                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB)")
+            else:
+                result["success"] = True
+                result["message"] = "CUDA not available, no GPU memory to clear"
+
+        except Exception as e:
+            logger.error(f"GPU memory cleanup failed: {e}")
+            result["success"] = False
+            result["error"] = str(e)
+
+        return result
 
     def validate_dataset(self, dataset_path: str) -> DatasetValidation:
         """
@@ -616,7 +678,7 @@ class YOLOKeypointService:
         Load a trained model for inference.
 
         Args:
-            model_path: Path to model .pt file
+            model_path: Path to model .pt or .engine file
 
         Returns:
             True if loaded successfully
@@ -631,12 +693,26 @@ class YOLOKeypointService:
                 del self._loaded_model
                 self._loaded_model = None
                 self._loaded_model_path = None
+                self._loaded_model_backend = 'pytorch'
 
-            # Load new model
-            self._loaded_model = YOLO(model_path)
+            # Detect backend from file extension
+            model_ext = Path(model_path).suffix.lower()
+            if model_ext == '.engine':
+                backend = 'tensorrt'
+            else:
+                backend = 'pytorch'
+
+            # Load new model (Ultralytics handles both .pt and .engine)
+            # For TensorRT engines, we must specify task='pose' explicitly
+            # so that keypoint outputs are properly parsed
+            if backend == 'tensorrt':
+                self._loaded_model = YOLO(model_path, task='pose')
+            else:
+                self._loaded_model = YOLO(model_path)
             self._loaded_model_path = model_path
+            self._loaded_model_backend = backend
 
-            logger.info(f"Loaded model: {model_path}")
+            logger.info(f"Loaded model: {model_path} (backend: {backend})")
             return True
 
         except Exception as e:
@@ -658,6 +734,8 @@ class YOLOKeypointService:
             return None
 
         try:
+            t0 = time.time()
+
             # Decode image
             image = Image.open(io.BytesIO(image_data))
             if image.mode != 'RGB':
@@ -666,8 +744,24 @@ class YOLOKeypointService:
             img_array = np.array(image)
             img_width, img_height = image.size
 
+            t1 = time.time()
+
             # Run inference
             results = self._loaded_model.predict(img_array, verbose=False)
+
+            t2 = time.time()
+
+            # Log timing every 100th prediction for debugging
+            if hasattr(self, '_predict_count'):
+                self._predict_count += 1
+            else:
+                self._predict_count = 1
+
+            if self._predict_count <= 5 or self._predict_count % 100 == 0:
+                decode_ms = (t1 - t0) * 1000
+                infer_ms = (t2 - t1) * 1000
+                logger.info(f"Predict timing #{self._predict_count} [{self._loaded_model_backend}]: "
+                           f"decode={decode_ms:.1f}ms, inference={infer_ms:.1f}ms")
 
             if not results or len(results) == 0:
                 return None
@@ -678,8 +772,13 @@ class YOLOKeypointService:
             if result.keypoints is None or len(result.keypoints.xy) == 0:
                 return None
 
+            # Use box confidence for filtering (measures detection quality)
+            # Keypoint confidence measures visibility, not detection quality
+            if result.boxes is None or len(result.boxes) == 0:
+                return None
+            box_confidence = float(result.boxes.conf[0])
+
             keypoints = result.keypoints.xy[0].cpu().numpy()  # First detection
-            confidences = result.keypoints.conf[0].cpu().numpy() if result.keypoints.conf is not None else [1.0, 1.0]
 
             if len(keypoints) < 2:
                 return None
@@ -690,8 +789,8 @@ class YOLOKeypointService:
             direction_x = float(keypoints[1][0]) / img_width
             direction_y = float(keypoints[1][1]) / img_height
 
-            # Average confidence
-            confidence = float(np.mean(confidences[:2]))
+            # Use box confidence instead of keypoint confidence
+            confidence = box_confidence
 
             return KeypointPrediction(
                 origin_x=origin_x,
@@ -704,6 +803,117 @@ class YOLOKeypointService:
         except Exception as e:
             logger.exception("Prediction failed")
             return None
+
+    def predict_batch(self, images_data: List[bytes]) -> List[Optional[KeypointPrediction]]:
+        """
+        Run keypoint prediction on multiple cropped follicle images in batch.
+
+        Batch inference is significantly faster on GPU as it processes
+        multiple images in parallel.
+
+        Args:
+            images_data: List of image bytes (JPEG or PNG)
+
+        Returns:
+            List of KeypointPrediction or None for each image
+        """
+        if self._loaded_model is None:
+            logger.error("No model loaded for inference")
+            return [None] * len(images_data)
+
+        if len(images_data) == 0:
+            return []
+
+        try:
+            t0 = time.time()
+
+            # Decode all images and track their sizes
+            images = []
+            sizes = []  # (width, height) for each image
+
+            for img_data in images_data:
+                try:
+                    image = Image.open(io.BytesIO(img_data))
+                    if image.mode != 'RGB':
+                        image = image.convert('RGB')
+                    images.append(np.array(image))
+                    sizes.append(image.size)  # (width, height)
+                except Exception as e:
+                    logger.warning(f"Failed to decode image in batch: {e}")
+                    images.append(None)
+                    sizes.append((0, 0))
+
+            t1 = time.time()
+
+            # Filter out failed images for batch inference
+            valid_indices = [i for i, img in enumerate(images) if img is not None]
+            valid_images = [images[i] for i in valid_indices]
+
+            if len(valid_images) == 0:
+                return [None] * len(images_data)
+
+            # Run batch inference
+            # YOLO model.predict() accepts a list of images for batch processing
+            results = self._loaded_model.predict(valid_images, verbose=False)
+
+            t2 = time.time()
+
+            # Log timing every Nth batch for debugging
+            if not hasattr(self, '_batch_count'):
+                self._batch_count = 0
+            self._batch_count += 1
+            if self._batch_count <= 5 or self._batch_count % 50 == 0:
+                decode_ms = (t1 - t0) * 1000
+                infer_ms = (t2 - t1) * 1000
+                logger.info(f"Batch predict timing #{self._batch_count} [{self._loaded_model_backend}] "
+                           f"(n={len(valid_images)}): decode={decode_ms:.1f}ms, inference={infer_ms:.1f}ms")
+
+            # Process results
+            predictions = [None] * len(images_data)
+
+            for result_idx, orig_idx in enumerate(valid_indices):
+                if result_idx >= len(results):
+                    continue
+
+                result = results[result_idx]
+                img_width, img_height = sizes[orig_idx]
+
+                # Extract keypoints
+                if result.keypoints is None or len(result.keypoints.xy) == 0:
+                    continue
+
+                # Use box confidence for filtering (measures detection quality)
+                if result.boxes is None or len(result.boxes) == 0:
+                    continue
+                box_confidence = float(result.boxes.conf[0])
+
+                keypoints = result.keypoints.xy[0].cpu().numpy()
+
+                if len(keypoints) < 2:
+                    continue
+
+                # Normalize coordinates to 0-1
+                origin_x = float(keypoints[0][0]) / img_width
+                origin_y = float(keypoints[0][1]) / img_height
+                direction_x = float(keypoints[1][0]) / img_width
+                direction_y = float(keypoints[1][1]) / img_height
+
+                # Use box confidence instead of keypoint confidence
+                confidence = box_confidence
+
+                predictions[orig_idx] = KeypointPrediction(
+                    origin_x=origin_x,
+                    origin_y=origin_y,
+                    direction_end_x=direction_x,
+                    direction_end_y=direction_y,
+                    confidence=confidence
+                )
+
+            return predictions
+
+        except Exception as e:
+            logger.exception("Batch prediction failed")
+            return [None] * len(images_data)
 
     def export_onnx(self, model_path: str, output_path: str) -> Optional[str]:
         """
@@ -797,6 +1007,89 @@ class YOLOKeypointService:
                 logger.exception(f"Failed to delete model: {model_id}")
                 return False
         return False
+
+    def get_loaded_model_path(self) -> Optional[str]:
+        """Get the path of the currently loaded model."""
+        return self._loaded_model_path
+
+    def get_loaded_model_backend(self) -> str:
+        """Get the backend of the currently loaded model ('pytorch' or 'tensorrt')."""
+        return self._loaded_model_backend
+
+    def check_tensorrt_available(self) -> Dict[str, Any]:
+        """
+        Check if TensorRT is available on this system.
+
+        Returns:
+            Dict with 'available' bool and 'version' string (or None)
+        """
+        try:
+            import tensorrt
+            return {"available": True, "version": tensorrt.__version__}
+        except ImportError:
+            return {"available": False, "version": None}
+
+    def export_tensorrt(
+        self,
+        model_path: str,
+        output_path: Optional[str] = None,
+        half: bool = True,
+        imgsz: int = 640
+    ) -> Dict[str, Any]:
+        """
+        Export a PyTorch model to TensorRT engine format.
+
+        TensorRT provides GPU-optimized inference for faster keypoint prediction
+        on NVIDIA GPUs. The exported .engine file is GPU-architecture
+        specific and not portable between different GPU types.
+
+        Args:
+            model_path: Path to source .pt model
+            output_path: Optional path for output .engine file.
+                        If None, saves alongside the .pt file.
+            half: Use FP16 precision (recommended for consumer GPUs)
+            imgsz: Input image size for the engine
+
+        Returns:
+            Dict with 'success' bool and 'engine_path' string
+        """
+        if not YOLO_AVAILABLE:
+            return {"success": False, "error": "Ultralytics not installed"}
+
+        try:
+            # Check TensorRT availability first
+            trt_status = self.check_tensorrt_available()
+            if not trt_status["available"]:
+                return {
+                    "success": False,
+                    "error": "TensorRT is not installed. Install it with: pip install tensorrt"
+                }
+
+            logger.info(f"Exporting {model_path} to TensorRT (half={half}, imgsz={imgsz})")
+
+            # Load the PyTorch model
+            model = YOLO(model_path)
+
+            # Export to TensorRT format
+            # Ultralytics handles the conversion internally
+            engine_path = model.export(format='engine', half=half, imgsz=imgsz)
+
+            if engine_path and Path(engine_path).exists():
+                # If custom output path requested, move the file
+                if output_path:
+                    output_path = Path(output_path)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(engine_path, output_path)
+                    engine_path = str(output_path)
+
+                logger.info(f"TensorRT export successful: {engine_path}")
+                return {"success": True, "engine_path": str(engine_path)}
+            else:
+                return {"success": False, "error": "Export completed but engine file not found"}
+
+        except Exception as e:
+            logger.exception(f"TensorRT export failed: {model_path}")
+            return {"success": False, "error": str(e)}
 
 
 # Singleton instance

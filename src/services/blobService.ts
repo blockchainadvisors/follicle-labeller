@@ -443,6 +443,8 @@ export class BlobService {
    * @param sessionId - Session ID from setImage
    * @param settings - Detection settings
    * @param keypointModel - Optional path to YOLO keypoint model (uses loaded model if not specified)
+   * @param useTensorRT - Whether to use TensorRT engine instead of PyTorch model
+   * @param confidenceThreshold - Minimum confidence threshold for keypoint predictions (default 0.3)
    * @returns Detections and predicted follicle origins
    */
   async detectWithKeypoints(
@@ -461,6 +463,8 @@ export class BlobService {
       forceCPU?: boolean;
     },
     keypointModel?: string,
+    useTensorRT?: boolean,
+    confidenceThreshold: number = 0.3,
   ): Promise<{
     detections: BlobDetection[];
     origins: Map<string, FollicleOrigin>;
@@ -483,12 +487,47 @@ export class BlobService {
 
     // Load model if specified, or auto-load first available model
     if (keypointModel) {
-      await yoloKeypointService.loadModel(keypointModel);
+      // If TensorRT requested, try to use .engine file
+      let modelToLoad = keypointModel;
+      if (useTensorRT && !keypointModel.endsWith('.engine')) {
+        const enginePath = keypointModel.replace(/\.pt$/i, '.engine');
+        // Check if engine file exists via electron API
+        try {
+          const engineExists = await window.electronAPI.fileExists(enginePath);
+          if (engineExists) {
+            modelToLoad = enginePath;
+            console.log('Using TensorRT engine for keypoint model:', enginePath);
+          } else {
+            console.warn('TensorRT requested but engine file not found, falling back to PyTorch:', keypointModel);
+          }
+        } catch {
+          console.warn('Could not check for engine file, using PyTorch model');
+        }
+      }
+      await yoloKeypointService.loadModel(modelToLoad);
     } else {
       // Try to auto-load the first available model if none specified
       const models = await yoloKeypointService.listModels();
       if (models.length > 0) {
-        const loaded = await yoloKeypointService.loadModel(models[0].path);
+        let modelPath = models[0].path;
+
+        // If TensorRT requested, try to use .engine file
+        if (useTensorRT && !modelPath.endsWith('.engine')) {
+          const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+          try {
+            const engineExists = await window.electronAPI.fileExists(enginePath);
+            if (engineExists) {
+              modelPath = enginePath;
+              console.log('Using TensorRT engine for keypoint model:', enginePath);
+            } else {
+              console.warn('TensorRT requested but engine file not found, falling back to PyTorch:', models[0].path);
+            }
+          } catch {
+            console.warn('Could not check for engine file, using PyTorch model');
+          }
+        }
+
+        const loaded = await yoloKeypointService.loadModel(modelPath);
         if (!loaded) {
           console.warn('Failed to auto-load keypoint model');
           return {
@@ -519,7 +558,7 @@ export class BlobService {
 
         // Run keypoint prediction
         const prediction = await yoloKeypointService.predict(cropBase64);
-        if (!prediction || prediction.confidence < 0.3) continue;
+        if (!prediction || prediction.confidence < confidenceThreshold) continue;
 
         // Transform keypoints from normalized crop coords to image coords
         const origin = this.transformKeypointPrediction(prediction, detection);
@@ -543,9 +582,9 @@ export class BlobService {
    * @param detection - Detection bounding box
    * @returns Base64 encoded crop image
    */
-  private async getCropBase64(
+  async getCropBase64(
     sessionId: string,
-    detection: BlobDetection,
+    detection: BlobDetection | { x: number; y: number; width: number; height: number },
   ): Promise<string | null> {
     try {
       const response = await fetch(`${this.baseUrl}/crop-region`, {
@@ -605,15 +644,25 @@ export class BlobService {
    * Predict origins for specific rectangle annotations.
    * Only predicts for rectangles that don't already have origins.
    *
+   * Uses optimized batch prediction for PyTorch (4.9x faster) and
+   * parallel requests for TensorRT (since TensorRT batch doesn't work well).
+   *
    * @param sessionId - Session ID from setImage
    * @param rectangles - Array of rectangle annotations to predict origins for
+   * @param useTensorRT - Whether to use TensorRT engine instead of PyTorch model
+   * @param onProgress - Optional callback for progress updates (current, total)
    * @returns Map of annotation ID to predicted FollicleOrigin
    */
   async predictOriginsForRectangles(
     sessionId: string,
     rectangles: Array<{ id: string; x: number; y: number; width: number; height: number }>,
+    useTensorRT?: boolean,
+    onProgress?: (current: number, total: number) => void,
+    confidenceThreshold: number = 0.3,
   ): Promise<Map<string, FollicleOrigin>> {
     const origins = new Map<string, FollicleOrigin>();
+
+    if (rectangles.length === 0) return origins;
 
     // Check if YOLO keypoint service is available
     const keypointStatus = await yoloKeypointService.getStatus();
@@ -629,46 +678,222 @@ export class BlobService {
       return origins;
     }
 
-    const loaded = await yoloKeypointService.loadModel(models[0].path);
+    // Select model path based on backend preference
+    let modelPath = models[0].path;
+    let actuallyUsingTensorRT = false;
+    if (useTensorRT && !modelPath.endsWith('.engine')) {
+      const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+      try {
+        const engineExists = await window.electronAPI.fileExists(enginePath);
+        if (engineExists) {
+          modelPath = enginePath;
+          actuallyUsingTensorRT = true;
+          console.log('Using TensorRT engine for keypoint prediction:', enginePath);
+        } else {
+          console.warn('TensorRT requested but engine file not found, using PyTorch:', modelPath);
+        }
+      } catch {
+        console.warn('Could not check for engine file, using PyTorch model');
+      }
+    } else if (modelPath.endsWith('.engine')) {
+      actuallyUsingTensorRT = true;
+    }
+
+    const loaded = await yoloKeypointService.loadModel(modelPath);
     if (!loaded) {
       console.warn('Failed to load keypoint model');
       return origins;
     }
 
-    // For each rectangle, crop and predict keypoints
-    for (const rect of rectangles) {
-      try {
-        // Crop the region and get base64
-        const cropBase64 = await this.getCropBase64(sessionId, {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          confidence: 1,
-          method: 'blob',
-        });
-        if (!cropBase64) continue;
+    // First, get all crops in parallel batches to reduce HTTP overhead
+    const crops: Array<{ id: string; rect: typeof rectangles[0]; base64: string | null }> = [];
+    const cropConcurrency = 16; // Process 16 crop requests concurrently
 
-        // Run keypoint prediction
-        const prediction = await yoloKeypointService.predict(cropBase64);
-        if (!prediction || prediction.confidence < 0.3) continue;
+    for (let i = 0; i < rectangles.length; i += cropConcurrency) {
+      const batch = rectangles.slice(i, i + cropConcurrency);
+      const batchResults = await Promise.all(
+        batch.map(async (rect) => {
+          try {
+            const cropBase64 = await this.getCropBase64(sessionId, {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            });
+            return { id: rect.id, rect, base64: cropBase64 };
+          } catch {
+            return { id: rect.id, rect, base64: null };
+          }
+        })
+      );
+      crops.push(...batchResults);
+      // Report crop progress (first half)
+      onProgress?.(Math.floor((i + batch.length) / 2), rectangles.length);
+    }
 
-        // Transform keypoints from normalized crop coords to image coords
-        const origin = this.transformKeypointPrediction(prediction, {
-          x: rect.x,
-          y: rect.y,
-          width: rect.width,
-          height: rect.height,
-          confidence: 1,
-          method: 'blob',
+    const validCrops = crops.filter(c => c.base64 !== null);
+
+    // Use batch prediction for both backends
+    // PyTorch: batch 64 is optimal (limited by GPU memory efficiency)
+    // TensorRT: batch 8 max (limited by engine export with dynamic batching)
+    // Send batches in parallel waves to reduce HTTP overhead for both backends
+    if (validCrops.length > 1) {
+      const batchSize = actuallyUsingTensorRT ? 8 : 64;
+      // Process multiple batches concurrently to reduce HTTP overhead
+      // TensorRT: 8 concurrent (8x8=64 images per wave)
+      // PyTorch: 4 concurrent (4x64=256 images per wave)
+      const concurrentBatches = actuallyUsingTensorRT ? 8 : 4;
+      let processedCount = 0;
+
+      // Create all batches first
+      const allBatches: Array<{ batch: typeof validCrops; startIndex: number }> = [];
+      for (let i = 0; i < validCrops.length; i += batchSize) {
+        allBatches.push({
+          batch: validCrops.slice(i, i + batchSize),
+          startIndex: i,
         });
-        origins.set(rect.id, origin);
-      } catch (error) {
-        console.warn(`Keypoint prediction failed for rectangle ${rect.id}:`, error);
+      }
+
+      // Process batches in waves (concurrently within each wave)
+      for (let waveStart = 0; waveStart < allBatches.length; waveStart += concurrentBatches) {
+        const wave = allBatches.slice(waveStart, waveStart + concurrentBatches);
+
+        // Send all batches in this wave concurrently
+        const waveResults = await Promise.all(
+          wave.map(async ({ batch }) => {
+            const images = batch.map(c => c.base64!);
+            try {
+              const response = await fetch(`${this.baseUrl}/yolo-keypoint/predict-batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ images }),
+              });
+              if (response.ok) {
+                const result = await response.json();
+                return { success: true, predictions: result.predictions || [], batch };
+              }
+              return { success: false, predictions: [], batch };
+            } catch {
+              return { success: false, predictions: [], batch };
+            }
+          })
+        );
+
+        // Process results from this wave
+        for (const { success, predictions, batch } of waveResults) {
+          if (success) {
+            for (let j = 0; j < batch.length && j < predictions.length; j++) {
+              const pred = predictions[j];
+              if (pred && pred.confidence >= confidenceThreshold) {
+                const crop = batch[j];
+                const origin = this.transformKeypointPrediction(
+                  {
+                    origin: pred.origin,
+                    directionEndpoint: pred.directionEndpoint,
+                    confidence: pred.confidence,
+                  },
+                  { x: crop.rect.x, y: crop.rect.y, width: crop.rect.width, height: crop.rect.height, confidence: 1, method: 'blob' }
+                );
+                origins.set(crop.id, origin);
+              }
+            }
+          } else {
+            // Fall back to sequential for failed batch
+            for (const crop of batch) {
+              try {
+                const prediction = await yoloKeypointService.predict(crop.base64!);
+                if (prediction && prediction.confidence >= confidenceThreshold) {
+                  const origin = this.transformKeypointPrediction(prediction, {
+                    x: crop.rect.x, y: crop.rect.y, width: crop.rect.width, height: crop.rect.height,
+                    confidence: 1, method: 'blob',
+                  });
+                  origins.set(crop.id, origin);
+                }
+              } catch {
+                // Skip failed prediction
+              }
+            }
+          }
+          processedCount += batch.length;
+        }
+        onProgress?.(rectangles.length / 2 + processedCount / 2, rectangles.length);
+      }
+    } else {
+      // Single image: Use sequential prediction
+      for (let i = 0; i < validCrops.length; i++) {
+        const crop = validCrops[i];
+        try {
+          const prediction = await yoloKeypointService.predict(crop.base64!);
+          if (prediction && prediction.confidence >= confidenceThreshold) {
+            const origin = this.transformKeypointPrediction(prediction, {
+              x: crop.rect.x, y: crop.rect.y, width: crop.rect.width, height: crop.rect.height,
+              confidence: 1, method: 'blob',
+            });
+            origins.set(crop.id, origin);
+          }
+        } catch (error) {
+          console.warn(`Keypoint prediction failed for rectangle ${crop.id}:`, error);
+        }
+        onProgress?.(rectangles.length / 2 + (i + 1) / 2, rectangles.length);
       }
     }
 
+    console.log(`[BENCHMARK] Keypoint prediction completed: ${origins.size}/${rectangles.length} origins predicted`);
+
+    // Clear GPU memory after batch prediction to free VRAM
+    this.clearKeypointGpuMemory().catch(err =>
+      console.warn('Failed to clear GPU memory after keypoint prediction:', err)
+    );
+
     return origins;
+  }
+
+  /**
+   * Clear GPU memory used by keypoint prediction.
+   * Runs garbage collection and empties CUDA cache.
+   */
+  async clearKeypointGpuMemory(): Promise<{ success: boolean; memory_freed_mb?: number }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/yolo-keypoint/clear-gpu-memory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.memory_freed_mb > 0) {
+          console.log(`[GPU] Freed ${result.memory_freed_mb}MB GPU memory after keypoint prediction`);
+        }
+        return result;
+      }
+      return { success: false };
+    } catch (error) {
+      console.warn('GPU memory cleanup request failed:', error);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Clear GPU memory used by YOLO detection.
+   * Runs garbage collection and empties CUDA cache.
+   */
+  async clearDetectionGpuMemory(): Promise<{ success: boolean; memory_freed_mb?: number }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/yolo-detect/clear-gpu-memory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.memory_freed_mb > 0) {
+          console.log(`[GPU] Freed ${result.memory_freed_mb}MB GPU memory after detection`);
+        }
+        return result;
+      }
+      return { success: false };
+    } catch (error) {
+      console.warn('Detection GPU memory cleanup request failed:', error);
+      return { success: false };
+    }
   }
 
   /**

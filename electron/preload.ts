@@ -572,6 +572,19 @@ const electronAPI = {
       files: Array<{ path: string; content: ArrayBuffer | string }>
     ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
       ipcRenderer.invoke("yolo-keypoint:writeDatasetToTemp", files),
+
+    // Check TensorRT availability for keypoint inference
+    checkTensorRTAvailable: (): Promise<{ available: boolean; version: string | null }> =>
+      ipcRenderer.invoke("yolo-keypoint:checkTensorRT"),
+
+    // Export to TensorRT engine format
+    exportToTensorRT: (
+      modelPath: string,
+      outputPath?: string,
+      half?: boolean,
+      imgsz?: number
+    ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:exportTensorRT", modelPath, outputPath, half, imgsz),
   },
 
   // Model Export/Import API

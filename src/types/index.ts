@@ -323,6 +323,7 @@ export interface DetectionSettingsExport {
 
   // YOLO Keypoint prediction
   useKeypointPrediction: boolean;
+  keypointInferenceBackend: 'pytorch' | 'tensorrt';  // Keypoint inference backend selection
 }
 
 // Project settings container
@@ -554,6 +555,13 @@ declare global {
           outputPath: string
         ) => Promise<{ success: boolean; outputPath?: string }>;
         deleteModel: (modelId: string) => Promise<{ success: boolean }>;
+        checkTensorRTAvailable: () => Promise<TensorRTStatus>;
+        exportToTensorRT: (
+          modelPath: string,
+          outputPath?: string,
+          half?: boolean,
+          imgsz?: number
+        ) => Promise<{ success: boolean; engine_path?: string; error?: string }>;
       };
       // YOLO Detection Training API
       yoloDetection: {
@@ -1116,8 +1124,10 @@ export interface DetectionSettings {
   yoloModelName: string | null;
   /** Model type: 'pretrained' or 'custom' */
   yoloModelSource: 'pretrained' | 'custom';
-  /** YOLO confidence threshold (0-1) */
+  /** YOLO confidence threshold for rectangle detection (0-1) */
   yoloConfidenceThreshold: number;
+  /** Keypoint/origin prediction confidence threshold (0-1) */
+  keypointConfidenceThreshold: number;
   // Blob detection settings
   minWidth: number;
   maxWidth: number;
@@ -1145,6 +1155,7 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   yoloModelName: null,
   yoloModelSource: 'pretrained',
   yoloConfidenceThreshold: 0.5,
+  keypointConfidenceThreshold: 0.3,
   minWidth: 10,
   maxWidth: 200,
   minHeight: 10,

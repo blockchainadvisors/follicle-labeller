@@ -14,7 +14,8 @@ export interface DetectionSettings {
   yoloModelId: string | null;  // Selected model ID (null = pre-trained/default)
   yoloModelName: string | null;  // Human-readable model name for display
   yoloModelSource: 'pretrained' | 'custom';  // Whether this is a pre-trained or custom model
-  yoloConfidenceThreshold: number;  // Confidence threshold for YOLO (0-1)
+  yoloConfidenceThreshold: number;  // Confidence threshold for rectangle detection (0-1)
+  keypointConfidenceThreshold: number;  // Confidence threshold for origin prediction (0-1)
   yoloUseTiledInference: boolean;  // Use tiled inference for large images
   yoloTileSize: number;  // Tile size for tiled inference (should match training tile size)
   yoloTileOverlap: number;  // Overlap between tiles in pixels
@@ -75,6 +76,9 @@ export interface DetectionSettings {
 
   // YOLO inference backend selection (PyTorch or TensorRT)
   yoloInferenceBackend: YoloInferenceBackend;
+
+  // Keypoint inference backend selection (PyTorch or TensorRT)
+  keypointInferenceBackend: YoloInferenceBackend;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -85,6 +89,7 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   yoloModelName: null,
   yoloModelSource: 'pretrained',
   yoloConfidenceThreshold: 0.5,
+  keypointConfidenceThreshold: 0.3,  // Default threshold for origin prediction
   yoloUseTiledInference: true,  // Enable by default for better results on large images
   yoloTileSize: 1024,  // Match typical training tile size
   yoloTileOverlap: 128,  // 128px overlap between tiles
@@ -133,6 +138,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   useKeypointPrediction: false,
   // YOLO inference backend - default to PyTorch
   yoloInferenceBackend: 'pytorch',
+  // Keypoint inference backend - default to PyTorch
+  keypointInferenceBackend: 'pytorch',
 };
 
 // Install state that can be managed by parent for persistence
@@ -140,6 +147,15 @@ export interface GPUInstallState {
   isInstalling: boolean;
   progress: string;
   error: string | null;
+}
+
+// TensorRT export state that can be managed by parent for persistence
+export interface TensorRTExportState {
+  isExporting: boolean;
+  progress: string;
+  error: string | null;
+  enginePath: string | null;
+  completed: boolean;
 }
 
 interface DetectionSettingsDialogProps {
@@ -150,6 +166,12 @@ interface DetectionSettingsDialogProps {
   // Optional install state from parent for persistence across dialog close/reopen
   installState?: GPUInstallState;
   onInstallStateChange?: (state: GPUInstallState) => void;
+  // Optional TensorRT export state for detection models (persists across dialog close/reopen)
+  detectionExportState?: TensorRTExportState;
+  onDetectionExportStateChange?: (state: TensorRTExportState) => void;
+  // Optional TensorRT export state for keypoint models (persists across dialog close/reopen)
+  keypointExportState?: TensorRTExportState;
+  onKeypointExportStateChange?: (state: TensorRTExportState) => void;
   // Live settings update callbacks (changes apply immediately)
   onSettingsChange: (settings: DetectionSettings) => void;
   // Per-image settings support
@@ -168,6 +190,10 @@ export function DetectionSettingsDialog({
   onServerRestarted,
   installState,
   onInstallStateChange,
+  detectionExportState,
+  onDetectionExportStateChange,
+  keypointExportState,
+  onKeypointExportStateChange,
   onSettingsChange,
   activeImageId,
   activeImageName,
@@ -195,11 +221,49 @@ export function DetectionSettingsDialog({
   const [tensorrtInstallError, setTensorrtInstallError] = useState<string | null>(null);
   const [tensorrtCanInstall, setTensorrtCanInstall] = useState(false);
 
-  // TensorRT export state (for exporting .pt to .engine)
+  // TensorRT export state (for exporting .pt to .engine) - Detection
+  // Local state used when parent doesn't provide controlled state
+  const [localDetectionExportState, setLocalDetectionExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
+  });
   const [engineAvailable, setEngineAvailable] = useState<boolean | null>(null);
-  const [enginePath, setEnginePath] = useState<string | null>(null);
-  const [isExportingEngine, setIsExportingEngine] = useState(false);
-  const [exportEngineError, setExportEngineError] = useState<string | null>(null);
+
+  // Use parent-controlled state if provided, otherwise use local state
+  const detectionExport = detectionExportState ?? localDetectionExportState;
+  const updateDetectionExportState = (updates: Partial<TensorRTExportState>) => {
+    const newState = { ...detectionExport, ...updates };
+    if (onDetectionExportStateChange) {
+      onDetectionExportStateChange(newState);
+    } else {
+      setLocalDetectionExportState(newState);
+    }
+  };
+
+  // Keypoint TensorRT state
+  const [keypointTensorrtStatus, setKeypointTensorrtStatus] = useState<TensorRTStatus | null>(null);
+  const [localKeypointExportState, setLocalKeypointExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
+  });
+  const [keypointEngineAvailable, setKeypointEngineAvailable] = useState<boolean | null>(null);
+
+  // Use parent-controlled state if provided, otherwise use local state
+  const keypointExport = keypointExportState ?? localKeypointExportState;
+  const updateKeypointExportState = (updates: Partial<TensorRTExportState>) => {
+    const newState = { ...keypointExport, ...updates };
+    if (onKeypointExportStateChange) {
+      onKeypointExportStateChange(newState);
+    } else {
+      setLocalKeypointExportState(newState);
+    }
+  };
 
   // Draggable dialog state
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -331,6 +395,19 @@ export function DetectionSettingsDialog({
     checkKeypointModels();
   }, []);
 
+  // Check keypoint TensorRT availability
+  useEffect(() => {
+    const checkKeypointTensorRT = async () => {
+      try {
+        const trtStatus = await yoloKeypointService.checkTensorRTAvailable();
+        setKeypointTensorrtStatus(trtStatus);
+      } catch (error) {
+        console.error('Failed to check keypoint TensorRT:', error);
+      }
+    };
+    checkKeypointTensorRT();
+  }, []);
+
   // Check for available YOLO detection models and TensorRT status
   useEffect(() => {
     const checkDetectionModels = async () => {
@@ -370,7 +447,7 @@ export function DetectionSettingsDialog({
       // Only check if TensorRT is available and we have a custom model selected
       if (!tensorrtStatus?.available) {
         setEngineAvailable(null);
-        setEnginePath(null);
+        updateDetectionExportState({ enginePath: null });
         return;
       }
 
@@ -386,7 +463,7 @@ export function DetectionSettingsDialog({
       if (!modelPath) {
         // Pre-trained model - engine would need to be created differently
         setEngineAvailable(null);
-        setEnginePath(null);
+        updateDetectionExportState({ enginePath: null });
         return;
       }
 
@@ -395,42 +472,134 @@ export function DetectionSettingsDialog({
       try {
         const exists = await window.electronAPI.fileExists(expectedEnginePath);
         setEngineAvailable(exists);
-        setEnginePath(exists ? expectedEnginePath : modelPath);
+        updateDetectionExportState({ enginePath: exists ? expectedEnginePath : modelPath });
       } catch (error) {
         console.error('Failed to check engine file:', error);
         setEngineAvailable(false);
-        setEnginePath(modelPath);
+        updateDetectionExportState({ enginePath: modelPath });
       }
     };
 
     checkEngineAvailability();
   }, [settings.yoloModelId, settings.yoloModelSource, tensorrtStatus?.available, detectionModels]);
 
-  // Handle TensorRT engine export
+  // Handle TensorRT engine export for detection
   const handleExportEngine = async () => {
-    if (!enginePath || isExportingEngine) return;
+    if (!detectionExport.enginePath || detectionExport.isExporting) return;
 
-    const modelPath = enginePath.endsWith('.engine')
-      ? enginePath.replace(/\.engine$/i, '.pt')
-      : enginePath;
+    const modelPath = detectionExport.enginePath.endsWith('.engine')
+      ? detectionExport.enginePath.replace(/\.engine$/i, '.pt')
+      : detectionExport.enginePath;
 
-    setIsExportingEngine(true);
-    setExportEngineError(null);
+    updateDetectionExportState({
+      isExporting: true,
+      error: null,
+      progress: 'Starting TensorRT export...',
+      completed: false,
+    });
 
     try {
+      // Update progress to show we're building
+      updateDetectionExportState({ progress: 'Building TensorRT engine (FP16)... This may take several minutes.' });
+
       const result = await yoloDetectionService.exportToTensorRT(modelPath);
 
       if (result.success && result.engine_path) {
         setEngineAvailable(true);
-        setEnginePath(result.engine_path);
+        updateDetectionExportState({
+          isExporting: false,
+          enginePath: result.engine_path,
+          progress: '',
+          completed: true,
+        });
         console.log('TensorRT engine exported:', result.engine_path);
       } else {
-        setExportEngineError(result.error || 'Export failed');
+        updateDetectionExportState({
+          isExporting: false,
+          error: result.error || 'Export failed',
+          progress: '',
+        });
       }
     } catch (error) {
-      setExportEngineError(error instanceof Error ? error.message : 'Export failed');
-    } finally {
-      setIsExportingEngine(false);
+      updateDetectionExportState({
+        isExporting: false,
+        error: error instanceof Error ? error.message : 'Export failed',
+        progress: '',
+      });
+    }
+  };
+
+  // Check if TensorRT engine file exists for the current keypoint model
+  useEffect(() => {
+    const checkKeypointEngineAvailability = async () => {
+      // Only check if TensorRT is available and we have a keypoint model
+      if (!keypointTensorrtStatus?.available || !loadedKeypointModel) {
+        setKeypointEngineAvailable(null);
+        updateKeypointExportState({ enginePath: null });
+        return;
+      }
+
+      const modelPath = loadedKeypointModel.path;
+
+      // Check if .engine file exists (replace .pt with .engine)
+      const expectedEnginePath = modelPath.replace(/\.pt$/i, '.engine');
+      try {
+        const exists = await window.electronAPI.fileExists(expectedEnginePath);
+        setKeypointEngineAvailable(exists);
+        updateKeypointExportState({ enginePath: exists ? expectedEnginePath : modelPath });
+      } catch (error) {
+        console.error('Failed to check keypoint engine file:', error);
+        setKeypointEngineAvailable(false);
+        updateKeypointExportState({ enginePath: modelPath });
+      }
+    };
+
+    checkKeypointEngineAvailability();
+  }, [loadedKeypointModel, keypointTensorrtStatus?.available]);
+
+  // Handle TensorRT engine export for keypoint
+  const handleExportKeypointEngine = async () => {
+    if (!keypointExport.enginePath || keypointExport.isExporting) return;
+
+    const modelPath = keypointExport.enginePath.endsWith('.engine')
+      ? keypointExport.enginePath.replace(/\.engine$/i, '.pt')
+      : keypointExport.enginePath;
+
+    updateKeypointExportState({
+      isExporting: true,
+      error: null,
+      progress: 'Starting TensorRT export...',
+      completed: false,
+    });
+
+    try {
+      // Update progress to show we're building
+      updateKeypointExportState({ progress: 'Building TensorRT engine (FP16)... This may take several minutes.' });
+
+      const result = await yoloKeypointService.exportToTensorRT(modelPath);
+
+      if (result.success && result.engine_path) {
+        setKeypointEngineAvailable(true);
+        updateKeypointExportState({
+          isExporting: false,
+          enginePath: result.engine_path,
+          progress: '',
+          completed: true,
+        });
+        console.log('Keypoint TensorRT engine exported:', result.engine_path);
+      } else {
+        updateKeypointExportState({
+          isExporting: false,
+          error: result.error || 'Export failed',
+          progress: '',
+        });
+      }
+    } catch (error) {
+      updateKeypointExportState({
+        isExporting: false,
+        error: error instanceof Error ? error.message : 'Export failed',
+        progress: '',
+      });
     }
   };
 
@@ -701,7 +870,12 @@ export function DetectionSettingsDialog({
               {tensorrtInstalling && (
                 <div className="tensorrt-install-section installing">
                   <Loader2 size={14} className="spin" />
-                  <span>{tensorrtInstallProgress || 'Installing TensorRT...'}</span>
+                  <div className="tensorrt-install-progress">
+                    <span>{tensorrtInstallProgress || 'Installing TensorRT...'}</span>
+                    <div className="tensorrt-install-progress-bar">
+                      <div className="tensorrt-install-progress-bar-indeterminate" />
+                    </div>
+                  </div>
                 </div>
               )}
               {tensorrtInstallError && !tensorrtInstalling && (
@@ -722,7 +896,7 @@ export function DetectionSettingsDialog({
               {/* TensorRT engine status for selected model */}
               {settings.yoloInferenceBackend === 'tensorrt' && tensorrtStatus?.available && settings.yoloModelSource === 'custom' && (
                 <>
-                  {engineAvailable === false && !isExportingEngine && !exportEngineError && (
+                  {engineAvailable === false && !detectionExport.isExporting && !detectionExport.error && !detectionExport.completed && (
                     <div className="tensorrt-export-section">
                       <div className="tensorrt-export-warning">
                         <AlertCircle size={14} />
@@ -737,22 +911,29 @@ export function DetectionSettingsDialog({
                       </p>
                     </div>
                   )}
-                  {isExportingEngine && (
+                  {detectionExport.isExporting && (
                     <div className="tensorrt-export-section exporting">
-                      <Loader2 size={14} className="spin" />
-                      <span>Exporting to TensorRT... (this may take a few minutes)</span>
+                      <div className="export-progress-container">
+                        <div className="export-progress-header">
+                          <Loader2 size={14} className="spin" />
+                          <span>{detectionExport.progress || 'Exporting to TensorRT...'}</span>
+                        </div>
+                        <div className="export-progress-bar">
+                          <div className="export-progress-bar-indeterminate" />
+                        </div>
+                      </div>
                     </div>
                   )}
-                  {exportEngineError && !isExportingEngine && (
+                  {detectionExport.error && !detectionExport.isExporting && (
                     <div className="tensorrt-export-section error">
                       <AlertCircle size={14} />
-                      <span>{exportEngineError}</span>
+                      <span>{detectionExport.error}</span>
                       <button className="tensorrt-retry-btn" onClick={handleExportEngine}>
                         Retry
                       </button>
                     </div>
                   )}
-                  {engineAvailable === true && (
+                  {(engineAvailable === true || detectionExport.completed) && (
                     <p className="setting-hint tensorrt-ready">
                       <Zap size={12} />
                       TensorRT engine ready. Using GPU-optimized inference.
@@ -966,8 +1147,13 @@ export function DetectionSettingsDialog({
             <div className="gpu-status gpu-status-installing">
               <Loader2 size={16} className="spin" />
               <div className="gpu-status-content">
-                <span className="gpu-status-label">Installing GPU Packages</span>
-                <span className="gpu-status-progress">{installProgress || 'Starting...'}</span>
+                <div className="gpu-install-progress-container">
+                  <span className="gpu-status-label">Installing GPU Packages</span>
+                  <span className="gpu-status-progress">{installProgress || 'Starting...'}</span>
+                  <div className="gpu-install-progress-bar">
+                    <div className="gpu-install-progress-bar-indeterminate" />
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1390,33 +1576,130 @@ export function DetectionSettingsDialog({
             </>
           )}
 
-          {/* YOLO Keypoint Prediction */}
-          <section className="settings-section">
+          {/* Origin Prediction Settings - Top-level section for keypoint prediction configuration */}
+          <section className="settings-section origin-prediction-section">
             <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useKeypointPrediction}
-                  onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
-                  disabled={!keypointModelsAvailable}
-                />
-                <Crosshair size={16} style={{ marginRight: '6px' }} />
-                Auto-Predict Origins
-              </label>
+              <Crosshair size={16} style={{ marginRight: '6px' }} />
+              Origin Prediction
             </h3>
             <p className="section-description">
-              Automatically predict follicle origin points and growth direction using YOLO keypoint model.
-              {!keypointModelsAvailable && (
-                <span className="warning-text"> No trained models available. Train a model first using the YOLO Training dialog.</span>
-              )}
+              Configure how follicle origin points and growth directions are predicted.
+              These settings apply to both manual prediction (from side panel) and auto-prediction during detection.
             </p>
-            {settings.useKeypointPrediction && keypointModelsAvailable && loadedKeypointModel && (
-              <div className="keypoint-model-info">
-                <span className="model-name">Using: {loadedKeypointModel.name}</span>
-                <span className="model-meta">
-                  {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
-                </span>
+
+            {!keypointModelsAvailable ? (
+              <div className="yolo-warning">
+                <AlertCircle size={14} />
+                <span>No trained models available. Train a model first using the YOLO Training dialog.</span>
               </div>
+            ) : (
+              <>
+                {/* Model Info */}
+                {loadedKeypointModel && (
+                  <div className="keypoint-model-info">
+                    <span className="model-name">Model: {loadedKeypointModel.name}</span>
+                    <span className="model-meta">
+                      {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
+                    </span>
+                  </div>
+                )}
+
+                {/* Inference Backend */}
+                <div className="settings-row">
+                  <label>Inference Backend</label>
+                  <select
+                    value={settings.keypointInferenceBackend}
+                    onChange={e => handleChange('keypointInferenceBackend', e.target.value as YoloInferenceBackend)}
+                    disabled={!keypointTensorrtStatus?.available && settings.keypointInferenceBackend !== 'tensorrt'}
+                  >
+                    <option value="pytorch">PyTorch (Default)</option>
+                    <option value="tensorrt" disabled={!keypointTensorrtStatus?.available}>
+                      TensorRT {keypointTensorrtStatus?.available ? `(v${keypointTensorrtStatus.version})` : '(Not installed)'}
+                    </option>
+                  </select>
+                </div>
+
+                {/* TensorRT engine status */}
+                {settings.keypointInferenceBackend === 'tensorrt' && keypointTensorrtStatus?.available && loadedKeypointModel && (
+                  <>
+                    {keypointEngineAvailable === false && !keypointExport.isExporting && !keypointExport.error && !keypointExport.completed && (
+                      <div className="tensorrt-export-section">
+                        <div className="tensorrt-export-warning">
+                          <AlertCircle size={14} />
+                          <span>No TensorRT engine found for "{loadedKeypointModel.name}"</span>
+                        </div>
+                        <button className="tensorrt-export-btn" onClick={handleExportKeypointEngine}>
+                          <Zap size={14} />
+                          Export to TensorRT
+                        </button>
+                        <p className="setting-hint">
+                          Export creates a GPU-optimized .engine file for faster prediction.
+                        </p>
+                      </div>
+                    )}
+                    {keypointExport.isExporting && (
+                      <div className="tensorrt-export-section exporting">
+                        <div className="export-progress-container">
+                          <div className="export-progress-header">
+                            <Loader2 size={14} className="spin" />
+                            <span>{keypointExport.progress || 'Exporting to TensorRT...'}</span>
+                          </div>
+                          <div className="export-progress-bar">
+                            <div className="export-progress-bar-indeterminate" />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {keypointExport.error && !keypointExport.isExporting && (
+                      <div className="tensorrt-export-section error">
+                        <AlertCircle size={14} />
+                        <span>{keypointExport.error}</span>
+                        <button className="tensorrt-retry-btn" onClick={handleExportKeypointEngine}>
+                          Retry
+                        </button>
+                      </div>
+                    )}
+                    {(keypointEngineAvailable === true || keypointExport.completed) && (
+                      <p className="setting-hint tensorrt-ready">
+                        <Zap size={12} />
+                        TensorRT engine ready. Using GPU-optimized inference.
+                      </p>
+                    )}
+                  </>
+                )}
+
+                {/* Keypoint Confidence Threshold */}
+                <div className="settings-row" style={{ marginTop: '12px' }}>
+                  <label>Confidence Threshold</label>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.9"
+                    step="0.05"
+                    value={settings.keypointConfidenceThreshold}
+                    onChange={e => handleChange('keypointConfidenceThreshold', parseFloat(e.target.value))}
+                  />
+                  <span className="value-display">{(settings.keypointConfidenceThreshold * 100).toFixed(0)}%</span>
+                </div>
+                <p className="setting-hint">
+                  Minimum confidence for origin predictions. Higher = fewer but more accurate predictions.
+                </p>
+
+                {/* Auto-Predict Toggle */}
+                <div className="settings-row checkbox" style={{ marginTop: '12px' }}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={settings.useKeypointPrediction}
+                      onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
+                    />
+                    Auto-predict origins during detection
+                  </label>
+                </div>
+                <p className="setting-hint">
+                  When enabled, origin points will be automatically predicted for all detected follicles.
+                </p>
+              </>
             )}
           </section>
         </div>

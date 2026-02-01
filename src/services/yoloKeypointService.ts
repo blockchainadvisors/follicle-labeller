@@ -554,6 +554,58 @@ export class YOLOKeypointService {
       return false;
     }
   }
+
+  /**
+   * Check if TensorRT is available on this system for keypoint inference.
+   *
+   * TensorRT provides GPU-optimized inference for faster keypoint prediction
+   * on NVIDIA GPUs.
+   *
+   * @returns TensorRT availability status
+   */
+  async checkTensorRTAvailable(): Promise<{ available: boolean; version: string | null }> {
+    try {
+      return await window.electronAPI.yoloKeypoint.checkTensorRTAvailable();
+    } catch (error) {
+      console.error('Failed to check TensorRT availability:', error);
+      return { available: false, version: null };
+    }
+  }
+
+  /**
+   * Export a PyTorch model to TensorRT engine format.
+   *
+   * TensorRT provides GPU-optimized inference for faster keypoint prediction.
+   * The exported .engine file is GPU-architecture specific and not
+   * portable between different GPU types.
+   *
+   * @param modelPath Path to the source .pt model
+   * @param outputPath Optional path for output .engine file
+   * @param half Use FP16 precision (default: true, recommended for consumer GPUs)
+   * @param imgsz Input image size for the engine (default: 640)
+   * @returns Export result with engine path or error
+   */
+  async exportToTensorRT(
+    modelPath: string,
+    outputPath?: string,
+    half: boolean = true,
+    imgsz: number = 640
+  ): Promise<{ success: boolean; engine_path?: string; error?: string }> {
+    try {
+      return await window.electronAPI.yoloKeypoint.exportToTensorRT(
+        modelPath,
+        outputPath,
+        half,
+        imgsz
+      );
+    } catch (error) {
+      console.error('TensorRT export failed:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'TensorRT export failed',
+      };
+    }
+  }
 }
 
 // Export singleton instance

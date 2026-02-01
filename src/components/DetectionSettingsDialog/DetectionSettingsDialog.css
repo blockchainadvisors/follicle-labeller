@@ -1136,3 +1136,126 @@
 [data-theme="dark"] .auto-save-hint {
   color: var(--text-secondary, #9ca3af);
 }
+
+/* Export Progress Container */
+.export-progress-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.export-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+}
+
+.export-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.export-progress-bar-indeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  background: linear-gradient(90deg,
+    rgba(59, 130, 246, 0.3) 0%,
+    var(--accent, #3b82f6) 50%,
+    rgba(59, 130, 246, 0.3) 100%
+  );
+  border-radius: 3px;
+  animation: indeterminate-progress 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate-progress {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+/* Update exporting section to properly contain progress */
+.tensorrt-export-section.exporting {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Dark theme - Export Progress */
+[data-theme="dark"] .export-progress-bar {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+[data-theme="dark"] .export-progress-bar-indeterminate {
+  background: linear-gradient(90deg,
+    rgba(96, 165, 250, 0.3) 0%,
+    #60a5fa 50%,
+    rgba(96, 165, 250, 0.3) 100%
+  );
+}
+
+/* GPU Install Progress Bar */
+.gpu-install-progress-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.gpu-install-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.gpu-install-progress-bar-indeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 30%;
+  background: var(--accent, #3b82f6);
+  border-radius: 2px;
+  animation: indeterminate-progress 1.5s ease-in-out infinite;
+}
+
+/* TensorRT Install Progress Bar */
+.tensorrt-install-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.tensorrt-install-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+
+.tensorrt-install-progress-bar-indeterminate {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 30%;
+  background: var(--accent, #3b82f6);
+  border-radius: 2px;
+  animation: indeterminate-progress 1.5s ease-in-out infinite;
+}

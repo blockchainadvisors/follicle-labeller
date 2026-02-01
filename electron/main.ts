@@ -1530,6 +1530,29 @@ ipcMain.handle("yolo-keypoint:deleteModel", async (_, modelId: string) => {
   });
 });
 
+// Check TensorRT availability for keypoint inference
+ipcMain.handle("yolo-keypoint:checkTensorRT", async () => {
+  return makeBlobServerRequest("/yolo-keypoint/check-tensorrt", "GET");
+});
+
+// Export keypoint model to TensorRT engine format
+ipcMain.handle(
+  "yolo-keypoint:exportTensorRT",
+  async (_, modelPath: string, outputPath?: string, half?: boolean, imgsz?: number) => {
+    return makeBlobServerRequest(
+      "/yolo-keypoint/export-tensorrt",
+      "POST",
+      {
+        modelPath,
+        outputPath,
+        half: half ?? true,
+        imgsz: imgsz ?? 640,
+      },
+      600000 // 10 minute timeout for TensorRT export (can be slow)
+    );
+  }
+);
+
 // Write dataset files to temp directory (for training from current project)
 ipcMain.handle(
   "yolo-keypoint:writeDatasetToTemp",

@@ -1500,6 +1500,64 @@ async def yolo_predict(req: PredictRequest):
     }
 
 
+class BatchPredictRequest(BaseModel):
+    images: List[str]  # List of base64-encoded images
+
+
+@app.post('/yolo-keypoint/predict-batch')
+async def yolo_predict_batch(req: BatchPredictRequest):
+    """
+    Run keypoint prediction on multiple cropped follicle images in batch.
+
+    Batch inference is significantly faster on GPU as it processes
+    multiple images in parallel.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+
+    # Decode all base64 images
+    images_bytes = []
+    for image_data in req.images:
+        try:
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+            images_bytes.append(base64.b64decode(image_data))
+        except Exception as e:
+            logger.warning(f'Failed to decode image in batch: {e}')
+            images_bytes.append(None)
+
+    # Filter out None values but keep track of indices
+    valid_indices = [i for i, img in enumerate(images_bytes) if img is not None]
+    valid_images = [images_bytes[i] for i in valid_indices]
+
+    if len(valid_images) == 0:
+        return {
+            'success': False,
+            'predictions': [None] * len(req.images),
+            'message': 'No valid images to process'
+        }
+
+    # Run batch prediction
+    results = service.predict_batch(valid_images)
+
+    # Map results back to original indices
+    predictions = [None] * len(req.images)
+    for result_idx, orig_idx in enumerate(valid_indices):
+        if result_idx < len(results) and results[result_idx] is not None:
+            predictions[orig_idx] = results[result_idx].to_dict()
+
+    success_count = sum(1 for p in predictions if p is not None)
+
+    return {
+        'success': True,
+        'predictions': predictions,
+        'total': len(req.images),
+        'successful': success_count
+    }
+
+
 @app.post('/yolo-keypoint/export-onnx')
 async def yolo_export_onnx(req: ExportONNXRequest):
     """
@@ -1546,6 +1604,20 @@ async def yolo_keypoint_status():
         'jobIds': list(training_progress_queues.keys()),
         'queueSizes': {k: v.qsize() for k, v in training_progress_queues.items()}
     }
+
+
+@app.post('/yolo-keypoint/clear-gpu-memory')
+async def yolo_keypoint_clear_gpu_memory():
+    """
+    Clear GPU memory after prediction tasks complete.
+    Runs garbage collection and empties CUDA cache.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        return {"success": False, "error": "YOLO keypoint service not available"}
+
+    service = get_yolo_keypoint_service()
+    result = service.clear_gpu_memory()
+    return result
 
 
 @app.get('/yolo-keypoint/system-info')
@@ -1596,6 +1668,63 @@ async def yolo_system_info():
         logger.warning(f"Error getting torch info: {e}")
 
     return info
+
+
+@app.get('/yolo-keypoint/check-tensorrt')
+async def yolo_keypoint_check_tensorrt():
+    """
+    Check if TensorRT is available on this system for keypoint inference.
+
+    Returns:
+        Dict with 'available' bool and 'version' string (or None)
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    return service.check_tensorrt_available()
+
+
+class KeypointExportTensorRTRequest(BaseModel):
+    modelPath: str
+    outputPath: Optional[str] = None
+    half: Optional[bool] = True
+    imgsz: Optional[int] = 640
+
+
+@app.post('/yolo-keypoint/export-tensorrt')
+async def yolo_keypoint_export_tensorrt(req: KeypointExportTensorRTRequest):
+    """
+    Export a PyTorch keypoint model to TensorRT engine format.
+
+    TensorRT provides GPU-optimized inference for faster keypoint prediction
+    on NVIDIA GPUs. The exported .engine file is GPU-architecture
+    specific and not portable between different GPU types.
+
+    Body:
+        modelPath: str - Path to source .pt model
+        outputPath: str (optional) - Path for output .engine file
+        half: bool (default True) - Use FP16 precision
+        imgsz: int (default 640) - Input image size for the engine
+
+    Returns:
+        Dict with 'success' bool, 'engine_path' string, or 'error' string
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+
+    service = get_yolo_keypoint_service()
+    result = service.export_tensorrt(
+        model_path=req.modelPath,
+        output_path=req.outputPath,
+        half=req.half if req.half is not None else True,
+        imgsz=req.imgsz if req.imgsz is not None else 640
+    )
+
+    if not result.get('success'):
+        raise HTTPException(status_code=400, detail=result.get('error', 'Export failed'))
+
+    return result
 
 
 # ============================================
@@ -1986,6 +2115,20 @@ async def yolo_detect_export_tensorrt(request: Request):
     if not result.get('success'):
         raise HTTPException(status_code=500, detail=result.get('error', 'TensorRT export failed'))
 
+    return result
+
+
+@app.post('/yolo-detect/clear-gpu-memory')
+async def yolo_detect_clear_gpu_memory():
+    """
+    Clear GPU memory after detection tasks complete.
+    Runs garbage collection and empties CUDA cache.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        return {"success": False, "error": "YOLO detection service not available"}
+
+    service = get_yolo_detection_service()
+    result = service.clear_gpu_memory()
     return result
 
 

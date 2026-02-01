@@ -721,6 +721,31 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   padding: 4px;
 }
 
+/* Predict button wrapper with progress bar */
+.predict-button-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.predict-progress-bar {
+  position: absolute;
+  bottom: -3px;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: rgba(78, 205, 196, 0.2);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.predict-progress-fill {
+  height: 100%;
+  background: #4ECDC4;
+  border-radius: 1px;
+  transition: width 0.1s ease-out;
+  box-shadow: 0 0 4px rgba(78, 205, 196, 0.5);
+}
+
 /* Unlock warning dialog */
 .unlock-warning-overlay {
   position: fixed;
