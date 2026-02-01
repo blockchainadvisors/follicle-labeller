@@ -251,9 +251,27 @@ class YOLODetectionService:
 
                 logger.info(f"GPU memory cleanup: freed {result['memory_freed_mb']:.1f}MB "
                            f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB)")
+
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                # MPS (Apple Silicon) cleanup
+                # MPS doesn't have detailed memory stats like CUDA
+                gc.collect()
+
+                # Empty MPS cache (available in PyTorch 2.0+)
+                if hasattr(torch.mps, 'empty_cache'):
+                    torch.mps.empty_cache()
+
+                # Synchronize MPS operations
+                if hasattr(torch.mps, 'synchronize'):
+                    torch.mps.synchronize()
+
+                result["success"] = True
+                result["message"] = "MPS memory cache cleared"
+                logger.info("MPS GPU memory cleanup completed")
+
             else:
                 result["success"] = True
-                result["message"] = "CUDA not available, no GPU memory to clear"
+                result["message"] = "No GPU available, no memory to clear"
 
         except Exception as e:
             logger.error(f"GPU memory cleanup failed: {e}")

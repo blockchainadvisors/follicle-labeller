@@ -259,3 +259,39 @@ class TorchMPSBackend(BaseGPUBackend):
         # Use OpenCV on CPU for connected components
         # This is a common pattern - GPU for preprocessing, CPU for labeling
         return cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    def clear_memory(self) -> dict:
+        """
+        Clear MPS GPU memory cache.
+
+        Returns:
+            Dict with cleanup result
+        """
+        import gc
+
+        result = {
+            "success": True,
+            "memory_before_mb": None,
+            "memory_after_mb": None,
+            "memory_freed_mb": 0
+        }
+
+        try:
+            # Run Python garbage collection
+            gc.collect()
+
+            # Empty MPS cache (available in PyTorch 2.0+)
+            if hasattr(torch.mps, 'empty_cache'):
+                torch.mps.empty_cache()
+
+            # Synchronize MPS operations
+            if hasattr(torch.mps, 'synchronize'):
+                torch.mps.synchronize()
+
+            result["message"] = "MPS memory cache cleared"
+
+        except Exception as e:
+            result["success"] = False
+            result["error"] = str(e)
+
+        return result
