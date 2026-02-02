@@ -1641,6 +1641,23 @@ async def yolo_keypoint_clear_gpu_memory():
     return result
 
 
+@app.post('/yolo-keypoint/unload-model')
+async def yolo_keypoint_unload_model():
+    """
+    Unload the keypoint model and free all GPU memory.
+
+    Unlike clear-gpu-memory which only clears cached tensors, this completely
+    removes the model from GPU memory. The model will need to be reloaded
+    before the next prediction.
+    """
+    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
+        return {"success": False, "error": "YOLO keypoint service not available"}
+
+    service = get_yolo_keypoint_service()
+    result = service.unload_model()
+    return result
+
+
 @app.get('/yolo-keypoint/system-info')
 async def yolo_system_info():
     """
@@ -1711,6 +1728,7 @@ class KeypointExportTensorRTRequest(BaseModel):
     outputPath: Optional[str] = None
     half: Optional[bool] = True
     imgsz: Optional[int] = 640
+    batch: Optional[int] = 16  # Batch size for efficient multi-follicle inference
 
 
 @app.post('/yolo-keypoint/export-tensorrt')
@@ -1735,11 +1753,16 @@ async def yolo_keypoint_export_tensorrt(req: KeypointExportTensorRTRequest):
         raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
 
     service = get_yolo_keypoint_service()
-    result = service.export_tensorrt(
+
+    # Run the blocking TensorRT export in a thread pool so it doesn't block the event loop
+    # This allows other API endpoints to respond while the export is running
+    result = await asyncio.to_thread(
+        service.export_tensorrt,
         model_path=req.modelPath,
         output_path=req.outputPath,
         half=req.half if req.half is not None else True,
-        imgsz=req.imgsz if req.imgsz is not None else 640
+        imgsz=req.imgsz if req.imgsz is not None else 640,
+        batch=req.batch if req.batch is not None else 16
     )
 
     if not result.get('success'):
@@ -2131,7 +2154,13 @@ async def yolo_detect_export_tensorrt(request: Request):
         raise HTTPException(status_code=400, detail='modelPath is required')
 
     service = get_yolo_detection_service()
-    result = service.export_tensorrt(model_path, output_path, half, imgsz)
+
+    # Run the blocking TensorRT export in a thread pool so it doesn't block the event loop
+    # This allows other API endpoints to respond while the export is running
+    result = await asyncio.to_thread(
+        service.export_tensorrt,
+        model_path, output_path, half, imgsz
+    )
 
     if not result.get('success'):
         raise HTTPException(status_code=500, detail=result.get('error', 'TensorRT export failed'))

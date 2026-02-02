@@ -570,6 +570,37 @@
   animation: spin 1s linear infinite;
 }
 
+/* Export progress banner */
+.export-progress-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--accent);
+  color: white;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.export-progress-banner .spin {
+  flex-shrink: 0;
+}
+
+/* Export progress in section */
+.export-progress-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--accent);
+  color: white;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: var(--text-sm);
+}
+
 /* Dark theme - GPU Available */
 [data-theme="dark"] .gpu-status-available {
   background: rgba(245, 158, 11, 0.15);
@@ -1258,4 +1289,227 @@
   background: var(--accent, #3b82f6);
   border-radius: 2px;
   animation: indeterminate-progress 1.5s ease-in-out infinite;
+}
+
+/* Shared Infrastructure Section */
+.shared-infrastructure {
+  background: var(--bg-secondary, #f8fafc);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border, #e2e8f0);
+}
+
+.shared-infrastructure h3 {
+  margin: 0 0 12px 0;
+  font-size: var(--text-md);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary, #333);
+}
+
+.shared-infrastructure .gpu-status {
+  margin-bottom: 12px;
+}
+
+.shared-infrastructure .gpu-status:last-child {
+  margin-bottom: 0;
+}
+
+.backend-selection-inline {
+  margin-top: 12px;
+}
+
+.backend-selection-inline .backend-toggle {
+  margin-bottom: 8px;
+}
+
+/* Detection and Keypoint Sections */
+.detection-section,
+.keypoint-section {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.detection-section h3,
+.keypoint-section h3 {
+  margin-top: 0;
+}
+
+/* Clickable Section Headers */
+.section-header.clickable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  padding: 8px;
+  margin: -8px -8px 8px -8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+
+.section-header.clickable:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+
+/* Chevron rotation for collapse state */
+.section-header .chevron {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.section-header .chevron.rotated {
+  transform: rotate(-90deg);
+}
+
+/* Section enable toggle in header */
+.section-enable-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 4px 10px;
+  background: var(--bg-secondary, #f5f5f5);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--font-normal);
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+}
+
+.section-enable-toggle:hover {
+  background: var(--bg-tertiary, #eee);
+}
+
+.section-enable-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent, #3b82f6);
+}
+
+/* Section content wrapper */
+.section-content {
+  padding-top: 8px;
+}
+
+/* Method settings wrapper */
+.method-settings {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border, #e0e0e0);
+}
+
+/* YOLO Settings styling */
+.yolo-settings {
+  /* Inherits from method-settings */
+}
+
+.yolo-settings .settings-row label {
+  min-width: 140px;
+}
+
+.yolo-settings select {
+  flex: 1;
+  max-width: 280px;
+}
+
+.yolo-settings input[type="range"] {
+  flex: 1;
+  max-width: 180px;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border, #e0e0e0);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.yolo-settings input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--accent, #3b82f6);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.yolo-settings input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: var(--accent, #3b82f6);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Blob Settings styling */
+.blob-settings {
+  /* Inherits from method-settings */
+}
+
+.blob-subsection {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border, #e0e0e0);
+}
+
+.blob-subsection:first-child {
+  padding-top: 0;
+}
+
+.blob-subsection:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.blob-subsection h4 {
+  margin: 0 0 8px 0;
+  font-size: var(--text-base);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary, #333);
+}
+
+/* Dark theme - Shared Infrastructure */
+[data-theme="dark"] .shared-infrastructure {
+  background: var(--bg-tertiary, #2d2d2d);
+  border-color: var(--border, #444);
+}
+
+/* Dark theme - Detection and Keypoint Sections */
+[data-theme="dark"] .detection-section,
+[data-theme="dark"] .keypoint-section {
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .section-header.clickable:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .section-enable-toggle {
+  background: var(--bg-tertiary, #3d3d3d);
+  border-color: var(--border, #555);
+  color: var(--text-secondary, #aaa);
+}
+
+[data-theme="dark"] .section-enable-toggle:hover {
+  background: var(--bg-hover, #4d4d4d);
+}
+
+[data-theme="dark"] .method-settings {
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .blob-subsection {
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .blob-subsection h4 {
+  color: var(--text-primary, #e0e0e0);
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain } from 'lucide-react';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain, ChevronDown } from 'lucide-react';
 import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, DetectionModelInfo, DetectionMethod, TensorRTStatus, YoloInferenceBackend } from '../../types';
 import { blobService } from '../../services/blobService';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
@@ -156,6 +156,8 @@ export interface TensorRTExportState {
   error: string | null;
   enginePath: string | null;
   completed: boolean;
+  startTime?: number;  // Timestamp when export started (for elapsed time display)
+  estimatedSeconds?: number;  // Rough estimate of total export time
 }
 
 interface DetectionSettingsDialogProps {
@@ -234,14 +236,20 @@ export function DetectionSettingsDialog({
 
   // Use parent-controlled state if provided, otherwise use local state
   const detectionExport = detectionExportState ?? localDetectionExportState;
-  const updateDetectionExportState = (updates: Partial<TensorRTExportState>) => {
-    const newState = { ...detectionExport, ...updates };
+  // Use a ref to always have the latest state value (avoids stale closure)
+  const detectionExportRef = useRef(detectionExport);
+  detectionExportRef.current = detectionExport;
+
+  const updateDetectionExportState = useCallback((updates: Partial<TensorRTExportState>) => {
+    const newState = { ...detectionExportRef.current, ...updates };
+    // Update ref immediately so consecutive calls see the latest state
+    detectionExportRef.current = newState;
     if (onDetectionExportStateChange) {
       onDetectionExportStateChange(newState);
     } else {
       setLocalDetectionExportState(newState);
     }
-  };
+  }, [onDetectionExportStateChange]);
 
   // Keypoint TensorRT state
   const [keypointTensorrtStatus, setKeypointTensorrtStatus] = useState<TensorRTStatus | null>(null);
@@ -256,14 +264,47 @@ export function DetectionSettingsDialog({
 
   // Use parent-controlled state if provided, otherwise use local state
   const keypointExport = keypointExportState ?? localKeypointExportState;
-  const updateKeypointExportState = (updates: Partial<TensorRTExportState>) => {
-    const newState = { ...keypointExport, ...updates };
+  // Use a ref to always have the latest state value (avoids stale closure)
+  const keypointExportRef = useRef(keypointExport);
+  keypointExportRef.current = keypointExport;
+
+  const updateKeypointExportState = useCallback((updates: Partial<TensorRTExportState>) => {
+    const newState = { ...keypointExportRef.current, ...updates };
+    // Update ref immediately so consecutive calls see the latest state
+    keypointExportRef.current = newState;
     if (onKeypointExportStateChange) {
       onKeypointExportStateChange(newState);
     } else {
       setLocalKeypointExportState(newState);
     }
-  };
+  }, [onKeypointExportStateChange]);
+
+  // Collapsible section state
+  const [detectionCollapsed, setDetectionCollapsed] = useState(false);
+  const [keypointCollapsed, setKeypointCollapsed] = useState(false);
+
+  // Elapsed time for export progress display
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Update elapsed time every second during export
+  useEffect(() => {
+    if (!keypointExport.isExporting && !detectionExport.isExporting) {
+      setElapsedSeconds(0);
+      return;
+    }
+
+    const startTime = keypointExport.isExporting ? keypointExport.startTime : detectionExport.startTime;
+    if (!startTime) return;
+
+    // Calculate initial elapsed time (in case dialog was reopened)
+    setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+
+    const interval = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [keypointExport.isExporting, keypointExport.startTime, detectionExport.isExporting, detectionExport.startTime]);
 
   // Draggable dialog state
   const [position, setPosition] = useState<{ x: number; y: number } | null>(null);
@@ -491,18 +532,63 @@ export function DetectionSettingsDialog({
       ? detectionExport.enginePath.replace(/\.engine$/i, '.pt')
       : detectionExport.enginePath;
 
+    // Use the model's actual image size for TensorRT export
+    // This is critical - mismatched image size causes incorrect predictions
+    const selectedModel = detectionModels.find(m => m.id === settings.yoloModelId);
+    const imgSize = selectedModel?.imgSize || 640;
+
+    // Estimate export time based on model variant/parameters and image size
+    // YOLO variants: nano(n) < small(s) < medium(m) < large(l) < xlarge(x)
+    let variantMultiplier = 1.0;
+
+    // Use actual model metadata if available
+    if (selectedModel?.modelVariant) {
+      // Use real model variant from metadata
+      const variant = selectedModel.modelVariant;
+      variantMultiplier = variant === 'n' ? 0.5 : variant === 's' ? 0.7 : variant === 'm' ? 1.0 : variant === 'l' ? 1.3 : 1.8;
+    } else if (selectedModel?.parameters) {
+      // Estimate from parameter count
+      const params = selectedModel.parameters;
+      if (params < 5_000_000) variantMultiplier = 0.5;
+      else if (params < 15_000_000) variantMultiplier = 0.7;
+      else if (params < 25_000_000) variantMultiplier = 1.0;
+      else if (params < 40_000_000) variantMultiplier = 1.3;
+      else variantMultiplier = 1.8;
+    } else {
+      // Fallback: try to detect from model name
+      const modelName = (selectedModel?.name || '').toLowerCase();
+      if (modelName.includes('nano') || modelName.includes('-n-') || modelName.startsWith('n-')) {
+        variantMultiplier = 0.5;
+      } else if (modelName.includes('small') || modelName.includes('-s-') || modelName.startsWith('s-')) {
+        variantMultiplier = 0.7;
+      } else if (modelName.includes('medium') || modelName.includes('-m-') || modelName.startsWith('m-')) {
+        variantMultiplier = 1.0;
+      } else if (modelName.includes('large') || modelName.includes('-l-') || modelName.startsWith('l-')) {
+        variantMultiplier = 1.3;
+      } else if (modelName.includes('xlarge') || modelName.includes('-x-') || modelName.startsWith('x-')) {
+        variantMultiplier = 1.8;
+      }
+    }
+
+    // Base time by image size, then multiply by variant
+    // Calibrated from real-world data: large model at 320px took ~6 minutes
+    const baseSeconds = imgSize <= 320 ? 280 : imgSize <= 640 ? 480 : 720;
+    const estimatedSeconds = Math.round(baseSeconds * variantMultiplier);
+
     updateDetectionExportState({
       isExporting: true,
       error: null,
       progress: 'Starting TensorRT export...',
       completed: false,
+      startTime: Date.now(),
+      estimatedSeconds,
     });
 
     try {
       // Update progress to show we're building
-      updateDetectionExportState({ progress: 'Building TensorRT engine (FP16)... This may take several minutes.' });
-
-      const result = await yoloDetectionService.exportToTensorRT(modelPath);
+      updateDetectionExportState({ progress: 'Building TensorRT engine (FP16)...' });
+      console.log(`Exporting detection model to TensorRT with imgsz=${imgSize}`);
+      const result = await yoloDetectionService.exportToTensorRT(modelPath, undefined, true, imgSize);
 
       if (result.success && result.engine_path) {
         setEngineAvailable(true);
@@ -565,18 +651,62 @@ export function DetectionSettingsDialog({
       ? keypointExport.enginePath.replace(/\.engine$/i, '.pt')
       : keypointExport.enginePath;
 
+    // Use the model's actual image size for TensorRT export
+    // This is critical - mismatched image size causes incorrect predictions
+    const imgSize = loadedKeypointModel?.imgSize || 640;
+
+    // Estimate export time based on model variant/parameters and image size
+    // YOLO variants: nano(n) < small(s) < medium(m) < large(l) < xlarge(x)
+    let variantMultiplier = 1.0;
+
+    // Use actual model metadata if available
+    if (loadedKeypointModel?.modelVariant) {
+      // Use real model variant from metadata
+      const variant = loadedKeypointModel.modelVariant;
+      variantMultiplier = variant === 'n' ? 0.5 : variant === 's' ? 0.7 : variant === 'm' ? 1.0 : variant === 'l' ? 1.3 : 1.8;
+    } else if (loadedKeypointModel?.parameters) {
+      // Estimate from parameter count
+      const params = loadedKeypointModel.parameters;
+      if (params < 5_000_000) variantMultiplier = 0.5;
+      else if (params < 15_000_000) variantMultiplier = 0.7;
+      else if (params < 25_000_000) variantMultiplier = 1.0;
+      else if (params < 40_000_000) variantMultiplier = 1.3;
+      else variantMultiplier = 1.8;
+    } else {
+      // Fallback: try to detect from model name
+      const modelName = (loadedKeypointModel?.name || '').toLowerCase();
+      if (modelName.includes('nano') || modelName.includes('-n-') || modelName.startsWith('n-')) {
+        variantMultiplier = 0.5;
+      } else if (modelName.includes('small') || modelName.includes('-s-') || modelName.startsWith('s-')) {
+        variantMultiplier = 0.7;
+      } else if (modelName.includes('medium') || modelName.includes('-m-') || modelName.startsWith('m-')) {
+        variantMultiplier = 1.0;
+      } else if (modelName.includes('large') || modelName.includes('-l-') || modelName.startsWith('l-')) {
+        variantMultiplier = 1.3;
+      } else if (modelName.includes('xlarge') || modelName.includes('-x-') || modelName.startsWith('x-')) {
+        variantMultiplier = 1.8;
+      }
+    }
+
+    // Base time by image size, then multiply by variant
+    // Calibrated from real-world data: large model at 320px took ~6 minutes
+    const baseSeconds = imgSize <= 320 ? 280 : imgSize <= 640 ? 480 : 720;
+    const estimatedSeconds = Math.round(baseSeconds * variantMultiplier);
+
     updateKeypointExportState({
       isExporting: true,
       error: null,
       progress: 'Starting TensorRT export...',
       completed: false,
+      startTime: Date.now(),
+      estimatedSeconds,
     });
 
     try {
       // Update progress to show we're building
-      updateKeypointExportState({ progress: 'Building TensorRT engine (FP16)... This may take several minutes.' });
-
-      const result = await yoloKeypointService.exportToTensorRT(modelPath);
+      updateKeypointExportState({ progress: 'Building TensorRT engine (FP16)...' });
+      console.log(`Exporting keypoint model to TensorRT with imgsz=${imgSize}`);
+      const result = await yoloKeypointService.exportToTensorRT(modelPath, undefined, true, imgSize);
 
       if (result.success && result.engine_path) {
         setKeypointEngineAvailable(true);
@@ -703,6 +833,37 @@ export function DetectionSettingsDialog({
     }
   };
 
+  // Format seconds into "Xm Ys" format
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    }
+    return `${secs}s`;
+  };
+
+  // Generate export progress message with elapsed time and estimate
+  const getExportProgressMessage = (): string => {
+    const exportState = keypointExport.isExporting ? keypointExport : detectionExport;
+    const baseMessage = exportState.progress || 'Exporting to TensorRT...';
+    const estimate = exportState.estimatedSeconds;
+
+    if (elapsedSeconds > 0) {
+      const elapsed = formatTime(elapsedSeconds);
+      if (estimate) {
+        const remaining = Math.max(0, estimate - elapsedSeconds);
+        if (remaining > 0) {
+          return `${baseMessage} (${elapsed} elapsed, ~${formatTime(remaining)} remaining)`;
+        } else {
+          return `${baseMessage} (${elapsed} elapsed, finishing up...)`;
+        }
+      }
+      return `${baseMessage} (${elapsed} elapsed)`;
+    }
+    return baseMessage;
+  };
+
   return (
     <div className="detection-settings-overlay" onClick={onClose}>
       <div
@@ -719,6 +880,14 @@ export function DetectionSettingsDialog({
         </div>
 
         <div className="dialog-content">
+          {/* Export progress indicator (visible at top when exporting) */}
+          {(keypointExport.isExporting || detectionExport.isExporting) && (
+            <div className="export-progress-banner">
+              <Loader2 size={16} className="spin" />
+              <span>{getExportProgressMessage()}</span>
+            </div>
+          )}
+
           {/* Per-Image Settings Toggle */}
           {activeImageId && onImageSettingsChange && (
             <section className="settings-section per-image-section">
@@ -754,36 +923,157 @@ export function DetectionSettingsDialog({
             </section>
           )}
 
-          {/* Detection Method Toggle */}
-          <section className="settings-section detection-method-section">
-            <h3>Detection Method</h3>
-            <div className="detection-method-toggle">
-              <button
-                className={`method-btn ${settings.detectionMethod === 'blob' ? 'active' : ''}`}
-                onClick={() => handleChange('detectionMethod', 'blob')}
-              >
-                <Box size={16} />
-                SimpleBlobDetector
-              </button>
-              <button
-                className={`method-btn ${settings.detectionMethod === 'yolo' ? 'active' : ''}`}
-                onClick={() => handleChange('detectionMethod', 'yolo')}
-              >
-                <Brain size={16} />
-                YOLO (AI)
-              </button>
-            </div>
-            <p className="method-description">
-              {settings.detectionMethod === 'blob'
-                ? 'Uses OpenCV SimpleBlobDetector for classical computer vision based detection. Fast and reliable for uniform images.'
-                : 'Uses YOLO neural network for AI-powered detection. Better for complex images and varied lighting.'}
-            </p>
+          {/* Hardware Acceleration - Shared by both detection and keypoint */}
+          <section className="settings-section shared-infrastructure">
+            <h3>Hardware Acceleration</h3>
+
+            {/* GPU Status Indicator */}
+            {/* State 1: GPU Active - packages installed and working */}
+            {gpuInfo && gpuInfo.activeBackend !== 'cpu' && (
+              <div className={`gpu-status gpu-status-${gpuInfo.activeBackend}`}>
+                <Zap size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">
+                    {gpuInfo.activeBackend === 'cuda' && 'CUDA Acceleration'}
+                    {gpuInfo.activeBackend === 'mps' && 'Metal Acceleration'}
+                  </span>
+                  <span className="gpu-status-device">{gpuInfo.deviceName}</span>
+                </div>
+                {gpuInfo.memoryGB && (
+                  <span className="gpu-status-memory">
+                    {gpuInfo.memoryGB.toFixed(1)} GB
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* State 2: GPU Available - hardware detected, packages not installed, show install button */}
+            {gpuHardware?.canEnableGpu && !gpuHardware.gpuEnabled && !isInstalling && gpuInfo?.activeBackend === 'cpu' && (
+              <div className="gpu-status gpu-status-available">
+                <Zap size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">GPU Available</span>
+                  <span className="gpu-status-device">
+                    {gpuHardware.hardware.nvidia.found
+                      ? gpuHardware.hardware.nvidia.name
+                      : gpuHardware.hardware.apple_silicon.chip}
+                  </span>
+                </div>
+                <button className="gpu-install-btn" onClick={handleInstallGPU}>
+                  <Download size={14} />
+                  Install ({typeof window !== 'undefined' && navigator.platform.includes('Mac') ? '~2GB' : '~1.5GB'})
+                </button>
+              </div>
+            )}
+
+            {/* State 3: Installing - show progress */}
+            {isInstalling && (
+              <div className="gpu-status gpu-status-installing">
+                <Loader2 size={16} className="spin" />
+                <div className="gpu-status-content">
+                  <div className="gpu-install-progress-container">
+                    <span className="gpu-status-label">Installing GPU Packages</span>
+                    <span className="gpu-status-progress">{installProgress || 'Starting...'}</span>
+                    <div className="gpu-install-progress-bar">
+                      <div className="gpu-install-progress-bar-indeterminate" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* State 4: Installation Error */}
+            {installError && !isInstalling && (
+              <div className="gpu-status gpu-status-error">
+                <AlertCircle size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">Installation Failed</span>
+                  <span className="gpu-status-error-msg">{installError}</span>
+                </div>
+                <button className="gpu-retry-btn" onClick={handleInstallGPU}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* State 5: No GPU - CPU only mode */}
+            {gpuInfo && gpuInfo.activeBackend === 'cpu' && !gpuHardware?.canEnableGpu && !isInstalling && !installError && (
+              <div className="gpu-status gpu-status-cpu">
+                <Cpu size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">CPU Mode</span>
+                  <span className="gpu-status-device">No GPU Detected</span>
+                </div>
+              </div>
+            )}
+
+            {/* Backend Selection - Show when GPU is available (installed or active) */}
+            {gpuHardware?.gpuEnabled && (
+              <div className="backend-selection-inline">
+                <div className="backend-toggle">
+                  <button
+                    className={`backend-btn ${!settings.forceCPU ? 'active' : ''}`}
+                    onClick={() => handleChange('forceCPU', false)}
+                  >
+                    <Zap size={14} />
+                    GPU
+                  </button>
+                  <button
+                    className={`backend-btn ${settings.forceCPU ? 'active' : ''}`}
+                    onClick={() => handleChange('forceCPU', true)}
+                  >
+                    <Cpu size={14} />
+                    CPU
+                  </button>
+                </div>
+                <p className="backend-hint">
+                  {settings.forceCPU
+                    ? 'Using CPU for processing (slower but more compatible)'
+                    : 'Using GPU for processing (faster)'}
+                </p>
+              </div>
+            )}
           </section>
 
-          {/* YOLO Detection Settings (shown when YOLO method selected) */}
-          {settings.detectionMethod === 'yolo' && (
-            <section className="settings-section yolo-detection-section">
-              <h3>YOLO Detection Settings</h3>
+          {/* Section 1: Follicle Area Detection */}
+          <section className="settings-section detection-section">
+            <h3
+              className="section-header clickable"
+              onClick={() => setDetectionCollapsed(!detectionCollapsed)}
+            >
+              <ChevronDown size={16} className={`chevron ${detectionCollapsed ? 'rotated' : ''}`} />
+              <Box size={16} />
+              Follicle Area Detection
+            </h3>
+
+            {!detectionCollapsed && (
+              <div className="section-content">
+                {/* Detection Method Toggle */}
+                <div className="detection-method-toggle">
+                  <button
+                    className={`method-btn ${settings.detectionMethod === 'blob' ? 'active' : ''}`}
+                    onClick={() => handleChange('detectionMethod', 'blob')}
+                  >
+                    <Box size={16} />
+                    SimpleBlobDetector
+                  </button>
+                  <button
+                    className={`method-btn ${settings.detectionMethod === 'yolo' ? 'active' : ''}`}
+                    onClick={() => handleChange('detectionMethod', 'yolo')}
+                  >
+                    <Brain size={16} />
+                    YOLO (AI)
+                  </button>
+                </div>
+                <p className="method-description">
+                  {settings.detectionMethod === 'blob'
+                    ? 'Uses OpenCV SimpleBlobDetector for classical computer vision based detection. Fast and reliable for uniform images.'
+                    : 'Uses YOLO neural network for AI-powered detection. Better for complex images and varied lighting.'}
+                </p>
+
+                {/* YOLO Detection Settings (shown when YOLO method selected) */}
+                {settings.detectionMethod === 'yolo' && (
+                  <div className="method-settings yolo-settings">
 
               {/* Model Selection */}
               <div className="settings-row">
@@ -1087,619 +1377,536 @@ export function DetectionSettingsDialog({
                 </>
               )}
 
-              {/* Service status */}
-              {!yoloDetectionAvailable && (
-                <div className="yolo-warning">
-                  <AlertCircle size={14} />
-                  <span>YOLO service not available. Make sure YOLO dependencies are installed.</span>
-                </div>
-              )}
+                    {/* Service status - hide during export since server is busy */}
+                    {!yoloDetectionAvailable && !detectionExport.isExporting && !keypointExport.isExporting && (
+                      <div className="yolo-warning">
+                        <AlertCircle size={14} />
+                        <span>YOLO service not available. Make sure YOLO dependencies are installed.</span>
+                      </div>
+                    )}
 
-              {detectionModels.length === 0 && yoloDetectionAvailable && (
-                <div className="yolo-info">
-                  <span>No custom models trained yet. Using pre-trained model for detection.</span>
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* GPU Status Indicator */}
-          {/* State 1: GPU Active - packages installed and working */}
-          {gpuInfo && gpuInfo.activeBackend !== 'cpu' && (
-            <div className={`gpu-status gpu-status-${gpuInfo.activeBackend}`}>
-              <Zap size={16} />
-              <div className="gpu-status-content">
-                <span className="gpu-status-label">
-                  {gpuInfo.activeBackend === 'cuda' && 'CUDA Acceleration'}
-                  {gpuInfo.activeBackend === 'mps' && 'Metal Acceleration'}
-                </span>
-                <span className="gpu-status-device">{gpuInfo.deviceName}</span>
-              </div>
-              {gpuInfo.memoryGB && (
-                <span className="gpu-status-memory">
-                  {gpuInfo.memoryGB.toFixed(1)} GB
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* State 2: GPU Available - hardware detected, packages not installed, show install button */}
-          {gpuHardware?.canEnableGpu && !gpuHardware.gpuEnabled && !isInstalling && gpuInfo?.activeBackend === 'cpu' && (
-            <div className="gpu-status gpu-status-available">
-              <Zap size={16} />
-              <div className="gpu-status-content">
-                <span className="gpu-status-label">GPU Available</span>
-                <span className="gpu-status-device">
-                  {gpuHardware.hardware.nvidia.found
-                    ? gpuHardware.hardware.nvidia.name
-                    : gpuHardware.hardware.apple_silicon.chip}
-                </span>
-              </div>
-              <button className="gpu-install-btn" onClick={handleInstallGPU}>
-                <Download size={14} />
-                Install ({typeof window !== 'undefined' && navigator.platform.includes('Mac') ? '~2GB' : '~1.5GB'})
-              </button>
-            </div>
-          )}
-
-          {/* State 3: Installing - show progress */}
-          {isInstalling && (
-            <div className="gpu-status gpu-status-installing">
-              <Loader2 size={16} className="spin" />
-              <div className="gpu-status-content">
-                <div className="gpu-install-progress-container">
-                  <span className="gpu-status-label">Installing GPU Packages</span>
-                  <span className="gpu-status-progress">{installProgress || 'Starting...'}</span>
-                  <div className="gpu-install-progress-bar">
-                    <div className="gpu-install-progress-bar-indeterminate" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* State 4: Installation Error */}
-          {installError && !isInstalling && (
-            <div className="gpu-status gpu-status-error">
-              <AlertCircle size={16} />
-              <div className="gpu-status-content">
-                <span className="gpu-status-label">Installation Failed</span>
-                <span className="gpu-status-error-msg">{installError}</span>
-              </div>
-              <button className="gpu-retry-btn" onClick={handleInstallGPU}>
-                Retry
-              </button>
-            </div>
-          )}
-
-          {/* State 5: No GPU - CPU only mode */}
-          {gpuInfo && gpuInfo.activeBackend === 'cpu' && !gpuHardware?.canEnableGpu && !isInstalling && !installError && (
-            <div className="gpu-status gpu-status-cpu">
-              <Cpu size={16} />
-              <div className="gpu-status-content">
-                <span className="gpu-status-label">CPU Mode</span>
-                <span className="gpu-status-device">No GPU Detected</span>
-              </div>
-            </div>
-          )}
-
-          {/* Backend Selection - Show when GPU is available (installed or active) */}
-          {gpuHardware?.gpuEnabled && (
-            <section className="settings-section backend-selection">
-              <h3>Processing Backend</h3>
-              <div className="backend-toggle">
-                <button
-                  className={`backend-btn ${!settings.forceCPU ? 'active' : ''}`}
-                  onClick={() => handleChange('forceCPU', false)}
-                >
-                  <Zap size={14} />
-                  GPU
-                </button>
-                <button
-                  className={`backend-btn ${settings.forceCPU ? 'active' : ''}`}
-                  onClick={() => handleChange('forceCPU', true)}
-                >
-                  <Cpu size={14} />
-                  CPU
-                </button>
-              </div>
-              <p className="backend-hint">
-                {settings.forceCPU
-                  ? 'Using CPU for detection (slower but more compatible)'
-                  : 'Using GPU for detection (faster processing)'}
-              </p>
-            </section>
-          )}
-
-          {/* Blob Detection Settings (shown when Blob method selected) */}
-          {settings.detectionMethod === 'blob' && (
-            <>
-          {/* Basic Size Parameters */}
-          <section className="settings-section">
-            <h3>Size Range</h3>
-            <div className="settings-row">
-              <label>Min Width</label>
-              <input
-                type="number"
-                value={settings.minWidth}
-                onChange={e => handleChange('minWidth', parseInt(e.target.value) || 0)}
-                min={1}
-                max={1000}
-              />
-            </div>
-            <div className="settings-row">
-              <label>Max Width</label>
-              <input
-                type="number"
-                value={settings.maxWidth}
-                onChange={e => handleChange('maxWidth', parseInt(e.target.value) || 0)}
-                min={1}
-                max={5000}
-              />
-            </div>
-            <div className="settings-row">
-              <label>Min Height</label>
-              <input
-                type="number"
-                value={settings.minHeight}
-                onChange={e => handleChange('minHeight', parseInt(e.target.value) || 0)}
-                min={1}
-                max={1000}
-              />
-            </div>
-            <div className="settings-row">
-              <label>Max Height</label>
-              <input
-                type="number"
-                value={settings.maxHeight}
-                onChange={e => handleChange('maxHeight', parseInt(e.target.value) || 0)}
-                min={1}
-                max={5000}
-              />
-            </div>
-            <div className="settings-row checkbox">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={settings.darkBlobs}
-                  onChange={e => handleChange('darkBlobs', e.target.checked)}
-                />
-                Dark Blobs (detect dark regions on light background)
-              </label>
-            </div>
-          </section>
-
-          {/* Gaussian Blur */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useGaussianBlur}
-                  onChange={e => handleChange('useGaussianBlur', e.target.checked)}
-                />
-                Gaussian Blur
-              </label>
-            </h3>
-            <p className="section-description">
-              Smooths the image to reduce noise before detection. Helps avoid false positives from image artifacts.
-            </p>
-            {settings.useGaussianBlur && (
-              <div className="settings-row">
-                <label>Kernel Size</label>
-                <select
-                  value={settings.gaussianKernelSize}
-                  onChange={e => handleChange('gaussianKernelSize', parseInt(e.target.value))}
-                >
-                  <option value={3}>3x3 (light blur)</option>
-                  <option value={5}>5x5 (recommended)</option>
-                  <option value={7}>7x7 (strong blur)</option>
-                </select>
-              </div>
-            )}
-          </section>
-
-          {/* Morphological Opening */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useMorphOpen}
-                  onChange={e => handleChange('useMorphOpen', e.target.checked)}
-                />
-                Morphological Opening
-              </label>
-            </h3>
-            <p className="section-description">
-              Separates touching objects by eroding then dilating. Essential for splitting merged detections.
-            </p>
-            {settings.useMorphOpen && (
-              <div className="settings-row">
-                <label>Kernel Size</label>
-                <select
-                  value={settings.morphKernelSize}
-                  onChange={e => handleChange('morphKernelSize', parseInt(e.target.value))}
-                >
-                  <option value={3}>3x3 (recommended)</option>
-                  <option value={5}>5x5 (stronger separation)</option>
-                  <option value={7}>7x7 (aggressive)</option>
-                </select>
-              </div>
-            )}
-          </section>
-
-          {/* Circularity Filter */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useCircularityFilter}
-                  onChange={e => handleChange('useCircularityFilter', e.target.checked)}
-                />
-                Circularity Filter
-              </label>
-            </h3>
-            <p className="section-description">
-              Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
-              <strong> Disable for hair follicles</strong> (they are elongated).
-            </p>
-            {settings.useCircularityFilter && (
-              <div className="settings-row">
-                <label>Min Circularity</label>
-                <input
-                  type="number"
-                  value={settings.minCircularity}
-                  onChange={e => handleChange('minCircularity', parseFloat(e.target.value) || 0)}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                />
-                <span className="hint">0-1, 1.0 = perfect circle</span>
-              </div>
-            )}
-          </section>
-
-          {/* Inertia Filter */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useInertiaFilter}
-                  onChange={e => handleChange('useInertiaFilter', e.target.checked)}
-                />
-                Inertia Filter
-              </label>
-            </h3>
-            <p className="section-description">
-              Controls allowed elongation of detected shapes. Low min ratio allows elongated shapes like
-              <strong> hair follicles</strong>. High ratio requires more circular shapes.
-            </p>
-            {settings.useInertiaFilter && (
-              <>
-                <div className="settings-row">
-                  <label>Min Inertia Ratio</label>
-                  <input
-                    type="number"
-                    value={settings.minInertiaRatio}
-                    onChange={e => handleChange('minInertiaRatio', parseFloat(e.target.value) || 0)}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                  />
-                  <span className="hint">0-1, 0.01 = very elongated OK</span>
-                </div>
-                <div className="settings-row">
-                  <label>Max Inertia Ratio</label>
-                  <input
-                    type="number"
-                    value={settings.maxInertiaRatio}
-                    onChange={e => handleChange('maxInertiaRatio', parseFloat(e.target.value) || 1)}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                  />
-                  <span className="hint">0-1, 1.0 = perfect circle</span>
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* Convexity Filter */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useConvexityFilter}
-                  onChange={e => handleChange('useConvexityFilter', e.target.checked)}
-                />
-                Convexity Filter
-              </label>
-            </h3>
-            <p className="section-description">
-              Filters by how convex (non-concave) the detected shape is. High values reject shapes with indentations.
-            </p>
-            {settings.useConvexityFilter && (
-              <div className="settings-row">
-                <label>Min Convexity</label>
-                <input
-                  type="number"
-                  value={settings.minConvexity}
-                  onChange={e => handleChange('minConvexity', parseFloat(e.target.value) || 0)}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                />
-                <span className="hint">0-1, 1.0 = perfectly convex</span>
-              </div>
-            )}
-          </section>
-
-          {/* CLAHE Preprocessing */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useCLAHE}
-                  onChange={e => handleChange('useCLAHE', e.target.checked)}
-                />
-                CLAHE Preprocessing
-              </label>
-            </h3>
-            <p className="section-description">
-              Contrast Limited Adaptive Histogram Equalization improves detection in
-              images with uneven lighting or low contrast.
-            </p>
-            {settings.useCLAHE && (
-              <>
-                <div className="settings-row">
-                  <label>Clip Limit</label>
-                  <input
-                    type="number"
-                    value={settings.claheClipLimit}
-                    onChange={e => handleChange('claheClipLimit', parseFloat(e.target.value) || 1)}
-                    min={1}
-                    max={10}
-                    step={0.5}
-                  />
-                  <span className="hint">1-10, higher = more contrast</span>
-                </div>
-                <div className="settings-row">
-                  <label>Tile Size</label>
-                  <input
-                    type="number"
-                    value={settings.claheTileSize}
-                    onChange={e => handleChange('claheTileSize', parseInt(e.target.value) || 4)}
-                    min={2}
-                    max={16}
-                  />
-                  <span className="hint">2-16, tiles per dimension</span>
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* SAHI-style Tiling */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useSAHI}
-                  onChange={e => handleChange('useSAHI', e.target.checked)}
-                />
-                SAHI Tiling
-              </label>
-            </h3>
-            <p className="section-description">
-              Sliced Aided Hyper Inference processes large images in overlapping tiles
-              for better detection of small objects.
-            </p>
-            {settings.useSAHI && (
-              <>
-                <div className="settings-row">
-                  <label>Tile Size (px)</label>
-                  <input
-                    type="number"
-                    value={settings.tileSize}
-                    onChange={e => handleChange('tileSize', parseInt(e.target.value) || 256)}
-                    min={128}
-                    max={2048}
-                    step={64}
-                  />
-                  <span className="hint">128-2048px</span>
-                </div>
-                <div className="settings-row">
-                  <label>Overlap</label>
-                  <input
-                    type="number"
-                    value={settings.tileOverlap}
-                    onChange={e => handleChange('tileOverlap', parseFloat(e.target.value) || 0.1)}
-                    min={0}
-                    max={0.5}
-                    step={0.05}
-                  />
-                  <span className="hint">0-0.5, fraction of tile size</span>
-                </div>
-              </>
-            )}
-          </section>
-
-          {/* Soft-NMS */}
-          <section className="settings-section">
-            <h3>
-              <label className="section-toggle">
-                <input
-                  type="checkbox"
-                  checked={settings.useSoftNMS}
-                  onChange={e => handleChange('useSoftNMS', e.target.checked)}
-                />
-                Soft-NMS (Non-Maximum Suppression)
-              </label>
-            </h3>
-            <p className="section-description">
-              Reduces overlapping detections using soft suppression with Gaussian decay.
-            </p>
-            {settings.useSoftNMS && (
-              <>
-                <div className="settings-row">
-                  <label>Sigma</label>
-                  <input
-                    type="number"
-                    value={settings.softNMSSigma}
-                    onChange={e => handleChange('softNMSSigma', parseFloat(e.target.value) || 0.3)}
-                    min={0.1}
-                    max={2}
-                    step={0.1}
-                  />
-                  <span className="hint">0.1-2, Gaussian decay rate</span>
-                </div>
-                <div className="settings-row">
-                  <label>Threshold</label>
-                  <input
-                    type="number"
-                    value={settings.softNMSThreshold}
-                    onChange={e => handleChange('softNMSThreshold', parseFloat(e.target.value) || 0.05)}
-                    min={0.01}
-                    max={0.5}
-                    step={0.01}
-                  />
-                  <span className="hint">Min confidence to keep</span>
-                </div>
-              </>
-            )}
-          </section>
-            </>
-          )}
-
-          {/* Origin Prediction Settings - Top-level section for keypoint prediction configuration */}
-          <section className="settings-section origin-prediction-section">
-            <h3>
-              <Crosshair size={16} style={{ marginRight: '6px' }} />
-              Origin Prediction
-            </h3>
-            <p className="section-description">
-              Configure how follicle origin points and growth directions are predicted.
-              These settings apply to both manual prediction (from side panel) and auto-prediction during detection.
-            </p>
-
-            {!keypointModelsAvailable ? (
-              <div className="yolo-warning">
-                <AlertCircle size={14} />
-                <span>No trained models available. Train a model first using the YOLO Training dialog.</span>
-              </div>
-            ) : (
-              <>
-                {/* Model Info */}
-                {loadedKeypointModel && (
-                  <div className="keypoint-model-info">
-                    <span className="model-name">Model: {loadedKeypointModel.name}</span>
-                    <span className="model-meta">
-                      {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
-                    </span>
+                    {detectionModels.length === 0 && yoloDetectionAvailable && (
+                      <div className="yolo-info">
+                        <span>No custom models trained yet. Using pre-trained model for detection.</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* Inference Backend */}
-                <div className="settings-row">
-                  <label>Inference Backend</label>
-                  <select
-                    value={settings.keypointInferenceBackend}
-                    onChange={e => handleChange('keypointInferenceBackend', e.target.value as YoloInferenceBackend)}
-                    disabled={!keypointTensorrtStatus?.available && settings.keypointInferenceBackend !== 'tensorrt'}
-                  >
-                    <option value="pytorch">PyTorch (Default)</option>
-                    <option value="tensorrt" disabled={!keypointTensorrtStatus?.available}>
-                      TensorRT {keypointTensorrtStatus?.available ? `(v${keypointTensorrtStatus.version})` : '(Not installed)'}
-                    </option>
-                  </select>
-                </div>
+                {/* Blob Detection Settings (shown when Blob method selected) */}
+                {settings.detectionMethod === 'blob' && (
+                  <div className="method-settings blob-settings">
+                    {/* Basic Size Parameters */}
+                    <div className="blob-subsection">
+                      <h4>Size Range</h4>
+                      <div className="settings-row">
+                        <label>Min Width</label>
+                        <input
+                          type="number"
+                          value={settings.minWidth}
+                          onChange={e => handleChange('minWidth', parseInt(e.target.value) || 0)}
+                          min={1}
+                          max={1000}
+                        />
+                      </div>
+                      <div className="settings-row">
+                        <label>Max Width</label>
+                        <input
+                          type="number"
+                          value={settings.maxWidth}
+                          onChange={e => handleChange('maxWidth', parseInt(e.target.value) || 0)}
+                          min={1}
+                          max={5000}
+                        />
+                      </div>
+                      <div className="settings-row">
+                        <label>Min Height</label>
+                        <input
+                          type="number"
+                          value={settings.minHeight}
+                          onChange={e => handleChange('minHeight', parseInt(e.target.value) || 0)}
+                          min={1}
+                          max={1000}
+                        />
+                      </div>
+                      <div className="settings-row">
+                        <label>Max Height</label>
+                        <input
+                          type="number"
+                          value={settings.maxHeight}
+                          onChange={e => handleChange('maxHeight', parseInt(e.target.value) || 0)}
+                          min={1}
+                          max={5000}
+                        />
+                      </div>
+                      <div className="settings-row checkbox">
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={settings.darkBlobs}
+                            onChange={e => handleChange('darkBlobs', e.target.checked)}
+                          />
+                          Dark Blobs (detect dark regions on light background)
+                        </label>
+                      </div>
+                    </div>
 
-                {/* TensorRT engine status */}
-                {settings.keypointInferenceBackend === 'tensorrt' && keypointTensorrtStatus?.available && loadedKeypointModel && (
-                  <>
-                    {keypointEngineAvailable === false && !keypointExport.isExporting && !keypointExport.error && !keypointExport.completed && (
-                      <div className="tensorrt-export-section">
-                        <div className="tensorrt-export-warning">
-                          <AlertCircle size={14} />
-                          <span>No TensorRT engine found for "{loadedKeypointModel.name}"</span>
-                        </div>
-                        <button className="tensorrt-export-btn" onClick={handleExportKeypointEngine}>
-                          <Zap size={14} />
-                          Export to TensorRT
-                        </button>
-                        <p className="setting-hint">
-                          Export creates a GPU-optimized .engine file for faster prediction.
-                        </p>
-                      </div>
-                    )}
-                    {keypointExport.isExporting && (
-                      <div className="tensorrt-export-section exporting">
-                        <div className="export-progress-container">
-                          <div className="export-progress-header">
-                            <Loader2 size={14} className="spin" />
-                            <span>{keypointExport.progress || 'Exporting to TensorRT...'}</span>
-                          </div>
-                          <div className="export-progress-bar">
-                            <div className="export-progress-bar-indeterminate" />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {keypointExport.error && !keypointExport.isExporting && (
-                      <div className="tensorrt-export-section error">
-                        <AlertCircle size={14} />
-                        <span>{keypointExport.error}</span>
-                        <button className="tensorrt-retry-btn" onClick={handleExportKeypointEngine}>
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                    {(keypointEngineAvailable === true || keypointExport.completed) && (
-                      <p className="setting-hint tensorrt-ready">
-                        <Zap size={12} />
-                        TensorRT engine ready. Using GPU-optimized inference.
+                    {/* Gaussian Blur */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useGaussianBlur}
+                            onChange={e => handleChange('useGaussianBlur', e.target.checked)}
+                          />
+                          Gaussian Blur
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Smooths the image to reduce noise before detection. Helps avoid false positives from image artifacts.
                       </p>
+                      {settings.useGaussianBlur && (
+                        <div className="settings-row">
+                          <label>Kernel Size</label>
+                          <select
+                            value={settings.gaussianKernelSize}
+                            onChange={e => handleChange('gaussianKernelSize', parseInt(e.target.value))}
+                          >
+                            <option value={3}>3x3 (light blur)</option>
+                            <option value={5}>5x5 (recommended)</option>
+                            <option value={7}>7x7 (strong blur)</option>
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Morphological Opening */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useMorphOpen}
+                            onChange={e => handleChange('useMorphOpen', e.target.checked)}
+                          />
+                          Morphological Opening
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Separates touching objects by eroding then dilating. Essential for splitting merged detections.
+                      </p>
+                      {settings.useMorphOpen && (
+                        <div className="settings-row">
+                          <label>Kernel Size</label>
+                          <select
+                            value={settings.morphKernelSize}
+                            onChange={e => handleChange('morphKernelSize', parseInt(e.target.value))}
+                          >
+                            <option value={3}>3x3 (recommended)</option>
+                            <option value={5}>5x5 (stronger separation)</option>
+                            <option value={7}>7x7 (aggressive)</option>
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Circularity Filter */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useCircularityFilter}
+                            onChange={e => handleChange('useCircularityFilter', e.target.checked)}
+                          />
+                          Circularity Filter
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Rejects elongated or irregular shapes. Only keeps detections that are roughly circular.
+                        <strong> Disable for hair follicles</strong> (they are elongated).
+                      </p>
+                      {settings.useCircularityFilter && (
+                        <div className="settings-row">
+                          <label>Min Circularity</label>
+                          <input
+                            type="number"
+                            value={settings.minCircularity}
+                            onChange={e => handleChange('minCircularity', parseFloat(e.target.value) || 0)}
+                            min={0}
+                            max={1}
+                            step={0.05}
+                          />
+                          <span className="hint">0-1, 1.0 = perfect circle</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Inertia Filter */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useInertiaFilter}
+                            onChange={e => handleChange('useInertiaFilter', e.target.checked)}
+                          />
+                          Inertia Filter
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Controls allowed elongation of detected shapes. Low min ratio allows elongated shapes like
+                        <strong> hair follicles</strong>. High ratio requires more circular shapes.
+                      </p>
+                      {settings.useInertiaFilter && (
+                        <>
+                          <div className="settings-row">
+                            <label>Min Inertia Ratio</label>
+                            <input
+                              type="number"
+                              value={settings.minInertiaRatio}
+                              onChange={e => handleChange('minInertiaRatio', parseFloat(e.target.value) || 0)}
+                              min={0}
+                              max={1}
+                              step={0.01}
+                            />
+                            <span className="hint">0-1, 0.01 = very elongated OK</span>
+                          </div>
+                          <div className="settings-row">
+                            <label>Max Inertia Ratio</label>
+                            <input
+                              type="number"
+                              value={settings.maxInertiaRatio}
+                              onChange={e => handleChange('maxInertiaRatio', parseFloat(e.target.value) || 1)}
+                              min={0}
+                              max={1}
+                              step={0.01}
+                            />
+                            <span className="hint">0-1, 1.0 = perfect circle</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Convexity Filter */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useConvexityFilter}
+                            onChange={e => handleChange('useConvexityFilter', e.target.checked)}
+                          />
+                          Convexity Filter
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Filters by how convex (non-concave) the detected shape is. High values reject shapes with indentations.
+                      </p>
+                      {settings.useConvexityFilter && (
+                        <div className="settings-row">
+                          <label>Min Convexity</label>
+                          <input
+                            type="number"
+                            value={settings.minConvexity}
+                            onChange={e => handleChange('minConvexity', parseFloat(e.target.value) || 0)}
+                            min={0}
+                            max={1}
+                            step={0.05}
+                          />
+                          <span className="hint">0-1, 1.0 = perfectly convex</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CLAHE Preprocessing */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useCLAHE}
+                            onChange={e => handleChange('useCLAHE', e.target.checked)}
+                          />
+                          CLAHE Preprocessing
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Contrast Limited Adaptive Histogram Equalization improves detection in
+                        images with uneven lighting or low contrast.
+                      </p>
+                      {settings.useCLAHE && (
+                        <>
+                          <div className="settings-row">
+                            <label>Clip Limit</label>
+                            <input
+                              type="number"
+                              value={settings.claheClipLimit}
+                              onChange={e => handleChange('claheClipLimit', parseFloat(e.target.value) || 1)}
+                              min={1}
+                              max={10}
+                              step={0.5}
+                            />
+                            <span className="hint">1-10, higher = more contrast</span>
+                          </div>
+                          <div className="settings-row">
+                            <label>Tile Size</label>
+                            <input
+                              type="number"
+                              value={settings.claheTileSize}
+                              onChange={e => handleChange('claheTileSize', parseInt(e.target.value) || 4)}
+                              min={2}
+                              max={16}
+                            />
+                            <span className="hint">2-16, tiles per dimension</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* SAHI-style Tiling */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useSAHI}
+                            onChange={e => handleChange('useSAHI', e.target.checked)}
+                          />
+                          SAHI Tiling
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Sliced Aided Hyper Inference processes large images in overlapping tiles
+                        for better detection of small objects.
+                      </p>
+                      {settings.useSAHI && (
+                        <>
+                          <div className="settings-row">
+                            <label>Tile Size (px)</label>
+                            <input
+                              type="number"
+                              value={settings.tileSize}
+                              onChange={e => handleChange('tileSize', parseInt(e.target.value) || 256)}
+                              min={128}
+                              max={2048}
+                              step={64}
+                            />
+                            <span className="hint">128-2048px</span>
+                          </div>
+                          <div className="settings-row">
+                            <label>Overlap</label>
+                            <input
+                              type="number"
+                              value={settings.tileOverlap}
+                              onChange={e => handleChange('tileOverlap', parseFloat(e.target.value) || 0.1)}
+                              min={0}
+                              max={0.5}
+                              step={0.05}
+                            />
+                            <span className="hint">0-0.5, fraction of tile size</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Soft-NMS */}
+                    <div className="blob-subsection">
+                      <h4>
+                        <label className="section-toggle">
+                          <input
+                            type="checkbox"
+                            checked={settings.useSoftNMS}
+                            onChange={e => handleChange('useSoftNMS', e.target.checked)}
+                          />
+                          Soft-NMS (Non-Maximum Suppression)
+                        </label>
+                      </h4>
+                      <p className="section-description">
+                        Reduces overlapping detections using soft suppression with Gaussian decay.
+                      </p>
+                      {settings.useSoftNMS && (
+                        <>
+                          <div className="settings-row">
+                            <label>Sigma</label>
+                            <input
+                              type="number"
+                              value={settings.softNMSSigma}
+                              onChange={e => handleChange('softNMSSigma', parseFloat(e.target.value) || 0.3)}
+                              min={0.1}
+                              max={2}
+                              step={0.1}
+                            />
+                            <span className="hint">0.1-2, Gaussian decay rate</span>
+                          </div>
+                          <div className="settings-row">
+                            <label>Threshold</label>
+                            <input
+                              type="number"
+                              value={settings.softNMSThreshold}
+                              onChange={e => handleChange('softNMSThreshold', parseFloat(e.target.value) || 0.05)}
+                              min={0.01}
+                              max={0.5}
+                              step={0.01}
+                            />
+                            <span className="hint">Min confidence to keep</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Section 2: Keypoint Prediction */}
+          <section className="settings-section keypoint-section">
+            <h3
+              className="section-header clickable"
+              onClick={() => setKeypointCollapsed(!keypointCollapsed)}
+            >
+              <ChevronDown size={16} className={`chevron ${keypointCollapsed ? 'rotated' : ''}`} />
+              <Crosshair size={16} />
+              Origin & Direction Prediction
+              {/* Enable toggle in header */}
+              <label className="section-enable-toggle" onClick={e => e.stopPropagation()}>
+                <input
+                  type="checkbox"
+                  checked={settings.useKeypointPrediction}
+                  onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
+                />
+                <span>{settings.useKeypointPrediction ? 'Enabled' : 'Disabled'}</span>
+              </label>
+            </h3>
+
+            {!keypointCollapsed && (
+              <div className="section-content">
+                {/* Show export progress if exporting */}
+                {keypointExport.isExporting && (
+                  <div className="export-progress-section">
+                    <Loader2 size={16} className="spin" />
+                    <span>{getExportProgressMessage()}</span>
+                  </div>
+                )}
+
+                {/* Show warning only if not exporting and no models available */}
+                {!keypointModelsAvailable && !keypointExport.isExporting ? (
+                  <div className="yolo-warning">
+                    <AlertCircle size={14} />
+                    <span>No trained models available. Train a model first using the YOLO Training dialog.</span>
+                  </div>
+                ) : !keypointExport.isExporting && (
+                  <>
+                    {/* Model Info */}
+                    {loadedKeypointModel && (
+                      <div className="keypoint-model-info">
+                        <span className="model-name">Model: {loadedKeypointModel.name}</span>
+                        <span className="model-meta">
+                          {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
+                        </span>
+                      </div>
                     )}
+
+                    {/* Inference Backend */}
+                    <div className="settings-row">
+                      <label>Inference Backend</label>
+                      <select
+                        value={settings.keypointInferenceBackend}
+                        onChange={e => handleChange('keypointInferenceBackend', e.target.value as YoloInferenceBackend)}
+                        disabled={!keypointTensorrtStatus?.available && settings.keypointInferenceBackend !== 'tensorrt'}
+                      >
+                        <option value="pytorch">PyTorch (Default)</option>
+                        <option value="tensorrt" disabled={!keypointTensorrtStatus?.available}>
+                          TensorRT {keypointTensorrtStatus?.available ? `(v${keypointTensorrtStatus.version})` : '(Not installed)'}
+                        </option>
+                      </select>
+                    </div>
+
+                    {/* TensorRT engine status */}
+                    {settings.keypointInferenceBackend === 'tensorrt' && keypointTensorrtStatus?.available && loadedKeypointModel && (
+                      <>
+                        {keypointEngineAvailable === false && !keypointExport.isExporting && !keypointExport.error && !keypointExport.completed && (
+                          <div className="tensorrt-export-section">
+                            <div className="tensorrt-export-warning">
+                              <AlertCircle size={14} />
+                              <span>No TensorRT engine found for "{loadedKeypointModel.name}"</span>
+                            </div>
+                            <button className="tensorrt-export-btn" onClick={handleExportKeypointEngine}>
+                              <Zap size={14} />
+                              Export to TensorRT
+                            </button>
+                            <p className="setting-hint">
+                              Export creates a GPU-optimized .engine file for faster prediction.
+                            </p>
+                          </div>
+                        )}
+                        {keypointExport.isExporting && (
+                          <div className="tensorrt-export-section exporting">
+                            <div className="export-progress-container">
+                              <div className="export-progress-header">
+                                <Loader2 size={14} className="spin" />
+                                <span>{keypointExport.progress || 'Exporting to TensorRT...'}</span>
+                              </div>
+                              <div className="export-progress-bar">
+                                <div className="export-progress-bar-indeterminate" />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {keypointExport.error && !keypointExport.isExporting && (
+                          <div className="tensorrt-export-section error">
+                            <AlertCircle size={14} />
+                            <span>{keypointExport.error}</span>
+                            <button className="tensorrt-retry-btn" onClick={handleExportKeypointEngine}>
+                              Retry
+                            </button>
+                          </div>
+                        )}
+                        {(keypointEngineAvailable === true || keypointExport.completed) && (
+                          <p className="setting-hint tensorrt-ready">
+                            <Zap size={12} />
+                            TensorRT engine ready. Using GPU-optimized inference.
+                          </p>
+                        )}
+                      </>
+                    )}
+
+                    {/* Keypoint Confidence Threshold */}
+                    <div className="settings-row" style={{ marginTop: '12px' }}>
+                      <label>Confidence Threshold</label>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="0.9"
+                        step="0.05"
+                        value={settings.keypointConfidenceThreshold}
+                        onChange={e => handleChange('keypointConfidenceThreshold', parseFloat(e.target.value))}
+                      />
+                      <span className="value-display">{(settings.keypointConfidenceThreshold * 100).toFixed(0)}%</span>
+                    </div>
+                    <p className="setting-hint">
+                      Minimum confidence for origin predictions. Higher = fewer but more accurate predictions.
+                    </p>
+
+                    {/* Auto-Predict Toggle */}
+                    <div className="settings-row checkbox" style={{ marginTop: '12px' }}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={settings.useKeypointPrediction}
+                          onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
+                        />
+                        Auto-predict origins during detection
+                      </label>
+                    </div>
+                    <p className="setting-hint">
+                      When enabled, origin points will be automatically predicted for all detected follicles.
+                    </p>
                   </>
                 )}
-
-                {/* Keypoint Confidence Threshold */}
-                <div className="settings-row" style={{ marginTop: '12px' }}>
-                  <label>Confidence Threshold</label>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="0.9"
-                    step="0.05"
-                    value={settings.keypointConfidenceThreshold}
-                    onChange={e => handleChange('keypointConfidenceThreshold', parseFloat(e.target.value))}
-                  />
-                  <span className="value-display">{(settings.keypointConfidenceThreshold * 100).toFixed(0)}%</span>
-                </div>
-                <p className="setting-hint">
-                  Minimum confidence for origin predictions. Higher = fewer but more accurate predictions.
-                </p>
-
-                {/* Auto-Predict Toggle */}
-                <div className="settings-row checkbox" style={{ marginTop: '12px' }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={settings.useKeypointPrediction}
-                      onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
-                    />
-                    Auto-predict origins during detection
-                  </label>
-                </div>
-                <p className="setting-hint">
-                  When enabled, origin points will be automatically predicted for all detected follicles.
-                </p>
-              </>
+              </div>
             )}
           </section>
         </div>

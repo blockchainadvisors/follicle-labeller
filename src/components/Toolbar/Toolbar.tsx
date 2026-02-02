@@ -244,6 +244,39 @@ export const Toolbar: React.FC = () => {
     completed: false,
   });
 
+  // Elapsed time for export progress display
+  const [exportElapsedSeconds, setExportElapsedSeconds] = useState(0);
+
+  // Update elapsed time every second during export
+  useEffect(() => {
+    if (!keypointExportState.isExporting && !detectionExportState.isExporting) {
+      setExportElapsedSeconds(0);
+      return;
+    }
+
+    const startTime = keypointExportState.isExporting ? keypointExportState.startTime : detectionExportState.startTime;
+    if (!startTime) return;
+
+    // Calculate initial elapsed time
+    setExportElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+
+    const interval = setInterval(() => {
+      setExportElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [keypointExportState.isExporting, keypointExportState.startTime, detectionExportState.isExporting, detectionExportState.startTime]);
+
+  // Format seconds into "Xm Ys" format
+  const formatExportTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    }
+    return `${secs}s`;
+  };
+
   // State for unified YOLO dialogs
   const [showUnifiedYOLOTraining, setShowUnifiedYOLOTraining] = useState(false);
   const [showUnifiedYOLOModelManager, setShowUnifiedYOLOModelManager] = useState(false);
@@ -2259,8 +2292,12 @@ export const Toolbar: React.FC = () => {
         <IconButton
           icon={
             <span style={{ position: 'relative' }}>
-              <Settings size={18} />
-              {missingModelInfo && (
+              {(detectionExportState.isExporting || keypointExportState.isExporting) ? (
+                <Loader2 size={18} className="spin" />
+              ) : (
+                <Settings size={18} />
+              )}
+              {missingModelInfo && !detectionExportState.isExporting && !keypointExportState.isExporting && (
                 <span
                   style={{
                     position: 'absolute',
@@ -2274,11 +2311,31 @@ export const Toolbar: React.FC = () => {
                   title="Saved model not found"
                 />
               )}
+              {(detectionExportState.isExporting || keypointExportState.isExporting) && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                  }}
+                  title="TensorRT export in progress"
+                />
+              )}
             </span>
           }
-          tooltip={missingModelInfo
-            ? `Detection Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
-            : "Detection Settings"
+          tooltip={
+            detectionExportState.isExporting
+              ? `TensorRT Export: ${detectionExportState.progress || 'Exporting detection model...'}`
+              : keypointExportState.isExporting
+              ? `TensorRT Export: ${keypointExportState.progress || 'Exporting keypoint model...'}`
+              : missingModelInfo
+              ? `Detection Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+              : "Detection Settings"
           }
           onClick={() => setShowDetectionSettings(true)}
           disabled={!imageLoaded}
@@ -2402,6 +2459,32 @@ export const Toolbar: React.FC = () => {
 
       {/* Status display */}
       <div className="toolbar-spacer" />
+
+      {/* TensorRT Export Status (visible when exporting) */}
+      {(detectionExportState.isExporting || keypointExportState.isExporting) && (
+        <div className="toolbar-export-status">
+          <Loader2 size={14} className="spin" />
+          <span className="export-status-text">
+            {(() => {
+              const exportState = keypointExportState.isExporting ? keypointExportState : detectionExportState;
+              const baseMsg = exportState.progress || 'Exporting...';
+              const estimate = exportState.estimatedSeconds;
+              if (exportElapsedSeconds > 0) {
+                const elapsed = formatExportTime(exportElapsedSeconds);
+                if (estimate) {
+                  const remaining = Math.max(0, estimate - exportElapsedSeconds);
+                  return remaining > 0
+                    ? `${baseMsg} (${elapsed}, ~${formatExportTime(remaining)} left)`
+                    : `${baseMsg} (${elapsed}, finishing...)`;
+                }
+                return `${baseMsg} (${elapsed})`;
+              }
+              return baseMsg;
+            })()}
+          </span>
+        </div>
+      )}
+
       <div className="toolbar-status">
         {serverStarting && setupStatus ? (
           <span className="setup-status">{setupStatus}</span>

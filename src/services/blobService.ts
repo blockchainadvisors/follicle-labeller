@@ -840,10 +840,17 @@ export class BlobService {
 
     console.log(`[BENCHMARK] Keypoint prediction completed: ${origins.size}/${rectangles.length} origins predicted`);
 
-    // Clear GPU memory after batch prediction to free VRAM
-    this.clearKeypointGpuMemory().catch(err =>
-      console.warn('Failed to clear GPU memory after keypoint prediction:', err)
-    );
+    // Unload the model and free all GPU memory after predictions
+    // This completely frees the ~1.5GB TensorRT engine from VRAM
+    // The model will auto-reload on next prediction
+    try {
+      const unloadResult = await this.unloadKeypointModel();
+      if (unloadResult.memory_freed_mb && unloadResult.memory_freed_mb > 0) {
+        console.log(`[GPU] Unloaded model, freed ${unloadResult.memory_freed_mb}MB after keypoint prediction`);
+      }
+    } catch (err) {
+      console.warn('Failed to unload keypoint model after prediction:', err);
+    }
 
     return origins;
   }
@@ -868,6 +875,34 @@ export class BlobService {
       return { success: false };
     } catch (error) {
       console.warn('GPU memory cleanup request failed:', error);
+      return { success: false };
+    }
+  }
+
+  /**
+   * Unload the keypoint model and free all GPU memory.
+   * Unlike clearKeypointGpuMemory which only clears cached tensors,
+   * this completely removes the model from GPU memory.
+   * The model will be automatically reloaded on the next prediction.
+   */
+  async unloadKeypointModel(): Promise<{ success: boolean; memory_freed_mb?: number; model_was_loaded?: boolean }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/yolo-keypoint/unload-model`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const result = await response.json();
+        if (result.memory_freed_mb > 0) {
+          console.log(`[GPU] Unloaded keypoint model, freed ${result.memory_freed_mb}MB GPU memory`);
+        } else if (result.model_was_loaded === false) {
+          console.log('[GPU] No keypoint model was loaded');
+        }
+        return result;
+      }
+      return { success: false };
+    } catch (error) {
+      console.warn('Keypoint model unload request failed:', error);
       return { success: false };
     }
   }

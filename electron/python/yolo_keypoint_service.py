@@ -122,6 +122,8 @@ class ModelInfo:
     epochs_trained: int
     img_size: int
     metrics: Dict[str, float]
+    parameters: Optional[int] = None  # Number of model parameters (for export time estimation)
+    model_variant: Optional[str] = None  # Model variant (n/s/m/l/x)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict with camelCase keys for JavaScript compatibility."""
@@ -133,6 +135,8 @@ class ModelInfo:
             'epochsTrained': self.epochs_trained,
             'imgSize': self.img_size,
             'metrics': self.metrics,
+            'parameters': self.parameters,
+            'modelVariant': self.model_variant,
         }
 
     def to_storage_dict(self) -> Dict[str, Any]:
@@ -222,14 +226,24 @@ class YOLOKeypointService:
                     "reserved_mb": round(memory_reserved_before, 2)
                 }
 
-                # Run Python garbage collection first
-                gc.collect()
+                # Multiple GC passes to clean up circular references
+                for _ in range(3):
+                    gc.collect()
 
                 # Empty CUDA cache
                 torch.cuda.empty_cache()
 
+                # For TensorRT, also try to reset the memory allocator caching
+                # This helps release fragmented memory blocks
+                if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                    torch.cuda.reset_peak_memory_stats()
+
                 # Synchronize to ensure cleanup is complete
                 torch.cuda.synchronize()
+
+                # Second round of cleanup after synchronization
+                gc.collect()
+                torch.cuda.empty_cache()
 
                 # Get memory stats after cleanup
                 memory_after = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
@@ -242,7 +256,8 @@ class YOLOKeypointService:
                 result["memory_freed_mb"] = round(memory_reserved_before - memory_reserved_after, 2)
 
                 logger.info(f"GPU memory cleanup: freed {result['memory_freed_mb']:.1f}MB "
-                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB)")
+                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB, "
+                           f"allocated: {memory_before:.1f}MB -> {memory_after:.1f}MB)")
 
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 # MPS (Apple Silicon) cleanup
@@ -267,6 +282,72 @@ class YOLOKeypointService:
 
         except Exception as e:
             logger.error(f"GPU memory cleanup failed: {e}")
+            result["success"] = False
+            result["error"] = str(e)
+
+        return result
+
+    def unload_model(self) -> Dict[str, Any]:
+        """
+        Unload the currently loaded model and free all GPU memory.
+
+        This completely removes the model from GPU memory, unlike clear_gpu_memory()
+        which only clears cached/intermediate tensors.
+
+        Returns:
+            Dict with success status and memory freed
+        """
+        result = {
+            "success": True,
+            "model_was_loaded": self._loaded_model is not None,
+            "model_path": self._loaded_model_path,
+            "memory_freed_mb": 0
+        }
+
+        try:
+            import torch
+
+            # Get memory before unload
+            memory_before = 0
+            if torch.cuda.is_available():
+                memory_before = torch.cuda.memory_reserved() / (1024 * 1024)
+
+            if self._loaded_model is not None:
+                logger.info(f"Unloading model: {self._loaded_model_path} (backend: {self._loaded_model_backend})")
+
+                # Delete the model
+                del self._loaded_model
+                self._loaded_model = None
+                self._loaded_model_path = None
+                self._loaded_model_backend = 'pytorch'
+
+                # Aggressive cleanup
+                for _ in range(3):
+                    gc.collect()
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                    # Get memory after unload
+                    memory_after = torch.cuda.memory_reserved() / (1024 * 1024)
+                    result["memory_freed_mb"] = round(memory_before - memory_after, 2)
+
+                    logger.info(f"Model unloaded. Freed {result['memory_freed_mb']:.1f}MB GPU memory "
+                               f"(reserved: {memory_before:.1f}MB -> {memory_after:.1f}MB)")
+
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    if hasattr(torch.mps, 'empty_cache'):
+                        torch.mps.empty_cache()
+                    logger.info("Model unloaded (MPS)")
+
+            else:
+                logger.info("No model was loaded, nothing to unload")
+
+        except Exception as e:
+            logger.error(f"Model unload failed: {e}")
             result["success"] = False
             result["error"] = str(e)
 
@@ -769,7 +850,16 @@ class YOLOKeypointService:
             t1 = time.time()
 
             # Run inference
-            results = self._loaded_model.predict(img_array, verbose=False)
+            # TensorRT engines require fixed batch size, so we pad to batch=16
+            if self._loaded_model_backend == 'tensorrt':
+                TENSORRT_BATCH_SIZE = 16
+                # Create a batch of 16 copies of the same image
+                batch = [img_array] * TENSORRT_BATCH_SIZE
+                batch_results = self._loaded_model.predict(batch, verbose=False)
+                # Take only the first result
+                results = batch_results[:1] if batch_results else []
+            else:
+                results = self._loaded_model.predict(img_array, verbose=False)
 
             t2 = time.time()
 
@@ -874,8 +964,7 @@ class YOLOKeypointService:
             if len(valid_images) == 0:
                 return [None] * len(images_data)
 
-            # Run batch inference
-            # YOLO model.predict() accepts a list of images for batch processing
+            # Run inference
             # Explicitly specify device to ensure GPU is used when available
             import torch
             if torch.cuda.is_available():
@@ -884,7 +973,35 @@ class YOLOKeypointService:
                 device = 'mps'  # Apple Silicon
             else:
                 device = 'cpu'
-            results = self._loaded_model.predict(valid_images, verbose=False, device=device)
+
+            # TensorRT engines are compiled with fixed batch size
+            # Our engines are exported with batch=16 for efficient multi-follicle inference
+            if self._loaded_model_backend == 'tensorrt':
+                # Process in batches matching the engine's batch size
+                # TensorRT requires EXACTLY the batch size it was compiled with
+                TENSORRT_BATCH_SIZE = 16
+                results = []
+
+                for i in range(0, len(valid_images), TENSORRT_BATCH_SIZE):
+                    batch = valid_images[i:i + TENSORRT_BATCH_SIZE]
+                    actual_batch_size = len(batch)
+
+                    # Pad batch to exactly TENSORRT_BATCH_SIZE by duplicating last image
+                    if actual_batch_size < TENSORRT_BATCH_SIZE:
+                        padding_needed = TENSORRT_BATCH_SIZE - actual_batch_size
+                        batch = batch + [batch[-1]] * padding_needed
+
+                    try:
+                        batch_results = self._loaded_model.predict(batch, verbose=False, device=device)
+                        # Only take results for actual images (not padding)
+                        results.extend(batch_results[:actual_batch_size])
+                    except Exception as e:
+                        logger.warning(f"TensorRT batch prediction failed: {e}")
+                        # Return None for all images in this batch
+                        results.extend([None] * actual_batch_size)
+            else:
+                # PyTorch supports true batch inference with dynamic batch size
+                results = self._loaded_model.predict(valid_images, verbose=False, device=device)
 
             t2 = time.time()
 
@@ -906,6 +1023,8 @@ class YOLOKeypointService:
                     continue
 
                 result = results[result_idx]
+                if result is None:
+                    continue
                 img_width, img_height = sizes[orig_idx]
 
                 # Extract keypoints
@@ -1000,6 +1119,38 @@ class YOLOKeypointService:
                     with open(info_file) as f:
                         info_dict = json.load(f)
 
+                    # Get parameters and variant from saved info or try to detect
+                    parameters = info_dict.get('parameters')
+                    model_variant = info_dict.get('model_variant')
+
+                    # If not in saved info, try to detect from model file
+                    if parameters is None or model_variant is None:
+                        model_path = Path(info_dict.get('path', str(model_dir / 'weights' / 'best.pt')))
+                        if model_path.exists():
+                            try:
+                                # Quick load just to get model info
+                                from ultralytics import YOLO
+                                temp_model = YOLO(str(model_path))
+                                if hasattr(temp_model, 'model') and temp_model.model is not None:
+                                    # Get parameter count
+                                    if parameters is None:
+                                        parameters = sum(p.numel() for p in temp_model.model.parameters())
+                                    # Detect variant from parameter count
+                                    if model_variant is None:
+                                        if parameters < 5_000_000:
+                                            model_variant = 'n'  # nano
+                                        elif parameters < 15_000_000:
+                                            model_variant = 's'  # small
+                                        elif parameters < 25_000_000:
+                                            model_variant = 'm'  # medium
+                                        elif parameters < 40_000_000:
+                                            model_variant = 'l'  # large
+                                        else:
+                                            model_variant = 'x'  # xlarge
+                                del temp_model
+                            except Exception as e:
+                                logger.debug(f"Could not load model for parameter info: {e}")
+
                     models.append(ModelInfo(
                         id=info_dict.get('id', model_dir.name),
                         name=info_dict.get('name', model_dir.name),
@@ -1007,7 +1158,9 @@ class YOLOKeypointService:
                         created_at=info_dict.get('created_at', ''),
                         epochs_trained=info_dict.get('epochs_trained', 0),
                         img_size=info_dict.get('img_size', 640),
-                        metrics=info_dict.get('metrics', {})
+                        metrics=info_dict.get('metrics', {}),
+                        parameters=parameters,
+                        model_variant=model_variant,
                     ))
                 except Exception as e:
                     logger.warning(f"Failed to load model info from {info_file}: {e}")
@@ -1064,7 +1217,8 @@ class YOLOKeypointService:
         model_path: str,
         output_path: Optional[str] = None,
         half: bool = True,
-        imgsz: int = 640
+        imgsz: int = 640,
+        batch: int = 16
     ) -> Dict[str, Any]:
         """
         Export a PyTorch model to TensorRT engine format.
@@ -1079,6 +1233,7 @@ class YOLOKeypointService:
                         If None, saves alongside the .pt file.
             half: Use FP16 precision (recommended for consumer GPUs)
             imgsz: Input image size for the engine
+            batch: Batch size for the engine (default 16 for efficient multi-follicle inference)
 
         Returns:
             Dict with 'success' bool and 'engine_path' string
@@ -1095,14 +1250,14 @@ class YOLOKeypointService:
                     "error": "TensorRT is not installed. Install it with: pip install tensorrt"
                 }
 
-            logger.info(f"Exporting {model_path} to TensorRT (half={half}, imgsz={imgsz})")
+            logger.info(f"Exporting {model_path} to TensorRT (half={half}, imgsz={imgsz}, batch={batch})")
 
             # Load the PyTorch model
             model = YOLO(model_path)
 
-            # Export to TensorRT format
-            # Ultralytics handles the conversion internally
-            engine_path = model.export(format='engine', half=half, imgsz=imgsz)
+            # Export to TensorRT format with batch size for efficient multi-image inference
+            # batch=16 allows processing 16 follicle crops in parallel on GPU
+            engine_path = model.export(format='engine', half=half, imgsz=imgsz, batch=batch)
 
             if engine_path and Path(engine_path).exists():
                 # If custom output path requested, move the file

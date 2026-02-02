@@ -230,14 +230,24 @@ class YOLODetectionService:
                     "reserved_mb": round(memory_reserved_before, 2)
                 }
 
-                # Run Python garbage collection first
-                gc.collect()
+                # Multiple GC passes to clean up circular references
+                for _ in range(3):
+                    gc.collect()
 
                 # Empty CUDA cache
                 torch.cuda.empty_cache()
 
+                # For TensorRT, also try to reset the memory allocator caching
+                # This helps release fragmented memory blocks
+                if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                    torch.cuda.reset_peak_memory_stats()
+
                 # Synchronize to ensure cleanup is complete
                 torch.cuda.synchronize()
+
+                # Second round of cleanup after synchronization
+                gc.collect()
+                torch.cuda.empty_cache()
 
                 # Get memory stats after cleanup
                 memory_after = torch.cuda.memory_allocated() / (1024 * 1024)  # MB
@@ -250,7 +260,8 @@ class YOLODetectionService:
                 result["memory_freed_mb"] = round(memory_reserved_before - memory_reserved_after, 2)
 
                 logger.info(f"GPU memory cleanup: freed {result['memory_freed_mb']:.1f}MB "
-                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB)")
+                           f"(reserved: {memory_reserved_before:.1f}MB -> {memory_reserved_after:.1f}MB, "
+                           f"allocated: {memory_before:.1f}MB -> {memory_after:.1f}MB)")
 
             elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
                 # MPS (Apple Silicon) cleanup

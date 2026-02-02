@@ -300,6 +300,27 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   font-weight: var(--font-medium);
 }
 
+/* TensorRT Export Status in Toolbar */
+.toolbar-export-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--accent);
+  color: white;
+  border-radius: 4px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  margin-right: 12px;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.toolbar-export-status .export-status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Canvas container */
 .canvas-container {
   flex: 1;
@@ -1635,6 +1656,17 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Global spin class for any spinning loader */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Pulse animation for status indicators */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* Theme Picker */

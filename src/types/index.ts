@@ -813,6 +813,10 @@ export interface ModelInfo {
   metrics: {
     [key: string]: number;
   };
+  /** Number of model parameters (for export time estimation) */
+  parameters?: number;
+  /** Model variant (n/s/m/l/x) */
+  modelVariant?: 'n' | 's' | 'm' | 'l' | 'x';
 }
 
 /**
