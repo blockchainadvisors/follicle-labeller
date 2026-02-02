@@ -1461,11 +1461,20 @@ async def yolo_list_models():
     if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
         raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
 
+    from pathlib import Path
     service = get_yolo_keypoint_service()
     models = service.list_models()
 
+    # Include diagnostic info for debugging path issues
     return {
-        'models': [m.to_dict() for m in models]
+        'models': [m.to_dict() for m in models],
+        '_debug': {
+            'modelsDir': str(service.models_dir),
+            'modelsDirExists': service.models_dir.exists(),
+            'modelsDirResolved': str(service.models_dir.resolve()) if service.models_dir.exists() else None,
+            'scriptFile': str(Path(__file__)),
+            'scriptDir': str(Path(__file__).parent),
+        }
     }
 
 
@@ -1477,12 +1486,17 @@ async def yolo_load_model(req: LoadModelRequest):
     if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
         raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
 
+    from pathlib import Path
+    model_path = Path(req.modelPath)
+
     service = get_yolo_keypoint_service()
     success = service.load_model(req.modelPath)
 
     return {
         'success': success,
-        'modelPath': req.modelPath
+        'modelPath': req.modelPath,
+        'pathExists': model_path.exists(),
+        'resolvedPath': str(model_path.resolve()) if model_path.exists() else None
     }
 
 
@@ -1495,6 +1509,15 @@ async def yolo_predict(req: PredictRequest):
         raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
 
     service = get_yolo_keypoint_service()
+
+    # Check if model is loaded
+    if service._loaded_model is None:
+        return {
+            'success': False,
+            'prediction': None,
+            'message': 'No model loaded. Please load a keypoint model first.',
+            'modelLoaded': False
+        }
 
     # Decode base64 image
     try:
@@ -1512,7 +1535,8 @@ async def yolo_predict(req: PredictRequest):
         return {
             'success': False,
             'prediction': None,
-            'message': 'No keypoints detected'
+            'message': 'No keypoints detected',
+            'modelLoaded': True
         }
 
     return {

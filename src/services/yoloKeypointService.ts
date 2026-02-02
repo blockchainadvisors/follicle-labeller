@@ -429,6 +429,14 @@ export class YOLOKeypointService {
           shouldRetry: isConnectionError,
         }
       );
+
+      // Log debug info for diagnosing path issues in production
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const debugInfo = (result as any)._debug;
+      if (debugInfo) {
+        console.log('[KeypointService] Models directory info:', debugInfo);
+      }
+
       return result.models.map((m) => ({
         id: m.id,
         name: m.name,

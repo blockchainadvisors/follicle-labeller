@@ -791,6 +791,23 @@ class YOLOKeypointService:
             return False
 
         try:
+            # Validate path exists
+            model_file = Path(model_path)
+            logger.info(f"Attempting to load model from: {model_path}")
+            logger.info(f"Resolved path: {model_file.resolve()}")
+            logger.info(f"Path exists: {model_file.exists()}")
+
+            if not model_file.exists():
+                logger.error(f"Model file does not exist: {model_path}")
+                # Try to list parent directory contents for debugging
+                parent = model_file.parent
+                if parent.exists():
+                    contents = list(parent.iterdir())
+                    logger.error(f"Parent directory {parent} contains: {[f.name for f in contents]}")
+                else:
+                    logger.error(f"Parent directory does not exist: {parent}")
+                return False
+
             # Unload current model if any
             if self._loaded_model is not None:
                 del self._loaded_model
@@ -799,11 +816,13 @@ class YOLOKeypointService:
                 self._loaded_model_backend = 'pytorch'
 
             # Detect backend from file extension
-            model_ext = Path(model_path).suffix.lower()
+            model_ext = model_file.suffix.lower()
             if model_ext == '.engine':
                 backend = 'tensorrt'
             else:
                 backend = 'pytorch'
+
+            logger.info(f"Loading model with backend: {backend}")
 
             # Load new model (Ultralytics handles both .pt and .engine)
             # For TensorRT engines, we must specify task='pose' explicitly
@@ -815,11 +834,11 @@ class YOLOKeypointService:
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
-            logger.info(f"Loaded model: {model_path} (backend: {backend})")
+            logger.info(f"Successfully loaded model: {model_path} (backend: {backend})")
             return True
 
         except Exception as e:
-            logger.exception(f"Failed to load model: {model_path}")
+            logger.exception(f"Failed to load model: {model_path} - Error: {e}")
             return False
 
     def predict(self, image_data: bytes) -> Optional[KeypointPrediction]:
@@ -1108,6 +1127,16 @@ class YOLOKeypointService:
             List of ModelInfo objects
         """
         models = []
+
+        logger.info(f"Listing models from: {self.models_dir}")
+        logger.info(f"Models dir exists: {self.models_dir.exists()}")
+        if self.models_dir.exists():
+            contents = list(self.models_dir.iterdir())
+            logger.info(f"Models dir contents: {[d.name for d in contents]}")
+
+        if not self.models_dir.exists():
+            logger.warning(f"Models directory does not exist: {self.models_dir}")
+            return models
 
         for model_dir in self.models_dir.iterdir():
             if not model_dir.is_dir():

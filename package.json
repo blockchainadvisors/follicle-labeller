@@ -1,6 +1,6 @@
 {
   "name": "follicle-labeller",
-  "version": "2.2.1",
+  "version": "2.3.6",
   "description": "Medical image follicle annotation tool",
   "license": "MIT",
   "repository": {

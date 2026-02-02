@@ -508,8 +508,11 @@ export class BlobService {
     } else {
       // Try to auto-load the first available model if none specified
       const models = await yoloKeypointService.listModels();
+      console.log('[Keypoint] Found models:', models.length, models.map(m => ({ id: m.id, name: m.name, path: m.path })));
+
       if (models.length > 0) {
         let modelPath = models[0].path;
+        console.log('[Keypoint] Auto-loading first model:', modelPath);
 
         // If TensorRT requested, try to use .engine file
         if (useTensorRT && !modelPath.endsWith('.engine')) {
@@ -518,18 +521,21 @@ export class BlobService {
             const engineExists = await window.electronAPI.fileExists(enginePath);
             if (engineExists) {
               modelPath = enginePath;
-              console.log('Using TensorRT engine for keypoint model:', enginePath);
+              console.log('[Keypoint] Using TensorRT engine:', enginePath);
             } else {
-              console.warn('TensorRT requested but engine file not found, falling back to PyTorch:', models[0].path);
+              console.warn('[Keypoint] TensorRT requested but engine file not found, falling back to PyTorch:', models[0].path);
             }
           } catch {
-            console.warn('Could not check for engine file, using PyTorch model');
+            console.warn('[Keypoint] Could not check for engine file, using PyTorch model');
           }
         }
 
+        console.log('[Keypoint] Loading model from path:', modelPath);
         const loaded = await yoloKeypointService.loadModel(modelPath);
+        console.log('[Keypoint] Model load result:', loaded);
+
         if (!loaded) {
-          console.warn('Failed to auto-load keypoint model');
+          console.error('[Keypoint] Failed to load model:', modelPath);
           return {
             detections: blobResult.detections,
             origins,
@@ -537,7 +543,7 @@ export class BlobService {
           };
         }
       } else {
-        console.warn('No keypoint models available for inference');
+        console.warn('[Keypoint] No keypoint models available for inference');
         return {
           detections: blobResult.detections,
           origins,
