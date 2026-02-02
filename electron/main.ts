@@ -2173,14 +2173,34 @@ ipcMain.handle(
       // Determine model type from config (default to 'detection' for backward compatibility)
       const modelType: 'detection' | 'keypoint' = config.modelType || 'detection';
 
-      // Generate new unique ID for imported model
-      const newModelId = crypto.randomBytes(8).toString("hex");
-      const modelName = newModelName || config.modelName || "Imported Model";
-      const safeName = modelName.replace(/[^a-zA-Z0-9_-]/g, "_");
-
-      // Create model directory structure matching training output
+      // Try to preserve the original model ID for consistency across imports
+      // Only generate a new ID if a model with the original ID already exists
       const modelsDir = getModelsDir(modelType);
-      const modelDir = path.join(modelsDir, `${safeName}_${newModelId}`);
+      const originalModelId = config.modelId;
+      let modelId: string;
+
+      if (originalModelId) {
+        // Check if a model with this ID already exists
+        const existingModelDir = path.join(modelsDir, originalModelId);
+        if (fs.existsSync(existingModelDir)) {
+          // Conflict - generate a new unique ID
+          modelId = crypto.randomBytes(8).toString("hex");
+          console.log(`[Model Import] Original ID "${originalModelId}" already exists, using new ID: ${modelId}`);
+        } else {
+          // Use the original ID for consistency
+          modelId = originalModelId;
+          console.log(`[Model Import] Preserving original model ID: ${modelId}`);
+        }
+      } else {
+        // No original ID in package, generate a new one
+        modelId = crypto.randomBytes(8).toString("hex");
+        console.log(`[Model Import] No original ID in package, generated new ID: ${modelId}`);
+      }
+
+      const modelName = newModelName || config.modelName || "Imported Model";
+
+      // Create model directory using the model ID (matches how trained models are stored)
+      const modelDir = path.join(modelsDir, modelId);
       const weightsDir = path.join(modelDir, "weights");
       fs.mkdirSync(weightsDir, { recursive: true });
 
@@ -2208,19 +2228,19 @@ ipcMain.handle(
 
       // Create model_info.json (matching Python services expected format)
       const modelInfo = {
-        id: newModelId,
+        id: modelId,
         name: modelName,
         path: modelOutputPath,
-        createdAt: new Date().toISOString(),
-        epochsTrained: config.training?.epochs || 0,
-        imgSize: config.training?.imgSize || 640,
+        created_at: new Date().toISOString(),
+        epochs_trained: config.training?.epochs || 0,
+        img_size: config.training?.imgSize || 640,
         metrics: config.metrics || {},
-        modelVariant: config.training?.modelSize || 'n',
+        model_variant: config.training?.modelSize || 'n',
         parameters: config.parameters,
         // Import tracking
-        importedFrom: path.basename(filePath),
-        originalModelId: config.modelId,
-        exportedAt: config.exportedAt,
+        imported_from: path.basename(filePath),
+        original_model_id: config.modelId,
+        exported_at: config.exportedAt,
       };
 
       const modelInfoPath = path.join(modelDir, "model_info.json");
@@ -2230,7 +2250,7 @@ ipcMain.handle(
 
       return {
         success: true,
-        modelId: newModelId,
+        modelId: modelId,
         modelPath: modelOutputPath,
         modelName,
         modelType,
