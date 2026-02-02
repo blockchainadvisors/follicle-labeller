@@ -1461,20 +1461,11 @@ async def yolo_list_models():
     if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
         raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
 
-    from pathlib import Path
     service = get_yolo_keypoint_service()
     models = service.list_models()
 
-    # Include diagnostic info for debugging path issues
     return {
         'models': [m.to_dict() for m in models],
-        '_debug': {
-            'modelsDir': str(service.models_dir),
-            'modelsDirExists': service.models_dir.exists(),
-            'modelsDirResolved': str(service.models_dir.resolve()) if service.models_dir.exists() else None,
-            'scriptFile': str(Path(__file__)),
-            'scriptDir': str(Path(__file__).parent),
-        }
     }
 
 
