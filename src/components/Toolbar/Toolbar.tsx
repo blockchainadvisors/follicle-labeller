@@ -737,8 +737,9 @@ export const Toolbar: React.FC = () => {
         })
         .catch(error => {
           console.warn('Failed to validate YOLO models:', error);
-          // If we can't list models, we can't validate - clear any warning
+          // If we can't list models, we can't validate - clear any warnings
           clearMissingModelWarning();
+          clearMissingKeypointModelWarning();
         });
     },
     [
@@ -748,6 +749,7 @@ export const Toolbar: React.FC = () => {
       loadSettingsFromProject,
       validateModelAvailability,
       clearMissingModelWarning,
+      clearMissingKeypointModelWarning,
       addImage,
       importFollicles,
       setCurrentProjectPath,
