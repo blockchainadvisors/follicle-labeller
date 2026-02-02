@@ -443,6 +443,36 @@ export const ImageCanvas: React.FC = () => {
 
         // FIRST: Check if we're in the middle of a marquee selection - finalize it regardless of where we click
         if (selectionToolType === "marquee" && dragState.dragType === "marquee" && dragState.startPoint) {
+          // Check if this was a "click" (small movement) with a pending target
+          // If so, select the clicked follicle instead of doing marquee selection
+          const DRAG_THRESHOLD = 5; // pixels in screen space
+          const screenDragDistance = dragState.screenStartPoint
+            ? Math.sqrt(
+                Math.pow(e.clientX - dragState.screenStartPoint.x, 2) +
+                Math.pow(e.clientY - dragState.screenStartPoint.y, 2)
+              )
+            : Infinity;
+
+          if (dragState.pendingClickTarget && screenDragDistance < DRAG_THRESHOLD) {
+            // Small movement with a clicked follicle - select that follicle
+            if (dragState.additive) {
+              toggleSelection(dragState.pendingClickTarget);
+            } else {
+              selectFollicle(dragState.pendingClickTarget);
+            }
+            setDragState({
+              isDragging: false,
+              startPoint: null,
+              currentPoint: null,
+              dragType: null,
+              targetId: null,
+              additive: undefined,
+              pendingClickTarget: undefined,
+              screenStartPoint: undefined,
+            });
+            return;
+          }
+
           // Finalize marquee selection - this takes priority over clicking on annotations
           const bounds = createSelectionBounds(dragState.startPoint, point);
           const foundFollicles = getFolliclesInBounds(follicles, bounds);
@@ -466,6 +496,8 @@ export const ImageCanvas: React.FC = () => {
             dragType: null,
             targetId: null,
             additive: undefined,
+            pendingClickTarget: undefined,
+            screenStartPoint: undefined,
           });
           return;
         }
@@ -566,6 +598,39 @@ export const ImageCanvas: React.FC = () => {
 
         // Check if clicking inside any annotation (not currently selected)
         const clicked = findAnnotationAtPoint(point);
+
+        // For marquee selection tool: use drag threshold to distinguish single-click vs marquee start
+        // This allows starting marquee selection even when clicking on a follicle
+        if (selectionToolType === "marquee") {
+          if (isCtrlPressed && clicked) {
+            // Ctrl+click on follicle: immediately toggle selection (no drag threshold)
+            toggleSelection(clicked.id);
+            return;
+          }
+
+          // If items are selected and Ctrl is not pressed and clicking on empty area, just deselect
+          if (selectedIds.size > 0 && !isCtrlPressed && !clicked) {
+            clearSelection();
+            return;
+          }
+
+          // Start marquee selection with potential single-click target
+          // If user drags beyond threshold, it becomes marquee selection
+          // If user clicks without much movement, select the clicked follicle (if any)
+          setDragState({
+            isDragging: false, // Not dragging - click-to-click mode
+            startPoint: point,
+            currentPoint: point,
+            dragType: "marquee",
+            targetId: null,
+            additive: isCtrlPressed, // Track if this is additive selection
+            pendingClickTarget: clicked?.id, // Store clicked follicle for potential single-select
+            screenStartPoint: { x: e.clientX, y: e.clientY }, // Track screen coords for threshold
+          });
+          return;
+        }
+
+        // For non-marquee tools (lasso), keep original behavior
         if (clicked) {
           if (isCtrlPressed) {
             // Ctrl+click: add to selection
@@ -574,27 +639,6 @@ export const ImageCanvas: React.FC = () => {
             // Regular click: select only this one (no move)
             selectFollicle(clicked.id);
           }
-          return;
-        }
-
-        // Clicking on empty area - start marquee/lasso selection or clear
-        if (selectionToolType === "marquee") {
-          // If items are selected and Ctrl is not pressed, just deselect (don't start new selection)
-          if (selectedIds.size > 0 && !isCtrlPressed) {
-            clearSelection();
-            return;
-          }
-
-          // Start marquee selection (click-to-click mode)
-          // Ctrl pressed = additive mode (keep existing selection)
-          setDragState({
-            isDragging: false, // Not dragging - click-to-click mode
-            startPoint: point,
-            currentPoint: point,
-            dragType: "marquee",
-            targetId: null,
-            additive: isCtrlPressed, // Track if this is additive selection
-          });
           return;
         }
 
@@ -771,6 +815,25 @@ export const ImageCanvas: React.FC = () => {
       // Handle marquee selection - track mouse in click-to-click mode
       if (dragState.dragType === "marquee" && dragState.startPoint) {
         const point = getImagePoint(e);
+
+        // Check if drag threshold exceeded - clear pending click target
+        const DRAG_THRESHOLD = 5; // pixels in screen space
+        if (dragState.pendingClickTarget && dragState.screenStartPoint) {
+          const screenDragDistance = Math.sqrt(
+            Math.pow(e.clientX - dragState.screenStartPoint.x, 2) +
+            Math.pow(e.clientY - dragState.screenStartPoint.y, 2)
+          );
+          if (screenDragDistance >= DRAG_THRESHOLD) {
+            // User has dragged beyond threshold - this is definitely a marquee selection
+            setDragState((prev) => ({
+              ...prev,
+              currentPoint: point,
+              pendingClickTarget: undefined, // Clear pending - now committed to marquee
+            }));
+            return;
+          }
+        }
+
         setDragState((prev) => ({ ...prev, currentPoint: point }));
         return;
       }
@@ -825,6 +888,8 @@ export const ImageCanvas: React.FC = () => {
         createPhase: undefined,
         lineEndPoint: undefined,
         lassoPoints: undefined,
+        pendingClickTarget: undefined,
+        screenStartPoint: undefined,
       });
       return;
     }
@@ -951,6 +1016,8 @@ export const ImageCanvas: React.FC = () => {
       createPhase: undefined,
       lineEndPoint: undefined,
       lassoPoints: undefined,
+      pendingClickTarget: undefined,
+      screenStartPoint: undefined,
     });
   }, [
     dragState,
@@ -1043,6 +1110,8 @@ export const ImageCanvas: React.FC = () => {
             dragType: null,
             targetId: null,
             additive: undefined,
+            pendingClickTarget: undefined,
+            screenStartPoint: undefined,
           });
         }
       }
@@ -1288,6 +1357,8 @@ export const ImageCanvas: React.FC = () => {
           createPhase: undefined,
           lineEndPoint: undefined,
           lassoPoints: undefined,
+          pendingClickTarget: undefined,
+          screenStartPoint: undefined,
         });
       }
 

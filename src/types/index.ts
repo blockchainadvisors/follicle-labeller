@@ -204,6 +204,10 @@ export interface DragState {
   lassoPoints?: Point[];
   // Additive selection mode (Ctrl held when starting selection)
   additive?: boolean;
+  // For drag-threshold selection: clicked follicle stored until drag threshold exceeded
+  pendingClickTarget?: string;
+  // Screen coordinates of start point (for drag threshold in screen pixels)
+  screenStartPoint?: Point;
 }
 
 // JSON export schema
