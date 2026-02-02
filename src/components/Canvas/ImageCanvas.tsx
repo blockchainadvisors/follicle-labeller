@@ -175,6 +175,8 @@ export const ImageCanvas: React.FC = () => {
   const imageRef = useRef<HTMLImageElement | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const lastZoomedImageRef = useRef<string | null>(null);
+  const lastMiddleClickTimeRef = useRef<number>(0);  // For double-click detection on middle mouse button
+  const panPointRef = useRef<{ x: number; y: number } | null>(null);  // Track pan point with ref to avoid stale closure
 
   const [dragState, setDragState] = useState<DragState>({
     isDragging: false,
@@ -215,6 +217,7 @@ export const ImageCanvas: React.FC = () => {
   const pan = useProjectStore((state) => state.pan);
   const zoom = useProjectStore((state) => state.zoom);
   const zoomToFit = useProjectStore((state) => state.zoomToFit);
+  const updateCanvasSizeInStore = useProjectStore((state) => state.setCanvasSize);
 
   // Get active image data
   const activeImage = activeImageId ? images.get(activeImageId) : null;
@@ -307,6 +310,11 @@ export const ImageCanvas: React.FC = () => {
     canvasSize.height,
   ]);
 
+  // Keep store in sync with canvas size for resetZoom/zoomToFit
+  useEffect(() => {
+    updateCanvasSizeInStore(canvasSize.width, canvasSize.height);
+  }, [canvasSize.width, canvasSize.height, updateCanvasSizeInStore]);
+
   // Render loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -390,9 +398,36 @@ export const ImageCanvas: React.FC = () => {
     (e: React.MouseEvent) => {
       const point = getImagePoint(e);
 
-      // Middle mouse button always triggers pan
-      if (e.button === 1 || mode === "pan") {
+      // Middle mouse button: double-click to fit screen, single click to pan
+      if (e.button === 1) {
         e.preventDefault();
+        const now = Date.now();
+        const timeSinceLastClick = now - lastMiddleClickTimeRef.current;
+        lastMiddleClickTimeRef.current = now;
+
+        // Double-click detection (within 300ms)
+        if (timeSinceLastClick < 300) {
+          // Double-click: fit to screen
+          zoomToFit(canvasSize.width, canvasSize.height);
+          return;
+        }
+
+        // Single click: start pan
+        panPointRef.current = { x: e.clientX, y: e.clientY };
+        setDragState({
+          isDragging: true,
+          startPoint: { x: e.clientX, y: e.clientY },
+          currentPoint: { x: e.clientX, y: e.clientY },
+          dragType: "pan",
+          targetId: null,
+        });
+        return;
+      }
+
+      // Pan mode with left mouse button
+      if (mode === "pan") {
+        e.preventDefault();
+        panPointRef.current = { x: e.clientX, y: e.clientY };
         setDragState({
           isDragging: true,
           startPoint: { x: e.clientX, y: e.clientY },
@@ -406,7 +441,36 @@ export const ImageCanvas: React.FC = () => {
       if (mode === "select") {
         const isCtrlPressed = e.ctrlKey || e.metaKey;
 
-        // First, check for resize handles (only for single selection)
+        // FIRST: Check if we're in the middle of a marquee selection - finalize it regardless of where we click
+        if (selectionToolType === "marquee" && dragState.dragType === "marquee" && dragState.startPoint) {
+          // Finalize marquee selection - this takes priority over clicking on annotations
+          const bounds = createSelectionBounds(dragState.startPoint, point);
+          const foundFollicles = getFolliclesInBounds(follicles, bounds);
+          const foundIds = foundFollicles.map((f) => f.id);
+          if (foundIds.length > 0) {
+            if (dragState.additive) {
+              // Additive mode: combine with existing selection
+              const combinedIds = [...selectedIds, ...foundIds];
+              selectMultiple(combinedIds);
+            } else {
+              selectMultiple(foundIds);
+            }
+          } else if (!dragState.additive) {
+            // No items found and not additive mode - clear selection
+            clearSelection();
+          }
+          setDragState({
+            isDragging: false,
+            startPoint: null,
+            currentPoint: null,
+            dragType: null,
+            targetId: null,
+            additive: undefined,
+          });
+          return;
+        }
+
+        // Check for resize handles (only for single selection)
         if (selectedIds.size === 1) {
           const selectedId = selectedIds.values().next().value;
           const selected = follicles.find((f) => f.id === selectedId);
@@ -515,32 +579,6 @@ export const ImageCanvas: React.FC = () => {
 
         // Clicking on empty area - start marquee/lasso selection or clear
         if (selectionToolType === "marquee") {
-          // Check if we're in the middle of marquee selection (second click to finalize)
-          if (dragState.dragType === "marquee" && dragState.startPoint) {
-            // Second click - finalize marquee selection
-            const bounds = createSelectionBounds(dragState.startPoint, point);
-            const foundFollicles = getFolliclesInBounds(follicles, bounds);
-            const foundIds = foundFollicles.map((f) => f.id);
-            if (foundIds.length > 0) {
-              if (dragState.additive) {
-                // Additive mode: combine with existing selection
-                const combinedIds = [...selectedIds, ...foundIds];
-                selectMultiple(combinedIds);
-              } else {
-                selectMultiple(foundIds);
-              }
-            }
-            setDragState({
-              isDragging: false,
-              startPoint: null,
-              currentPoint: null,
-              dragType: null,
-              targetId: null,
-              additive: undefined,
-            });
-            return;
-          }
-
           // If items are selected and Ctrl is not pressed, just deselect (don't start new selection)
           if (selectedIds.size > 0 && !isCtrlPressed) {
             clearSelection();
@@ -740,8 +778,13 @@ export const ImageCanvas: React.FC = () => {
       if (!dragState.isDragging) return;
 
       if (dragState.dragType === "pan") {
-        const deltaX = e.clientX - (dragState.currentPoint?.x || 0);
-        const deltaY = e.clientY - (dragState.currentPoint?.y || 0);
+        // Use ref to get the latest pan point (avoids stale closure issues)
+        const prevX = panPointRef.current?.x || 0;
+        const prevY = panPointRef.current?.y || 0;
+        const deltaX = e.clientX - prevX;
+        const deltaY = e.clientY - prevY;
+        // Update ref immediately (synchronous, no batching issues)
+        panPointRef.current = { x: e.clientX, y: e.clientY };
         pan(deltaX, deltaY);
         setDragState((prev) => ({
           ...prev,
@@ -771,6 +814,7 @@ export const ImageCanvas: React.FC = () => {
   const handleMouseLeave = useCallback(() => {
     // For pan operations, we want to stop panning when mouse leaves
     if (dragState.dragType === "pan") {
+      panPointRef.current = null;  // Clear pan point ref
       setDragState({
         isDragging: false,
         startPoint: null,
@@ -890,6 +934,11 @@ export const ImageCanvas: React.FC = () => {
           resizeLinear(dragState.targetId, newStart, newEnd, newHalfWidth);
         }
       }
+    }
+
+    // Clear pan point ref if we were panning
+    if (dragState.dragType === "pan") {
+      panPointRef.current = null;
     }
 
     setDragState({
