@@ -302,7 +302,7 @@ export function FollicleOriginDialog({
         style={position ? { transform: `translate(${position.x}px, ${position.y}px)` } : undefined}
       >
         {/* Compact header with phase and instructions */}
-        <div className="dialog-header" onMouseDown={handleMouseDown}>
+        <div className="origin-dialog-header" onMouseDown={handleMouseDown}>
           <div className="header-left">
             <div className={`step-badge ${originPoint ? 'completed' : 'active'}`}>
               {originPoint ? <Check size={12} /> : '1'}
@@ -318,7 +318,7 @@ export function FollicleOriginDialog({
         </div>
 
         {/* Canvas - maximum space */}
-        <div className="dialog-content">
+        <div className="origin-dialog-content">
           <div className="origin-canvas-container">
             <canvas
               ref={canvasRef}
@@ -333,7 +333,7 @@ export function FollicleOriginDialog({
         </div>
 
         {/* Compact footer with info and actions */}
-        <div className="dialog-footer">
+        <div className="origin-dialog-footer">
           <div className="origin-info">
             <span className="info-item">X: <strong>{originPoint ? originPoint.x.toFixed(0) : '-'}</strong></span>
             <span className="info-item">Y: <strong>{originPoint ? originPoint.y.toFixed(0) : '-'}</strong></span>

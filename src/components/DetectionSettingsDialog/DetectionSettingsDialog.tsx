@@ -84,6 +84,9 @@ export interface DetectionSettings {
 
   // Keypoint inference backend selection (PyTorch or TensorRT)
   keypointInferenceBackend: YoloInferenceBackend;
+
+  // Origin visualization settings
+  originPunchDiameter: number;  // Diameter of the punch gripper circle in image pixels (default 30)
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -149,6 +152,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   yoloInferenceBackend: 'pytorch',
   // Keypoint inference backend - default to PyTorch
   keypointInferenceBackend: 'pytorch',
+  // Origin visualization - punch gripper diameter in image pixels
+  originPunchDiameter: 30,
 };
 
 // Install state that can be managed by parent for persistence
@@ -1900,6 +1905,23 @@ export function DetectionSettingsDialog({
                     </div>
                     <p className="setting-hint">
                       When enabled, origin points will be automatically predicted for all detected follicles.
+                    </p>
+
+                    {/* Punch Gripper Diameter */}
+                    <div className="settings-row" style={{ marginTop: '16px' }}>
+                      <label>Punch Gripper Diameter</label>
+                      <input
+                        type="range"
+                        min="10"
+                        max="100"
+                        step="5"
+                        value={settings.originPunchDiameter}
+                        onChange={e => handleChange('originPunchDiameter', parseInt(e.target.value))}
+                      />
+                      <span className="value-display">{settings.originPunchDiameter}px</span>
+                    </div>
+                    <p className="setting-hint">
+                      Size of the extraction tool circle shown at origin points (in image pixels).
                     </p>
                   </>
                 )}

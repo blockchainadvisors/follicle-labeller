@@ -69,7 +69,8 @@ export class CanvasRenderer {
     dragState: DragState,
     showLabels: boolean = true,
     showShapes: boolean = true,
-    currentShapeType: ShapeType = 'circle'
+    currentShapeType: ShapeType = 'circle',
+    originPunchDiameter: number = 30
   ): void {
     this.clear(canvasWidth, canvasHeight);
 
@@ -82,6 +83,14 @@ export class CanvasRenderer {
       this.ctx.drawImage(this.image, 0, 0);
     }
 
+    // Calculate visible bounds in image coordinates for culling
+    const visibleBounds = {
+      left: -viewport.offsetX / viewport.scale,
+      top: -viewport.offsetY / viewport.scale,
+      right: (canvasWidth - viewport.offsetX) / viewport.scale,
+      bottom: (canvasHeight - viewport.offsetY) / viewport.scale,
+    };
+
     // Determine if multi-selection (more than one selected)
     const isMultiSelect = selectedIds.size > 1;
 
@@ -91,7 +100,7 @@ export class CanvasRenderer {
       if (isCircle(follicle)) {
         this.drawCircle(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
       } else if (isRectangle(follicle)) {
-        this.drawRectangle(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
+        this.drawRectangle(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes, visibleBounds, originPunchDiameter);
       } else if (isLinear(follicle)) {
         this.drawLinear(follicle, isSelected, isMultiSelect, viewport.scale, showLabels, showShapes);
       }
@@ -179,7 +188,9 @@ export class CanvasRenderer {
     isMultiSelect: boolean,
     scale: number,
     showLabels: boolean,
-    showShapes: boolean
+    showShapes: boolean,
+    visibleBounds?: { left: number; top: number; right: number; bottom: number },
+    originPunchDiameter: number = 30
   ): void {
     const { x, y, width, height, color, label, origin } = rect;
     const isLocked = !!origin;
@@ -237,8 +248,19 @@ export class CanvasRenderer {
       }
 
       // Draw origin arrow for locked rectangles
-      if (origin) {
-        this.drawOriginArrow(origin, scale);
+      // Skip if zoomed out too far (origins would be too small to see)
+      // or if origin is outside visible bounds
+      if (origin && scale > 0.05) {
+        const { originPoint } = origin;
+        // Viewport culling - skip if origin is outside visible area (with margin)
+        const margin = 50;
+        if (!visibleBounds ||
+            (originPoint.x >= visibleBounds.left - margin &&
+             originPoint.x <= visibleBounds.right + margin &&
+             originPoint.y >= visibleBounds.top - margin &&
+             originPoint.y <= visibleBounds.bottom + margin)) {
+          this.drawOriginArrow(origin, scale, originPunchDiameter);
+        }
       }
     }
 
@@ -250,33 +272,36 @@ export class CanvasRenderer {
 
   private drawOriginArrow(
     origin: FollicleOrigin,
-    scale: number
+    scale: number,
+    punchDiameter: number = 30
   ): void {
     const { originPoint, directionAngle, directionLength } = origin;
 
-    // Origin dot
-    this.ctx.beginPath();
-    this.ctx.arc(originPoint.x, originPoint.y, 5 / scale, 0, Math.PI * 2);
-    this.ctx.fillStyle = '#FF6B6B';
-    this.ctx.fill();
-    this.ctx.strokeStyle = '#ffffff';
-    this.ctx.lineWidth = 1.5 / scale;
-    this.ctx.stroke();
+    // Punch circle radius in image pixels (fixed size, scales with zoom)
+    const punchRadius = punchDiameter / 2;
 
-    // Arrow line
+    // Line width scales with image but clamped to reasonable screen size
+    const baseLineWidth = 2;
+    const lineWidth = Math.min(baseLineWidth, 4 / scale);
+    const headLen = Math.min(6, 10 / scale);
+
+    // Skip drawing if punch circle would be smaller than 2 screen pixels
+    if (punchRadius * scale < 2) return;
+
+    // Arrow line and direction
     const len = Math.min(directionLength, 40);
     const endX = originPoint.x + Math.cos(directionAngle) * len;
     const endY = originPoint.y + Math.sin(directionAngle) * len;
 
+    // Draw arrow line first (under the circle)
     this.ctx.strokeStyle = '#4ECDC4';
-    this.ctx.lineWidth = 2.5 / scale;
+    this.ctx.lineWidth = lineWidth;
     this.ctx.beginPath();
     this.ctx.moveTo(originPoint.x, originPoint.y);
     this.ctx.lineTo(endX, endY);
     this.ctx.stroke();
 
     // Arrow head
-    const headLen = 8 / scale;
     this.ctx.beginPath();
     this.ctx.moveTo(endX, endY);
     this.ctx.lineTo(
@@ -290,6 +315,23 @@ export class CanvasRenderer {
     this.ctx.closePath();
     this.ctx.fillStyle = '#4ECDC4';
     this.ctx.fill();
+
+    // Punch gripper circle (outline, not filled)
+    // This represents the actual extraction tool size
+    this.ctx.beginPath();
+    this.ctx.arc(originPoint.x, originPoint.y, punchRadius, 0, Math.PI * 2);
+    this.ctx.strokeStyle = '#FF6B6B';
+    this.ctx.lineWidth = Math.max(1.5, 2 / scale); // Minimum 1.5px line width on screen
+    this.ctx.stroke();
+
+    // Small center dot for precise positioning
+    const centerDotRadius = Math.min(3, 4 / scale);
+    if (centerDotRadius * scale >= 1) {
+      this.ctx.beginPath();
+      this.ctx.arc(originPoint.x, originPoint.y, centerDotRadius, 0, Math.PI * 2);
+      this.ctx.fillStyle = '#FF6B6B';
+      this.ctx.fill();
+    }
   }
 
   private drawLinear(

@@ -334,6 +334,9 @@ export interface DetectionSettingsExport {
   keypointModelId?: string | null;
   keypointModelName?: string | null;
   keypointModelSource?: 'pretrained' | 'custom';
+
+  // Origin visualization settings
+  originPunchDiameter?: number;  // Diameter of punch gripper circle in image pixels
 }
 
 // Project settings container

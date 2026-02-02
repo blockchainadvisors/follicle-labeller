@@ -5,6 +5,7 @@ import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
 import { useThemeStore } from "../../store/themeStore";
 import { useLoadingStore } from "../../store/loadingStore";
+import { useSettingsStore } from "../../store/settingsStore";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { HeatmapOverlay } from "../HeatmapOverlay/HeatmapOverlay";
 import { FollicleOriginDialog } from "../FollicleOriginDialog";
@@ -219,6 +220,11 @@ export const ImageCanvas: React.FC = () => {
   const zoomToFit = useProjectStore((state) => state.zoomToFit);
   const updateCanvasSizeInStore = useProjectStore((state) => state.setCanvasSize);
 
+  // Settings store for origin punch diameter
+  const getEffectiveSettings = useSettingsStore((state) => state.getEffectiveSettings);
+  const effectiveSettings = getEffectiveSettings(activeImageId);
+  const originPunchDiameter = effectiveSettings.originPunchDiameter;
+
   // Get active image data
   const activeImage = activeImageId ? images.get(activeImageId) : null;
   const viewport = activeImage?.viewport ?? {
@@ -332,6 +338,7 @@ export const ImageCanvas: React.FC = () => {
         showLabels,
         showShapes,
         currentShapeType,
+        originPunchDiameter,
       );
     };
 
@@ -355,6 +362,7 @@ export const ImageCanvas: React.FC = () => {
     showShapes,
     currentShapeType,
     themeBackground,
+    originPunchDiameter,
   ]);
 
   // Get image coordinates from mouse event
