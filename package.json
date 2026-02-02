@@ -20,7 +20,10 @@
     "electron:build:win": "npm run version:sync && npm run build && electron-builder --win",
     "electron:build:mac": "npm run version:sync && npm run build && electron-builder --mac",
     "electron:build:all": "npm run version:sync && npm run build && electron-builder --win --mac",
-    "test:benchmark": "tsx test/blob-detection-benchmark/index.ts"
+    "test:benchmark": "tsx test/blob-detection-benchmark/index.ts",
+    "dev:web": "vite --config vite.config.web.ts",
+    "build:web": "tsc && vite build --config vite.config.web.ts",
+    "preview:web": "vite preview --config vite.config.web.ts"
   },
   "dependencies": {
     "electron-updater": "^6.1.7",

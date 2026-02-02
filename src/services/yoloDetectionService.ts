@@ -3,6 +3,8 @@
  *
  * Provides a TypeScript interface for YOLO11 detection model training
  * and inference for follicle bounding box detection.
+ *
+ * This service uses the platform adapter to work in both Electron and Web modes.
  */
 
 import {
@@ -15,6 +17,7 @@ import {
   TensorRTStatus,
   DEFAULT_DETECTION_TRAINING_CONFIG,
 } from '../types';
+import { getPlatform } from '../platform';
 
 /**
  * Sleep for specified milliseconds.
@@ -111,7 +114,7 @@ export class YOLODetectionService {
   async getStatus(): Promise<YoloDetectionStatus> {
     try {
       return await withRetry(
-        () => window.electronAPI.yoloDetection.getStatus(),
+        () => getPlatform().yoloDetection.getStatus(),
         {
           maxRetries: 8,
           initialDelayMs: 500,
@@ -138,7 +141,7 @@ export class YOLODetectionService {
    */
   async validateDataset(datasetPath: string): Promise<DetectionDatasetValidation> {
     try {
-      const result = await window.electronAPI.yoloDetection.validateDataset(datasetPath);
+      const result = await getPlatform().yoloDetection.validateDataset(datasetPath);
       return {
         valid: result.valid,
         trainImages: result.train_images,
@@ -181,8 +184,10 @@ export class YOLODetectionService {
     await this.stopTraining();
 
     try {
+      const platform = getPlatform();
+
       // Start training
-      const result = await window.electronAPI.yoloDetection.startTraining(
+      const result = await platform.yoloDetection.startTraining(
         datasetPath,
         config,
         modelName
@@ -195,7 +200,7 @@ export class YOLODetectionService {
       this.activeJobId = result.jobId;
 
       // Subscribe to progress updates
-      this.cleanupFunction = window.electronAPI.yoloDetection.subscribeProgress(
+      this.cleanupFunction = platform.yoloDetection.subscribeProgress(
         result.jobId,
         (rawProgress) => {
           // Map to DetectionTrainingProgress type
@@ -255,7 +260,7 @@ export class YOLODetectionService {
     // Stop the training job
     if (this.activeJobId) {
       try {
-        await window.electronAPI.yoloDetection.stopTraining(this.activeJobId);
+        await getPlatform().yoloDetection.stopTraining(this.activeJobId);
       } catch (error) {
         console.error('Failed to stop training:', error);
       }
@@ -284,7 +289,7 @@ export class YOLODetectionService {
   async listModels(): Promise<DetectionModelInfo[]> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloDetection.listModels(),
+        () => getPlatform().yoloDetection.listModels(),
         {
           maxRetries: 8,
           initialDelayMs: 500,
@@ -317,7 +322,7 @@ export class YOLODetectionService {
   async loadModel(modelPath: string): Promise<boolean> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloDetection.loadModel(modelPath),
+        () => getPlatform().yoloDetection.loadModel(modelPath),
         {
           maxRetries: 5,
           initialDelayMs: 500,
@@ -346,7 +351,7 @@ export class YOLODetectionService {
   ): Promise<{ predictions: DetectionPrediction[]; backend: string }> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloDetection.predict(imageBase64, confidenceThreshold),
+        () => getPlatform().yoloDetection.predict(imageBase64, confidenceThreshold),
         {
           maxRetries: 3,
           initialDelayMs: 500,
@@ -400,7 +405,7 @@ export class YOLODetectionService {
   ): Promise<{ predictions: DetectionPrediction[]; backend: string }> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloDetection.predictTiled(
+        () => getPlatform().yoloDetection.predictTiled(
           imageBase64,
           confidenceThreshold,
           tileSize,
@@ -447,7 +452,7 @@ export class YOLODetectionService {
    */
   async showExportDialog(defaultFileName: string): Promise<string | null> {
     try {
-      const result = await window.electronAPI.yoloDetection.showExportDialog(defaultFileName);
+      const result = await getPlatform().yoloDetection.showExportDialog(defaultFileName);
       return result.canceled ? null : result.filePath || null;
     } catch (error) {
       console.error('Failed to show export dialog:', error);
@@ -464,7 +469,7 @@ export class YOLODetectionService {
    */
   async exportONNX(modelPath: string, outputPath: string): Promise<string | null> {
     try {
-      const result = await window.electronAPI.yoloDetection.exportONNX(
+      const result = await getPlatform().yoloDetection.exportONNX(
         modelPath,
         outputPath
       );
@@ -483,7 +488,7 @@ export class YOLODetectionService {
    */
   async deleteModel(modelId: string): Promise<boolean> {
     try {
-      const result = await window.electronAPI.yoloDetection.deleteModel(modelId);
+      const result = await getPlatform().yoloDetection.deleteModel(modelId);
       return result.success;
     } catch (error) {
       console.error('Failed to delete detection model:', error);
@@ -500,7 +505,7 @@ export class YOLODetectionService {
   async getResumableModels(): Promise<DetectionModelInfo[]> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloDetection.getResumableModels(),
+        () => getPlatform().yoloDetection.getResumableModels(),
         {
           maxRetries: 5,
           initialDelayMs: 500,
@@ -536,7 +541,7 @@ export class YOLODetectionService {
     files: Array<{ path: string; content: ArrayBuffer | string }>
   ): Promise<{ success: boolean; datasetPath?: string; error?: string }> {
     try {
-      return await window.electronAPI.yoloDetection.writeDatasetToTemp(files);
+      return await getPlatform().yoloDetection.writeDatasetToTemp(files);
     } catch (error) {
       console.error('Failed to write dataset to temp:', error);
       return {
@@ -556,7 +561,7 @@ export class YOLODetectionService {
    */
   async checkTensorRTAvailable(): Promise<TensorRTStatus> {
     try {
-      return await window.electronAPI.yoloDetection.checkTensorRTAvailable();
+      return await getPlatform().yoloDetection.checkTensorRTAvailable();
     } catch (error) {
       console.error('Failed to check TensorRT availability:', error);
       return { available: false, version: null };
@@ -583,7 +588,7 @@ export class YOLODetectionService {
     imgsz: number = 640
   ): Promise<{ success: boolean; engine_path?: string; error?: string }> {
     try {
-      return await window.electronAPI.yoloDetection.exportToTensorRT(
+      return await getPlatform().yoloDetection.exportToTensorRT(
         modelPath,
         outputPath,
         half,
