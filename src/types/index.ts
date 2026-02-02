@@ -976,6 +976,10 @@ export interface DetectionModelInfo {
   totalEpochs?: number;
   /** Whether this model can be resumed (has last.pt) */
   canResume?: boolean;
+  /** Number of model parameters */
+  parameters?: number;
+  /** Model variant (n/s/m/l/x) */
+  modelVariant?: 'n' | 's' | 'm' | 'l' | 'x';
 }
 
 /**
