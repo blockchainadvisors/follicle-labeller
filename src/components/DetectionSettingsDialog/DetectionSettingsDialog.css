@@ -704,6 +704,10 @@
   color: white;
 }
 
+[data-theme="light"] .backend-btn.active {
+  color: white;
+}
+
 /* Detection Method Toggle */
 .detection-method-section {
   margin-bottom: 20px;
@@ -1040,6 +1044,10 @@
 
 [data-theme="dark"] .method-btn.active {
   background: var(--accent, #3b82f6);
+  color: white;
+}
+
+[data-theme="light"] .method-btn.active {
   color: white;
 }
 

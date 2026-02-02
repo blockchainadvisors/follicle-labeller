@@ -211,7 +211,7 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 .toolbar .icon-button.active {
   background-color: var(--accent);
   border-color: var(--accent);
-  color: var(--bg-primary);
+  color: white;
 }
 
 .toolbar .icon-button svg {
@@ -1435,7 +1435,7 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 .dialog-btn.primary {
   background-color: var(--accent);
   border-color: var(--accent);
-  color: var(--bg-primary);
+  color: white;
 }
 
 .dialog-btn.primary:hover {
@@ -1560,7 +1560,7 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 
 .learned-detection-dialog .toggle-btn.active {
   background-color: var(--accent);
-  color: var(--bg-primary);
+  color: white;
   font-weight: var(--font-medium);
 }
 

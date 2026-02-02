@@ -199,7 +199,7 @@
 
 .blob-type-btn.active {
   background-color: var(--accent);
-  color: var(--bg-primary);
+  color: white;
 }
 
 .blob-type-btn:not(.active):hover {
@@ -286,7 +286,7 @@
 
 .learned-detection-dialog .button-primary {
   background-color: var(--accent);
-  color: var(--bg-primary);
+  color: white;
   border: 1px solid var(--accent);
 }
 
