@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { DetectionModelsTab } from './DetectionModelsTab';
 import { OriginModelsTab } from './OriginModelsTab';
@@ -6,13 +6,29 @@ import './UnifiedYOLOModelManager.css';
 
 interface UnifiedYOLOModelManagerProps {
   onClose: () => void;
-  onModelLoaded?: (modelPath: string) => void;
+  initialTab?: 'detection' | 'origin';  // Open to specific tab
+  selectedDetectionModelId?: string | null;  // Currently selected detection model
+  selectedKeypointModelId?: string | null;   // Currently selected keypoint model
+  onModelSelected?: (modelType: 'detection' | 'keypoint', modelId: string | null, modelName: string | null) => void;
 }
 
 type TabType = 'detection' | 'origin';
 
-export function UnifiedYOLOModelManager({ onClose, onModelLoaded }: UnifiedYOLOModelManagerProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('detection');
+export function UnifiedYOLOModelManager({
+  onClose,
+  initialTab,
+  selectedDetectionModelId,
+  selectedKeypointModelId,
+  onModelSelected,
+}: UnifiedYOLOModelManagerProps) {
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab || 'detection');
+
+  // Update active tab when initialTab changes
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   return (
     <div className="unified-yolo-model-manager-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -41,9 +57,15 @@ export function UnifiedYOLOModelManager({ onClose, onModelLoaded }: UnifiedYOLOM
 
         <div className="tab-content">
           {activeTab === 'detection' ? (
-            <DetectionModelsTab onModelLoaded={onModelLoaded} />
+            <DetectionModelsTab
+              selectedModelId={selectedDetectionModelId}
+              onModelSelected={onModelSelected ? (modelId, modelName) => onModelSelected('detection', modelId, modelName) : undefined}
+            />
           ) : (
-            <OriginModelsTab onModelLoaded={onModelLoaded} />
+            <OriginModelsTab
+              selectedModelId={selectedKeypointModelId}
+              onModelSelected={onModelSelected ? (modelId, modelName) => onModelSelected('keypoint', modelId, modelName) : undefined}
+            />
           )}
         </div>
 

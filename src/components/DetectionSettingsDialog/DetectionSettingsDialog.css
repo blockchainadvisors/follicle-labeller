@@ -1513,3 +1513,74 @@
 [data-theme="dark"] .blob-subsection h4 {
   color: var(--text-primary, #e0e0e0);
 }
+
+/* Current Model Display */
+.current-model-display {
+  margin-bottom: 16px;
+}
+
+.current-model-display .model-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.current-model-display .model-info-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.current-model-display .model-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.current-model-display .model-name {
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+
+.current-model-display .model-meta {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.current-model-display .switch-model-btn {
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  transition: all 0.15s ease;
+}
+
+.current-model-display .switch-model-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* Dark theme - Current Model Display */
+[data-theme="dark"] .current-model-display .model-info-box {
+  background: var(--bg-tertiary, #2d2d2d);
+  border-color: var(--border, #444);
+}
+
+[data-theme="dark"] .current-model-display .switch-model-btn {
+  background: var(--bg-secondary, #3d3d3d);
+  border-color: var(--border, #555);
+}
+
+[data-theme="dark"] .current-model-display .switch-model-btn:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}

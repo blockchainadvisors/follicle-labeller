@@ -324,6 +324,12 @@ export interface DetectionSettingsExport {
   // YOLO Keypoint prediction
   useKeypointPrediction: boolean;
   keypointInferenceBackend: 'pytorch' | 'tensorrt';  // Keypoint inference backend selection
+  keypointConfidenceThreshold: number;  // Confidence threshold for keypoint prediction
+
+  // Keypoint model settings (for origin prediction)
+  keypointModelId?: string | null;
+  keypointModelName?: string | null;
+  keypointModelSource?: 'pretrained' | 'custom';
 }
 
 // Project settings container

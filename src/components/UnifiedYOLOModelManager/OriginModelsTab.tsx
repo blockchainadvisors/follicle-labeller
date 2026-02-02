@@ -1,21 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Upload, Package, Zap } from 'lucide-react';
+import { X, Loader2, Trash2, Download, CheckCircle, RefreshCw, Upload, Package, Zap } from 'lucide-react';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
 import { ModelInfo, TensorRTStatus } from '../../types';
 import { createKeypointModelPackageConfig, formatMetrics as formatPackageMetrics, generateExportFileName, ModelPackageConfig } from '../../utils/model-export';
 
 interface OriginModelsTabProps {
-  onModelLoaded?: (modelPath: string) => void;
+  selectedModelId?: string | null;  // Currently selected/active model ID
+  onModelSelected?: (modelId: string | null, modelName: string | null) => void;  // Selection callback
 }
 
-export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
+export function OriginModelsTab({ selectedModelId, onModelSelected }: OriginModelsTabProps) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const [exportingModel, setExportingModel] = useState<string | null>(null);
   const [exportingTensorRT, setExportingTensorRT] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
-  const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
   const [exportingPackage, setExportingPackage] = useState<string | null>(null);
@@ -48,26 +47,6 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
   useEffect(() => {
     loadModels();
   }, [loadModels]);
-
-  // Load model for inference
-  const handleLoadModel = useCallback(async (model: ModelInfo) => {
-    setLoadingModel(model.id);
-    setError(null);
-    try {
-      const success = await yoloKeypointService.loadModel(model.path);
-      if (success) {
-        setLoadedModelPath(model.path);
-        onModelLoaded?.(model.path);
-      } else {
-        setError('Failed to load model');
-      }
-    } catch (err) {
-      setError('Failed to load model');
-      console.error('Failed to load model:', err);
-    } finally {
-      setLoadingModel(null);
-    }
-  }, [onModelLoaded]);
 
   // Export model to ONNX
   const handleExportONNX = useCallback(async (model: ModelInfo) => {
@@ -109,9 +88,6 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
       const success = await yoloKeypointService.deleteModel(model.id);
       if (success) {
         setModels((prev) => prev.filter((m) => m.id !== model.id));
-        if (loadedModelPath === model.path) {
-          setLoadedModelPath(null);
-        }
       } else {
         setError('Failed to delete model');
       }
@@ -121,7 +97,7 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
     } finally {
       setDeletingModel(null);
     }
-  }, [loadedModelPath]);
+  }, []);
 
   // Export model to TensorRT
   const handleExportTensorRT = useCallback(async (model: ModelInfo) => {
@@ -306,18 +282,21 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
         </div>
       ) : (
         <div className="models-list">
-          {models.map((model) => (
+          {models.map((model) => {
+            const isActive = selectedModelId === model.id;
+            return (
             <div
               key={model.id}
-              className={`model-card ${loadedModelPath === model.path ? 'loaded' : ''}`}
+              className={`model-card ${isActive ? 'active' : ''} ${onModelSelected ? 'selectable' : ''}`}
+              onClick={onModelSelected ? () => onModelSelected(model.id, model.name) : undefined}
             >
               <div className="model-info">
                 <div className="model-name">
                   {model.name}
-                  {loadedModelPath === model.path && (
-                    <span className="loaded-badge">
+                  {isActive && (
+                    <span className="active-badge">
                       <CheckCircle size={12} />
-                      Loaded
+                      Active
                     </span>
                   )}
                 </div>
@@ -333,19 +312,17 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
                 )}
               </div>
 
-              <div className="model-actions">
-                <button
-                  className="action-button load"
-                  onClick={() => handleLoadModel(model)}
-                  disabled={loadingModel === model.id || loadedModelPath === model.path}
-                  title="Load for inference"
-                >
-                  {loadingModel === model.id ? (
-                    <Loader2 size={16} className="spin" />
-                  ) : (
-                    <Cpu size={16} />
-                  )}
-                </button>
+              <div className="model-actions" onClick={(e) => e.stopPropagation()}>
+                {/* Activate Button - only show if selection is supported and not already active */}
+                {onModelSelected && !isActive && (
+                  <button
+                    className="action-button activate"
+                    onClick={() => onModelSelected(model.id, model.name)}
+                    title="Activate this model for inference"
+                  >
+                    <CheckCircle size={16} />
+                  </button>
+                )}
 
                 {/* TensorRT Export Button - only show if TensorRT is available */}
                 {tensorrtStatus?.available && (
@@ -403,7 +380,8 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
                 </button>
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 

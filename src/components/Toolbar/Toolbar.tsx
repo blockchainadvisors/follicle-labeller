@@ -214,6 +214,13 @@ export const Toolbar: React.FC = () => {
     setCanDetect(false);
   };
 
+  // Handler to open Model Library from Inference Settings
+  const handleOpenModelLibrary = (tab: 'detection' | 'origin') => {
+    setModelLibraryInitialTab(tab);
+    setShowDetectionSettings(false);  // Close inference settings
+    setShowUnifiedYOLOModelManager(true);  // Open model library
+  };
+
   // State for learned detection dialog
   const [learnedSettings, setLearnedSettings] =
     useState<LearnedDetectionSettings>(DEFAULT_LEARNED_SETTINGS);
@@ -280,6 +287,7 @@ export const Toolbar: React.FC = () => {
   // State for unified YOLO dialogs
   const [showUnifiedYOLOTraining, setShowUnifiedYOLOTraining] = useState(false);
   const [showUnifiedYOLOModelManager, setShowUnifiedYOLOModelManager] = useState(false);
+  const [modelLibraryInitialTab, setModelLibraryInitialTab] = useState<'detection' | 'origin' | undefined>();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
 
@@ -2537,6 +2545,8 @@ export const Toolbar: React.FC = () => {
             clearImageSettingsOverride(imageId);
             setDirty(true);
           }}
+          // Navigation to Model Library
+          onOpenModelLibrary={handleOpenModelLibrary}
         />
       )}
 
@@ -2558,9 +2568,32 @@ export const Toolbar: React.FC = () => {
       {/* Unified YOLO Model Manager Dialog */}
       {showUnifiedYOLOModelManager && (
         <UnifiedYOLOModelManager
-          onClose={() => setShowUnifiedYOLOModelManager(false)}
-          onModelLoaded={() => {
+          onClose={() => {
             setShowUnifiedYOLOModelManager(false);
+            setModelLibraryInitialTab(undefined);
+          }}
+          initialTab={modelLibraryInitialTab}
+          selectedDetectionModelId={globalDetectionSettings.yoloModelId}
+          selectedKeypointModelId={globalDetectionSettings.keypointModelId}
+          onModelSelected={(modelType, modelId, modelName) => {
+            if (modelType === 'detection') {
+              setGlobalDetectionSettings({
+                ...globalDetectionSettings,
+                yoloModelId: modelId,
+                yoloModelName: modelName,
+                yoloModelSource: modelId ? 'custom' : 'pretrained',
+              });
+            } else {
+              setGlobalDetectionSettings({
+                ...globalDetectionSettings,
+                keypointModelId: modelId,
+                keypointModelName: modelName,
+                keypointModelSource: modelId ? 'custom' : 'pretrained',
+              });
+            }
+            setDirty(true);
+            setShowUnifiedYOLOModelManager(false);
+            setModelLibraryInitialTab(undefined);
           }}
         />
       )}

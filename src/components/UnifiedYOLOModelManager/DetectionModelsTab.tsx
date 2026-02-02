@@ -1,21 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap, Upload, Package } from 'lucide-react';
+import { X, Loader2, Trash2, Download, CheckCircle, RefreshCw, Zap, Upload, Package } from 'lucide-react';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
 import { DetectionModelInfo, TensorRTStatus } from '../../types';
 import { createModelPackageConfig, formatMetrics as formatPackageMetrics, generateExportFileName, ModelPackageConfig } from '../../utils/model-export';
 
 interface DetectionModelsTabProps {
-  onModelLoaded?: (modelPath: string) => void;
+  selectedModelId?: string | null;  // Currently selected/active model ID
+  onModelSelected?: (modelId: string | null, modelName: string | null) => void;  // Selection callback
 }
 
-export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
+export function DetectionModelsTab({ selectedModelId, onModelSelected }: DetectionModelsTabProps) {
   const [models, setModels] = useState<DetectionModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const [exportingModel, setExportingModel] = useState<string | null>(null);
   const [exportingTensorRT, setExportingTensorRT] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
-  const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
   const [exportingPackage, setExportingPackage] = useState<string | null>(null);
@@ -34,12 +33,6 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
       const modelList = await yoloDetectionService.listModels();
       setModels(modelList);
 
-      // Check which model is currently loaded
-      const status = await yoloDetectionService.getStatus();
-      if (status.loadedModel) {
-        setLoadedModelPath(status.loadedModel);
-      }
-
       // Check TensorRT availability
       const trtStatus = await yoloDetectionService.checkTensorRTAvailable();
       setTensorrtStatus(trtStatus);
@@ -54,26 +47,6 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
   useEffect(() => {
     loadModels();
   }, [loadModels]);
-
-  // Load model for inference
-  const handleLoadModel = useCallback(async (model: DetectionModelInfo) => {
-    setLoadingModel(model.id);
-    setError(null);
-    try {
-      const success = await yoloDetectionService.loadModel(model.path);
-      if (success) {
-        setLoadedModelPath(model.path);
-        onModelLoaded?.(model.path);
-      } else {
-        setError('Failed to load model');
-      }
-    } catch (err) {
-      setError('Failed to load model');
-      console.error('Failed to load model:', err);
-    } finally {
-      setLoadingModel(null);
-    }
-  }, [onModelLoaded]);
 
   // Export model to ONNX
   const handleExportONNX = useCallback(async (model: DetectionModelInfo) => {
@@ -151,9 +124,6 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
       const success = await yoloDetectionService.deleteModel(model.id);
       if (success) {
         setModels((prev) => prev.filter((m) => m.id !== model.id));
-        if (loadedModelPath === model.path) {
-          setLoadedModelPath(null);
-        }
       } else {
         setError('Failed to delete model');
       }
@@ -163,7 +133,7 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
     } finally {
       setDeletingModel(null);
     }
-  }, [loadedModelPath]);
+  }, []);
 
   // Export model as portable package (ZIP)
   const handleExportPackage = useCallback(async (model: DetectionModelInfo) => {
@@ -315,18 +285,21 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
         </div>
       ) : (
         <div className="models-list">
-          {models.map((model) => (
+          {models.map((model) => {
+            const isActive = selectedModelId === model.id;
+            return (
             <div
               key={model.id}
-              className={`model-card ${loadedModelPath === model.path ? 'loaded' : ''}`}
+              className={`model-card ${isActive ? 'active' : ''} ${onModelSelected ? 'selectable' : ''}`}
+              onClick={onModelSelected ? () => onModelSelected(model.id, model.name) : undefined}
             >
               <div className="model-info">
                 <div className="model-name">
                   {model.name}
-                  {loadedModelPath === model.path && (
-                    <span className="loaded-badge">
+                  {isActive && (
+                    <span className="active-badge">
                       <CheckCircle size={12} />
-                      Loaded
+                      Active
                     </span>
                   )}
                 </div>
@@ -342,19 +315,17 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
                 )}
               </div>
 
-              <div className="model-actions">
-                <button
-                  className="action-button load"
-                  onClick={() => handleLoadModel(model)}
-                  disabled={loadingModel === model.id || loadedModelPath === model.path}
-                  title="Load for inference"
-                >
-                  {loadingModel === model.id ? (
-                    <Loader2 size={16} className="spin" />
-                  ) : (
-                    <Cpu size={16} />
-                  )}
-                </button>
+              <div className="model-actions" onClick={(e) => e.stopPropagation()}>
+                {/* Activate Button - only show if selection is supported and not already active */}
+                {onModelSelected && !isActive && (
+                  <button
+                    className="action-button activate"
+                    onClick={() => onModelSelected(model.id, model.name)}
+                    title="Activate this model for inference"
+                  >
+                    <CheckCircle size={16} />
+                  </button>
+                )}
 
                 {/* TensorRT Export Button - only show if TensorRT is available */}
                 {tensorrtStatus?.available && (
@@ -412,7 +383,8 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
                 </button>
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 

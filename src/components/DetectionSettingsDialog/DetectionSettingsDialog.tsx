@@ -14,6 +14,11 @@ export interface DetectionSettings {
   yoloModelId: string | null;  // Selected model ID (null = pre-trained/default)
   yoloModelName: string | null;  // Human-readable model name for display
   yoloModelSource: 'pretrained' | 'custom';  // Whether this is a pre-trained or custom model
+
+  // Keypoint model settings (for origin prediction)
+  keypointModelId: string | null;  // Selected keypoint model ID
+  keypointModelName: string | null;  // Human-readable keypoint model name
+  keypointModelSource: 'pretrained' | 'custom';  // Keypoint model type
   yoloConfidenceThreshold: number;  // Confidence threshold for rectangle detection (0-1)
   keypointConfidenceThreshold: number;  // Confidence threshold for origin prediction (0-1)
   yoloUseTiledInference: boolean;  // Use tiled inference for large images
@@ -88,6 +93,10 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   yoloModelId: null,
   yoloModelName: null,
   yoloModelSource: 'pretrained',
+  // Keypoint model settings
+  keypointModelId: null,
+  keypointModelName: null,
+  keypointModelSource: 'pretrained',
   yoloConfidenceThreshold: 0.5,
   keypointConfidenceThreshold: 0.3,  // Default threshold for origin prediction
   yoloUseTiledInference: true,  // Enable by default for better results on large images
@@ -183,6 +192,8 @@ interface DetectionSettingsDialogProps {
   globalSettings?: DetectionSettings;  // Global settings for comparison/reset
   onImageSettingsChange?: (imageId: string, settings: Partial<DetectionSettings>) => void;
   onClearImageOverride?: (imageId: string) => void;
+  // Navigation to Model Library
+  onOpenModelLibrary?: (tab: 'detection' | 'origin') => void;
 }
 
 export function DetectionSettingsDialog({
@@ -203,6 +214,7 @@ export function DetectionSettingsDialog({
   globalSettings,
   onImageSettingsChange,
   onClearImageOverride,
+  onOpenModelLibrary,
 }: DetectionSettingsDialogProps) {
   // Track whether we're editing per-image or global settings
   const [applyToImageOnly, setApplyToImageOnly] = useState(hasImageOverride);
@@ -214,7 +226,6 @@ export function DetectionSettingsDialog({
   // YOLO Detection models state
   const [detectionModels, setDetectionModels] = useState<DetectionModelInfo[]>([]);
   const [yoloDetectionAvailable, setYoloDetectionAvailable] = useState(false);
-  const [loadingDetectionModels, setLoadingDetectionModels] = useState(false);
 
   // TensorRT state
   const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
@@ -452,7 +463,6 @@ export function DetectionSettingsDialog({
   // Check for available YOLO detection models and TensorRT status
   useEffect(() => {
     const checkDetectionModels = async () => {
-      setLoadingDetectionModels(true);
       try {
         const status = await yoloDetectionService.getStatus();
         setYoloDetectionAvailable(status.available);
@@ -468,8 +478,6 @@ export function DetectionSettingsDialog({
         setTensorrtCanInstall(nativeTrtStatus.canInstall && !nativeTrtStatus.available);
       } catch (error) {
         console.error('Failed to check detection models:', error);
-      } finally {
-        setLoadingDetectionModels(false);
       }
     };
     checkDetectionModels();
@@ -1075,48 +1083,28 @@ export function DetectionSettingsDialog({
                 {settings.detectionMethod === 'yolo' && (
                   <div className="method-settings yolo-settings">
 
-              {/* Model Selection */}
-              <div className="settings-row">
-                <label>Model</label>
-                <select
-                  value={settings.yoloModelId || 'pretrained'}
-                  onChange={e => {
-                    const value = e.target.value;
-                    let newSettings: DetectionSettings;
-                    if (value === 'pretrained') {
-                      // Pre-trained model
-                      newSettings = {
-                        ...settings,
-                        yoloModelId: null,
-                        yoloModelName: null,
-                        yoloModelSource: 'pretrained',
-                      };
-                    } else {
-                      // Custom trained model
-                      const selectedModel = detectionModels.find(m => m.id === value);
-                      newSettings = {
-                        ...settings,
-                        yoloModelId: value,
-                        yoloModelName: selectedModel?.name || value,
-                        yoloModelSource: 'custom',
-                      };
-                    }
-                    // Apply immediately
-                    if (applyToImageOnly && activeImageId && onImageSettingsChange) {
-                      onImageSettingsChange(activeImageId, newSettings);
-                    } else {
-                      onSettingsChange(newSettings);
-                    }
-                  }}
-                  disabled={loadingDetectionModels}
-                >
-                  <option value="pretrained">Pre-trained (yolo11n.pt)</option>
-                  {detectionModels.map(model => (
-                    <option key={model.id} value={model.id}>
-                      {model.name} ({model.epochsTrained} epochs)
-                    </option>
-                  ))}
-                </select>
+              {/* Active Model Display */}
+              <div className="current-model-display">
+                <div className="model-label">Active Model</div>
+                <div className="model-info-box">
+                  {settings.yoloModelSource === 'pretrained' || !settings.yoloModelId ? (
+                    <div className="model-details">
+                      <span className="model-name">Pre-trained (yolo11n.pt)</span>
+                      <span className="model-meta">Default YOLO model</span>
+                    </div>
+                  ) : (
+                    <div className="model-details">
+                      <span className="model-name">{settings.yoloModelName || 'Custom Model'}</span>
+                      <span className="model-meta">Custom trained model</span>
+                    </div>
+                  )}
+                  <button
+                    className="switch-model-btn"
+                    onClick={() => onOpenModelLibrary?.('detection')}
+                  >
+                    Switch Model
+                  </button>
+                </div>
               </div>
               {/* Show warning if saved model is not available */}
               {settings.yoloModelId && settings.yoloModelSource === 'custom' &&
@@ -1125,7 +1113,7 @@ export function DetectionSettingsDialog({
                   <AlertCircle size={14} />
                   <span>
                     Saved model "{settings.yoloModelName || settings.yoloModelId}" not found.
-                    Using pre-trained model or select another model.
+                    Select another model from the Model Library.
                   </span>
                 </div>
               )}
@@ -1790,15 +1778,33 @@ export function DetectionSettingsDialog({
                   </div>
                 ) : !keypointExport.isExporting && (
                   <>
-                    {/* Model Info */}
-                    {loadedKeypointModel && (
-                      <div className="keypoint-model-info">
-                        <span className="model-name">Model: {loadedKeypointModel.name}</span>
-                        <span className="model-meta">
-                          {loadedKeypointModel.epochsTrained} epochs, {loadedKeypointModel.imgSize}px
-                        </span>
+                    {/* Active Keypoint Model Display */}
+                    <div className="current-model-display">
+                      <div className="model-label">Active Keypoint Model</div>
+                      <div className="model-info-box">
+                        {!settings.keypointModelId ? (
+                          <div className="model-details">
+                            <span className="model-name">{loadedKeypointModel?.name || 'No model selected'}</span>
+                            <span className="model-meta">
+                              {loadedKeypointModel
+                                ? `${loadedKeypointModel.epochsTrained} epochs, ${loadedKeypointModel.imgSize}px`
+                                : 'Select a trained model from the library'}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="model-details">
+                            <span className="model-name">{settings.keypointModelName || 'Custom Model'}</span>
+                            <span className="model-meta">Custom trained model</span>
+                          </div>
+                        )}
+                        <button
+                          className="switch-model-btn"
+                          onClick={() => onOpenModelLibrary?.('origin')}
+                        >
+                          Switch Model
+                        </button>
                       </div>
-                    )}
+                    </div>
 
                     {/* Inference Backend */}
                     <div className="settings-row">

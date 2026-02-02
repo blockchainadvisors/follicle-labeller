@@ -10,6 +10,13 @@ export interface MissingModelInfo {
   modelSource: 'pretrained' | 'custom';
 }
 
+// Information about a missing keypoint model
+export interface MissingKeypointModelInfo {
+  modelId: string;
+  modelName: string | null;
+  modelSource: 'pretrained' | 'custom';
+}
+
 interface SettingsState {
   // Global settings (project default)
   globalDetectionSettings: DetectionSettings;
@@ -19,6 +26,7 @@ interface SettingsState {
 
   // Missing model tracking - set when a project references a model that doesn't exist
   missingModelInfo: MissingModelInfo | null;
+  missingKeypointModelInfo: MissingKeypointModelInfo | null;
 
   // Actions
   setGlobalDetectionSettings: (settings: DetectionSettings) => void;
@@ -33,8 +41,9 @@ interface SettingsState {
   ) => void;
 
   // Model validation (called after models list is loaded)
-  validateModelAvailability: (availableModelIds: string[]) => void;
+  validateModelAvailability: (availableModelIds: string[], availableKeypointModelIds?: string[]) => void;
   clearMissingModelWarning: () => void;
+  clearMissingKeypointModelWarning: () => void;
 
   // Export helpers
   getGlobalSettingsForExport: () => DetectionSettingsExport;
@@ -48,6 +57,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   globalDetectionSettings: { ...DEFAULT_DETECTION_SETTINGS },
   imageSettingsOverrides: new Map(),
   missingModelInfo: null,
+  missingKeypointModelInfo: null,
 
   setGlobalDetectionSettings: (settings) => {
     set({ globalDetectionSettings: settings });
@@ -105,18 +115,29 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       };
     }
 
+    // Check for keypoint model
+    let missingKeypointInfo: MissingKeypointModelInfo | null = null;
+    if (merged.keypointModelId && merged.keypointModelSource === 'custom') {
+      missingKeypointInfo = {
+        modelId: merged.keypointModelId,
+        modelName: merged.keypointModelName,
+        modelSource: merged.keypointModelSource,
+      };
+    }
+
     set({
       globalDetectionSettings: merged,
       imageSettingsOverrides: overridesMap,
       missingModelInfo: missingInfo,
+      missingKeypointModelInfo: missingKeypointInfo,
     });
   },
 
-  validateModelAvailability: (availableModelIds) => {
+  validateModelAvailability: (availableModelIds, availableKeypointModelIds) => {
     const state = get();
     const { globalDetectionSettings } = state;
 
-    // If there's a custom model referenced, check if it exists
+    // If there's a custom detection model referenced, check if it exists
     if (globalDetectionSettings.yoloModelId && globalDetectionSettings.yoloModelSource === 'custom') {
       const modelExists = availableModelIds.includes(globalDetectionSettings.yoloModelId);
 
@@ -137,10 +158,33 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       // No custom model, clear missing info
       set({ missingModelInfo: null });
     }
+
+    // If there's a custom keypoint model referenced, check if it exists
+    if (availableKeypointModelIds && globalDetectionSettings.keypointModelId && globalDetectionSettings.keypointModelSource === 'custom') {
+      const keypointModelExists = availableKeypointModelIds.includes(globalDetectionSettings.keypointModelId);
+
+      if (keypointModelExists) {
+        set({ missingKeypointModelInfo: null });
+      } else {
+        set({
+          missingKeypointModelInfo: {
+            modelId: globalDetectionSettings.keypointModelId,
+            modelName: globalDetectionSettings.keypointModelName,
+            modelSource: globalDetectionSettings.keypointModelSource,
+          },
+        });
+      }
+    } else if (availableKeypointModelIds) {
+      set({ missingKeypointModelInfo: null });
+    }
   },
 
   clearMissingModelWarning: () => {
     set({ missingModelInfo: null });
+  },
+
+  clearMissingKeypointModelWarning: () => {
+    set({ missingKeypointModelInfo: null });
   },
 
   getGlobalSettingsForExport: () => {
@@ -164,6 +208,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       globalDetectionSettings: { ...DEFAULT_DETECTION_SETTINGS },
       imageSettingsOverrides: new Map(),
       missingModelInfo: null,
+      missingKeypointModelInfo: null,
     });
   },
 }));

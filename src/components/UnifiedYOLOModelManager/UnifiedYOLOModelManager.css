@@ -477,7 +477,43 @@
   }
 }
 
+/* Active model card (selected for inference) */
+.unified-yolo-model-manager-dialog .model-card.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Selectable model cards have pointer cursor */
+.unified-yolo-model-manager-dialog .model-card.selectable {
+  cursor: pointer;
+}
+
+/* Active badge - green for light themes */
+.unified-yolo-model-manager-dialog .active-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--success);
+  color: white;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  border-radius: 4px;
+}
+
+/* Activate button */
+.unified-yolo-model-manager-dialog .action-button.activate:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+
 /* Dark theme specific adjustments */
-[data-theme="dark"] .unified-yolo-model-manager-dialog .model-card.loaded {
-  background: rgba(16, 185, 129, 0.15);
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-card.active {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+/* Active badge - cyan/teal for dark themes (more visible) */
+[data-theme="dark"] .unified-yolo-model-manager-dialog .active-badge {
+  background: #06b6d4;
 }
