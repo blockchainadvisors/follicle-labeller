@@ -760,14 +760,19 @@ export const Toolbar: React.FC = () => {
     const canProceed = await checkUnsavedChanges();
     if (!canProceed) return;
 
+    const controller = startLoading("Loading project...", true);
     try {
       const result = await window.electronAPI.loadProjectV2();
+      if (controller?.signal.aborted) return;
       await loadProjectFromResult(result);
     } catch (error) {
+      if (controller?.signal.aborted) return;
       console.error("Failed to load project:", error);
       alert("Failed to load project file. Please check the file format.");
+    } finally {
+      stopLoading();
     }
-  }, [loadProjectFromResult, checkUnsavedChanges]);
+  }, [loadProjectFromResult, checkUnsavedChanges, startLoading, stopLoading]);
 
   const handleCloseProject = useCallback(async () => {
     // Check for unsaved changes first
@@ -2080,12 +2085,17 @@ export const Toolbar: React.FC = () => {
   // Handle file open from file association (double-click .fol file)
   useEffect(() => {
     const loadFromPath = async (filePath: string) => {
+      const controller = startLoading("Loading project...", true);
       try {
         const result = await window.electronAPI.loadProjectFromPath(filePath);
+        if (controller?.signal.aborted) return;
         await loadProjectFromResult(result);
       } catch (error) {
+        if (controller?.signal.aborted) return;
         console.error("Failed to load project from file association:", error);
         alert("Failed to load project file. Please check the file format.");
+      } finally {
+        stopLoading();
       }
     };
 
@@ -2102,7 +2112,7 @@ export const Toolbar: React.FC = () => {
     });
 
     return cleanup;
-  }, [loadProjectFromResult]);
+  }, [loadProjectFromResult, startLoading, stopLoading]);
 
   // Handle app close - check for unsaved changes
   useEffect(() => {
