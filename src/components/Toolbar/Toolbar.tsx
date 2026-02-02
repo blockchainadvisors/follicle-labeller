@@ -552,12 +552,14 @@ export const Toolbar: React.FC = () => {
 
   // Handler functions
   const handleOpenImage = useCallback(async () => {
-    const controller = startLoading("Opening file...", true);
     try {
       const result = await window.electronAPI.openImageDialog();
-      if (controller?.signal.aborted) return;
+      if (!result) return;
 
-      if (result) {
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading image...", true);
+
+      try {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
 
@@ -590,12 +592,11 @@ export const Toolbar: React.FC = () => {
         };
 
         addImage(newImage);
+      } finally {
+        stopLoading();
       }
     } catch (error) {
-      if (controller?.signal.aborted) return;
       console.error("Failed to open image:", error);
-    } finally {
-      stopLoading();
     }
   }, [addImage, imageOrder.length, startLoading, stopLoading]);
 
@@ -762,17 +763,22 @@ export const Toolbar: React.FC = () => {
     const canProceed = await checkUnsavedChanges();
     if (!canProceed) return;
 
-    const controller = startLoading("Loading project...", true);
     try {
       const result = await window.electronAPI.loadProjectV2();
-      if (controller?.signal.aborted) return;
-      await loadProjectFromResult(result);
+      if (!result) return;
+
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading project...", true);
+
+      try {
+        if (controller?.signal.aborted) return;
+        await loadProjectFromResult(result);
+      } finally {
+        stopLoading();
+      }
     } catch (error) {
-      if (controller?.signal.aborted) return;
       console.error("Failed to load project:", error);
       alert("Failed to load project file. Please check the file format.");
-    } finally {
-      stopLoading();
     }
   }, [loadProjectFromResult, checkUnsavedChanges, startLoading, stopLoading]);
 

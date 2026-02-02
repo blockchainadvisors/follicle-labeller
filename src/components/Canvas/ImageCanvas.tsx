@@ -1185,12 +1185,14 @@ export const ImageCanvas: React.FC = () => {
 
   // Open image dialog handler
   const handleOpenImage = useCallback(async () => {
-    const controller = startLoading("Opening file...", true);
     try {
       const result = await window.electronAPI.openImageDialog();
-      if (controller?.signal.aborted) return;
+      if (!result) return;
 
-      if (result) {
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading image...", true);
+
+      try {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
 
@@ -1221,12 +1223,11 @@ export const ImageCanvas: React.FC = () => {
         };
 
         addImage(newImage);
+      } finally {
+        stopLoading();
       }
     } catch (error) {
-      if (controller?.signal.aborted) return;
       console.error("Failed to open image:", error);
-    } finally {
-      stopLoading();
     }
   }, [addImage, imageOrder.length, startLoading, stopLoading]);
 

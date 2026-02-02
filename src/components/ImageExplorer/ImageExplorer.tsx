@@ -132,51 +132,52 @@ export const ImageExplorer: React.FC = () => {
   };
 
   const handleAddImage = async () => {
-    const controller = startLoading("Opening file...", true);
     try {
       const result = await window.electronAPI.openImageDialog();
-      if (controller?.signal.aborted) return;
-
       if (!result) return;
 
-      const { fileName, data } = result;
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading image...", true);
 
-      // Create object URL and ImageBitmap
-      const blob = new Blob([data]);
-      const imageSrc = URL.createObjectURL(blob);
+      try {
+        const { fileName, data } = result;
 
-      if (controller?.signal.aborted) {
-        URL.revokeObjectURL(imageSrc);
-        return;
+        // Create object URL and ImageBitmap
+        const blob = new Blob([data]);
+        const imageSrc = URL.createObjectURL(blob);
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(imageSrc);
+          return;
+        }
+
+        const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(imageSrc);
+          imageBitmap.close();
+          return;
+        }
+
+        const newImage: ProjectImage = {
+          id: generateImageId(),
+          fileName,
+          width: imageBitmap.width,
+          height: imageBitmap.height,
+          imageData: data,
+          imageBitmap,
+          imageSrc,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: imageOrder.length,
+        };
+
+        addImage(newImage);
+      } finally {
+        stopLoading();
       }
-
-      const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-
-      if (controller?.signal.aborted) {
-        URL.revokeObjectURL(imageSrc);
-        imageBitmap.close();
-        return;
-      }
-
-      const newImage: ProjectImage = {
-        id: generateImageId(),
-        fileName,
-        width: imageBitmap.width,
-        height: imageBitmap.height,
-        imageData: data,
-        imageBitmap,
-        imageSrc,
-        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
-        createdAt: Date.now(),
-        sortOrder: imageOrder.length,
-      };
-
-      addImage(newImage);
     } catch (error) {
-      if (controller?.signal.aborted) return;
       console.error("Failed to add image:", error);
-    } finally {
-      stopLoading();
     }
   };
 
