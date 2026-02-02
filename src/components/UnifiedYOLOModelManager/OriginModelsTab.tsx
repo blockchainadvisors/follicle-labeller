@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw } from 'lucide-react';
+import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Upload, Package, Zap } from 'lucide-react';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
-import { ModelInfo } from '../../types';
+import { ModelInfo, TensorRTStatus } from '../../types';
+import { createKeypointModelPackageConfig, formatMetrics as formatPackageMetrics, generateExportFileName, ModelPackageConfig } from '../../utils/model-export';
 
 interface OriginModelsTabProps {
   onModelLoaded?: (modelPath: string) => void;
@@ -12,9 +13,18 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
   const [loading, setLoading] = useState(true);
   const [loadingModel, setLoadingModel] = useState<string | null>(null);
   const [exportingModel, setExportingModel] = useState<string | null>(null);
+  const [exportingTensorRT, setExportingTensorRT] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [loadedModelPath, setLoadedModelPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tensorrtStatus, setTensorrtStatus] = useState<TensorRTStatus | null>(null);
+  const [exportingPackage, setExportingPackage] = useState<string | null>(null);
+  const [importingPackage, setImportingPackage] = useState(false);
+  const [importPreview, setImportPreview] = useState<{
+    filePath: string;
+    config: ModelPackageConfig;
+    hasEngine: boolean;
+  } | null>(null);
 
   // Load models on mount
   const loadModels = useCallback(async () => {
@@ -23,6 +33,10 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
     try {
       const modelList = await yoloKeypointService.listModels();
       setModels(modelList);
+
+      // Check TensorRT availability
+      const trtStatus = await yoloKeypointService.checkTensorRTAvailable();
+      setTensorrtStatus(trtStatus);
     } catch (err) {
       setError('Failed to load models');
       console.error('Failed to load models:', err);
@@ -109,6 +123,136 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
     }
   }, [loadedModelPath]);
 
+  // Export model to TensorRT
+  const handleExportTensorRT = useCallback(async (model: ModelInfo) => {
+    setError(null);
+    try {
+      // Confirm export since it can take a while
+      if (!confirm(`Export "${model.name}" to TensorRT?\n\nThis may take several minutes. The .engine file will be saved alongside the model.`)) {
+        return;
+      }
+
+      setExportingTensorRT(model.id);
+
+      // Generate output path next to the .pt file
+      const outputPath = model.path.replace(/\.pt$/, '.engine');
+
+      const result = await yoloKeypointService.exportToTensorRT(
+        model.path,
+        outputPath,
+        true, // half precision
+        model.imgSize // use same image size as training
+      );
+
+      if (result.success && result.engine_path) {
+        alert(`TensorRT engine exported to:\n${result.engine_path}`);
+        // Refresh model list to show the engine file
+        loadModels();
+      } else {
+        setError(result.error || 'TensorRT export failed');
+      }
+    } catch (err) {
+      setError('TensorRT export failed');
+      console.error('TensorRT export failed:', err);
+    } finally {
+      setExportingTensorRT(null);
+    }
+  }, [loadModels]);
+
+  // Export model as portable package (ZIP)
+  const handleExportPackage = useCallback(async (model: ModelInfo) => {
+    setError(null);
+    setExportingPackage(model.id);
+    try {
+      // Create config for package
+      const config = createKeypointModelPackageConfig(model);
+
+      // Generate descriptive filename
+      const suggestedFileName = generateExportFileName(model, 'keypoint');
+
+      const result = await window.electronAPI.model.exportPackage(
+        model.id,
+        model.path,
+        config as unknown as Record<string, unknown>,
+        suggestedFileName
+      );
+
+      if (result.canceled) {
+        // User canceled - do nothing
+        return;
+      }
+
+      if (result.success && result.filePath) {
+        alert(`Model exported to:\n${result.filePath}`);
+      } else {
+        setError(result.error || 'Export failed');
+      }
+    } catch (err) {
+      setError('Failed to export model package');
+      console.error('Failed to export model package:', err);
+    } finally {
+      setExportingPackage(null);
+    }
+  }, []);
+
+  // Preview model package before import
+  const handleImportPackagePreview = useCallback(async () => {
+    setError(null);
+    setImportingPackage(true);
+    try {
+      // Pass 'keypoint' to validate that we're importing a keypoint model
+      const result = await window.electronAPI.model.previewPackage('keypoint');
+
+      if (result.canceled) {
+        // User canceled - do nothing
+        return;
+      }
+
+      if (result.valid && result.filePath && result.config) {
+        setImportPreview({
+          filePath: result.filePath,
+          config: result.config as unknown as ModelPackageConfig,
+          hasEngine: result.hasEngine || false,
+        });
+      } else {
+        setError(result.error || 'Invalid model package');
+      }
+    } catch (err) {
+      setError('Failed to read model package');
+      console.error('Failed to read model package:', err);
+    } finally {
+      setImportingPackage(false);
+    }
+  }, []);
+
+  // Confirm and import model package
+  const handleConfirmImport = useCallback(async () => {
+    if (!importPreview) return;
+
+    setError(null);
+    setImportingPackage(true);
+    try {
+      const result = await window.electronAPI.model.importPackage(
+        importPreview.filePath,
+        importPreview.config.modelName
+      );
+
+      if (result.success) {
+        alert(`Model "${result.modelName}" imported successfully!`);
+        setImportPreview(null);
+        // Refresh model list
+        loadModels();
+      } else {
+        setError(result.error || 'Import failed');
+      }
+    } catch (err) {
+      setError('Failed to import model package');
+      console.error('Failed to import model package:', err);
+    } finally {
+      setImportingPackage(false);
+    }
+  }, [importPreview, loadModels]);
+
   // Format date
   const formatDate = (isoDate: string) => {
     try {
@@ -127,6 +271,19 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
   return (
     <div className="model-manager-tab-content">
       <div className="tab-header">
+        <button
+          className="import-model-button"
+          onClick={handleImportPackagePreview}
+          disabled={loading || importingPackage}
+          title="Import model package"
+        >
+          {importingPackage ? (
+            <Loader2 size={16} className="spin" />
+          ) : (
+            <Upload size={16} />
+          )}
+          Import Model
+        </button>
         <button className="refresh-button" onClick={loadModels} disabled={loading}>
           <RefreshCw size={16} className={loading ? 'spin' : ''} />
           Refresh
@@ -190,6 +347,22 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
                   )}
                 </button>
 
+                {/* TensorRT Export Button - only show if TensorRT is available */}
+                {tensorrtStatus?.available && (
+                  <button
+                    className="action-button export-tensorrt"
+                    onClick={() => handleExportTensorRT(model)}
+                    disabled={exportingTensorRT === model.id}
+                    title="Export to TensorRT (faster GPU inference)"
+                  >
+                    {exportingTensorRT === model.id ? (
+                      <Loader2 size={16} className="spin" />
+                    ) : (
+                      <Zap size={16} />
+                    )}
+                  </button>
+                )}
+
                 <button
                   className="action-button export"
                   onClick={() => handleExportONNX(model)}
@@ -200,6 +373,19 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
                     <Loader2 size={16} className="spin" />
                   ) : (
                     <Download size={16} />
+                  )}
+                </button>
+
+                <button
+                  className="action-button export-package"
+                  onClick={() => handleExportPackage(model)}
+                  disabled={exportingPackage === model.id}
+                  title="Export as portable package (ZIP)"
+                >
+                  {exportingPackage === model.id ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <Package size={16} />
                   )}
                 </button>
 
@@ -218,6 +404,79 @@ export function OriginModelsTab({ onModelLoaded }: OriginModelsTabProps) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Import Preview Dialog */}
+      {importPreview && (
+        <div className="import-preview-overlay" onClick={() => setImportPreview(null)}>
+          <div className="import-preview-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="import-preview-header">
+              <h3>Import Origin Model Package</h3>
+              <button className="close-button" onClick={() => setImportPreview(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="import-preview-content">
+              <div className="preview-item">
+                <span className="preview-label">Model Name:</span>
+                <span className="preview-value">{importPreview.config.modelName}</span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Training:</span>
+                <span className="preview-value">
+                  {importPreview.config.training.epochs} epochs, {importPreview.config.training.imgSize}px
+                </span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Metrics:</span>
+                <span className="preview-value">
+                  {formatPackageMetrics(importPreview.config.metrics)}
+                </span>
+              </div>
+              <div className="preview-item">
+                <span className="preview-label">Trained:</span>
+                <span className="preview-value">
+                  {formatDate(importPreview.config.trainingDate)}
+                </span>
+              </div>
+              {importPreview.hasEngine && (
+                <div className="preview-warning">
+                  <Zap size={14} />
+                  <span>
+                    Package includes TensorRT engine (may not work on different GPU)
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="import-preview-footer">
+              <button
+                className="cancel-button"
+                onClick={() => setImportPreview(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="import-button"
+                onClick={handleConfirmImport}
+                disabled={importingPackage}
+              >
+                {importingPackage ? (
+                  <>
+                    <Loader2 size={16} className="spin" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Upload size={16} />
+                    Import Model
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

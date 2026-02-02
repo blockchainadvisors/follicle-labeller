@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { X, Loader2, Trash2, Download, CheckCircle, Cpu, RefreshCw, Zap, Upload, Package } from 'lucide-react';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
 import { DetectionModelInfo, TensorRTStatus } from '../../types';
-import { createModelPackageConfig, formatMetrics as formatPackageMetrics, ModelPackageConfig } from '../../utils/model-export';
+import { createModelPackageConfig, formatMetrics as formatPackageMetrics, generateExportFileName, ModelPackageConfig } from '../../utils/model-export';
 
 interface DetectionModelsTabProps {
   onModelLoaded?: (modelPath: string) => void;
@@ -173,10 +173,14 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
       // Create config for package
       const config = createModelPackageConfig(model);
 
+      // Generate descriptive filename
+      const suggestedFileName = generateExportFileName(model, 'detection');
+
       const result = await window.electronAPI.model.exportPackage(
         model.id,
         model.path,
-        config as unknown as Record<string, unknown>
+        config as unknown as Record<string, unknown>,
+        suggestedFileName
       );
 
       if (result.canceled) {
@@ -202,7 +206,8 @@ export function DetectionModelsTab({ onModelLoaded }: DetectionModelsTabProps) {
     setError(null);
     setImportingPackage(true);
     try {
-      const result = await window.electronAPI.model.previewPackage();
+      // Pass 'detection' to validate that we're importing a detection model
+      const result = await window.electronAPI.model.previewPackage('detection');
 
       if (result.canceled) {
         // User canceled - do nothing

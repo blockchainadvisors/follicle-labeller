@@ -1981,11 +1981,14 @@ ipcMain.handle(
 // ============================================
 
 /**
- * Get the models directory path
+ * Get the models directory path - uses same path as Python services
  */
-function getModelsDir(): string {
-  const os = require("os");
-  return path.join(os.homedir(), ".follicle-labeller", "models", "detection");
+function getModelsDir(modelType: 'detection' | 'keypoint' = 'detection'): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "python", "models", modelType);
+  }
+  // In dev mode, __dirname is dist-electron/, so go up one level to find electron/python/
+  return path.join(__dirname, "..", "electron", "python", "models", modelType);
 }
 
 // Export model as portable package (ZIP with model.pt + config.json)
@@ -1995,16 +1998,26 @@ ipcMain.handle(
     _,
     modelId: string,
     modelPath: string,
-    config: Record<string, unknown>
+    config: Record<string, unknown>,
+    suggestedFileName?: string
   ) => {
     const window = BrowserWindow.getFocusedWindow();
     if (!window) return { success: false, error: "No focused window" };
 
     try {
-      // Get model name from config for default filename
-      const modelName = (config.modelName as string) || modelId;
-      const safeName = modelName.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const defaultFileName = `${safeName}_model.zip`;
+      // Use suggested filename if provided, otherwise generate from config
+      let defaultFileName = suggestedFileName;
+      if (!defaultFileName) {
+        // Generate descriptive filename: {modelType}-{variant}-{imgSize}px-{epochs}ep-{date}-{shortId}.zip
+        const modelType = (config.modelType as string) || 'detection';
+        const variant = (config.training as any)?.modelSize || 'n';
+        const imgSize = (config.training as any)?.imgSize || 640;
+        const epochs = (config.training as any)?.epochs || 0;
+        const trainingDate = (config.trainingDate as string) || new Date().toISOString();
+        const date = trainingDate.slice(0, 10).replace(/-/g, '');
+        const shortId = modelId.slice(0, 6);
+        defaultFileName = `${modelType}-${variant}-${imgSize}px-${epochs}ep-${date}-${shortId}.zip`;
+      }
 
       // Show save dialog
       const result = await dialog.showSaveDialog(window, {
@@ -2066,7 +2079,8 @@ ipcMain.handle(
 );
 
 // Preview model package before import (read config.json from ZIP)
-ipcMain.handle("model:previewPackage", async () => {
+// Optionally pass expectedModelType to validate the package type
+ipcMain.handle("model:previewPackage", async (_, expectedModelType?: 'detection' | 'keypoint') => {
   const window = BrowserWindow.getFocusedWindow();
   if (!window) return { valid: false, error: "No focused window" };
 
@@ -2101,6 +2115,17 @@ ipcMain.handle("model:previewPackage", async () => {
       return { valid: false, error: "Invalid package: missing required fields" };
     }
 
+    // Determine model type (v1.0 packages default to 'detection')
+    const modelType: 'detection' | 'keypoint' = config.modelType || 'detection';
+
+    // If expectedModelType is specified, validate it matches
+    if (expectedModelType && modelType !== expectedModelType) {
+      return {
+        valid: false,
+        error: `Wrong model type: expected ${expectedModelType} but package contains ${modelType} model`,
+      };
+    }
+
     // Check for model.pt
     const modelFile = zip.file("model.pt");
     if (!modelFile) {
@@ -2114,6 +2139,7 @@ ipcMain.handle("model:previewPackage", async () => {
       valid: true,
       filePath,
       config,
+      modelType,
       hasEngine: !!engineFile,
     };
   } catch (error) {
@@ -2144,36 +2170,44 @@ ipcMain.handle(
       const configJson = await configFile.async("string");
       const config = JSON.parse(configJson);
 
+      // Determine model type from config (default to 'detection' for backward compatibility)
+      const modelType: 'detection' | 'keypoint' = config.modelType || 'detection';
+
       // Generate new unique ID for imported model
       const newModelId = crypto.randomBytes(8).toString("hex");
       const modelName = newModelName || config.modelName || "Imported Model";
       const safeName = modelName.replace(/[^a-zA-Z0-9_-]/g, "_");
 
-      // Create model directory
-      const modelsDir = getModelsDir();
+      // Create model directory structure matching training output
+      const modelsDir = getModelsDir(modelType);
       const modelDir = path.join(modelsDir, `${safeName}_${newModelId}`);
-      fs.mkdirSync(modelDir, { recursive: true });
+      const weightsDir = path.join(modelDir, "weights");
+      fs.mkdirSync(weightsDir, { recursive: true });
 
-      // Extract model.pt
+      // Extract model.pt to weights/best.pt (matching training output structure)
       const modelFile = zip.file("model.pt");
       if (!modelFile) {
         return { success: false, error: "Invalid package: missing model.pt" };
       }
       const modelData = await modelFile.async("nodebuffer");
-      const modelOutputPath = path.join(modelDir, "best.pt");
+      const modelOutputPath = path.join(weightsDir, "best.pt");
       fs.writeFileSync(modelOutputPath, modelData);
 
       // Extract engine file if present (but note: .engine files are GPU-specific)
       const engineFile = zip.file("model.engine");
       if (engineFile) {
         const engineData = await engineFile.async("nodebuffer");
-        const engineOutputPath = path.join(modelDir, "best.engine");
+        const engineOutputPath = path.join(weightsDir, "best.engine");
         fs.writeFileSync(engineOutputPath, engineData);
         console.log("[Model Import] Note: TensorRT .engine file imported but may not work on different GPU");
       }
 
-      // Create model metadata file for the model manager
-      const metadata = {
+      // Save original config.json (for reference)
+      const configOutputPath = path.join(modelDir, "config.json");
+      fs.writeFileSync(configOutputPath, configJson);
+
+      // Create model_info.json (matching Python services expected format)
+      const modelInfo = {
         id: newModelId,
         name: modelName,
         path: modelOutputPath,
@@ -2181,20 +2215,25 @@ ipcMain.handle(
         epochsTrained: config.training?.epochs || 0,
         imgSize: config.training?.imgSize || 640,
         metrics: config.metrics || {},
+        modelVariant: config.training?.modelSize || 'n',
+        parameters: config.parameters,
+        // Import tracking
         importedFrom: path.basename(filePath),
         originalModelId: config.modelId,
+        exportedAt: config.exportedAt,
       };
 
-      const metadataPath = path.join(modelDir, "metadata.json");
-      fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+      const modelInfoPath = path.join(modelDir, "model_info.json");
+      fs.writeFileSync(modelInfoPath, JSON.stringify(modelInfo, null, 2));
 
-      console.log(`[Model Import] Imported model to ${modelDir}`);
+      console.log(`[Model Import] Imported ${modelType} model to ${modelDir}`);
 
       return {
         success: true,
         modelId: newModelId,
         modelPath: modelOutputPath,
         modelName,
+        modelType,
       };
     } catch (error) {
       console.error("[Model Import] Error:", error);

@@ -590,22 +590,28 @@ const electronAPI = {
   // Model Export/Import API
   model: {
     // Export model as portable package (ZIP with model.pt + config.json)
+    // suggestedFileName is optional - if not provided, filename is generated from config
     exportPackage: (
       modelId: string,
       modelPath: string,
-      config: Record<string, unknown>
+      config: Record<string, unknown>,
+      suggestedFileName?: string
     ): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> =>
-      ipcRenderer.invoke("model:exportPackage", modelId, modelPath, config),
+      ipcRenderer.invoke("model:exportPackage", modelId, modelPath, config, suggestedFileName),
 
     // Preview model package before import (read config.json from ZIP)
-    previewPackage: (): Promise<{
+    // Optionally pass expectedModelType to validate the package type
+    previewPackage: (
+      expectedModelType?: 'detection' | 'keypoint'
+    ): Promise<{
       valid: boolean;
       filePath?: string;
       config?: Record<string, unknown>;
+      modelType?: 'detection' | 'keypoint';
       hasEngine?: boolean;
       canceled?: boolean;
       error?: string;
-    }> => ipcRenderer.invoke("model:previewPackage"),
+    }> => ipcRenderer.invoke("model:previewPackage", expectedModelType),
 
     // Import model package
     importPackage: (
@@ -616,6 +622,7 @@ const electronAPI = {
       modelId?: string;
       modelPath?: string;
       modelName?: string;
+      modelType?: 'detection' | 'keypoint';
       error?: string;
     }> => ipcRenderer.invoke("model:importPackage", filePath, newModelName),
   },

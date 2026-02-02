@@ -480,12 +480,16 @@ declare global {
         exportPackage: (
           modelId: string,
           modelPath: string,
-          config: Record<string, unknown>
+          config: Record<string, unknown>,
+          suggestedFileName?: string
         ) => Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }>;
-        previewPackage: () => Promise<{
+        previewPackage: (
+          expectedModelType?: 'detection' | 'keypoint'
+        ) => Promise<{
           valid: boolean;
           filePath?: string;
           config?: Record<string, unknown>;
+          modelType?: 'detection' | 'keypoint';
           hasEngine?: boolean;
           canceled?: boolean;
           error?: string;
@@ -498,6 +502,7 @@ declare global {
           modelId?: string;
           modelPath?: string;
           modelName?: string;
+          modelType?: 'detection' | 'keypoint';
           error?: string;
         }>;
       };
