@@ -301,37 +301,24 @@ export function FollicleOriginDialog({
         onClick={e => e.stopPropagation()}
         style={position ? { transform: `translate(${position.x}px, ${position.y}px)` } : undefined}
       >
+        {/* Compact header with phase and instructions */}
         <div className="dialog-header" onMouseDown={handleMouseDown}>
-          <h2>Set Follicle Origin</h2>
+          <div className="header-left">
+            <div className={`step-badge ${originPoint ? 'completed' : 'active'}`}>
+              {originPoint ? <Check size={12} /> : '1'}
+            </div>
+            <div className={`step-badge ${phase === 'direction' ? 'active' : ''}`}>2</div>
+            <span className="header-instruction">
+              {phase === 'origin' ? 'Click origin point' : 'Drag to set direction'}
+            </span>
+          </div>
           <button className="close-button" onClick={onCancel}>
-            <X size={18} />
+            <X size={16} />
           </button>
         </div>
 
+        {/* Canvas - maximum space */}
         <div className="dialog-content">
-          {/* Phase indicator */}
-          <div className="phase-indicator">
-            <div className={`phase-step ${phase === 'origin' ? 'active' : originPoint ? 'completed' : ''}`}>
-              <span className="step-number">{originPoint ? <Check size={14} /> : '1'}</span>
-              <span>Set Origin</span>
-            </div>
-            <div className={`phase-connector ${originPoint ? 'completed' : ''}`} />
-            <div className={`phase-step ${phase === 'direction' ? 'active' : ''}`}>
-              <span className="step-number">2</span>
-              <span>Set Direction</span>
-            </div>
-          </div>
-
-          {/* Instructions */}
-          <div className="origin-instructions">
-            {phase === 'origin' ? (
-              <span><strong>Click</strong> on the point where the follicle enters the skin</span>
-            ) : (
-              <span><strong>Click and drag</strong> to set the growth direction</span>
-            )}
-          </div>
-
-          {/* Canvas */}
           <div className="origin-canvas-container">
             <canvas
               ref={canvasRef}
@@ -343,45 +330,19 @@ export function FollicleOriginDialog({
               onMouseLeave={handleCanvasMouseUp}
             />
           </div>
-
-          {/* Origin info display */}
-          {originPoint && (
-            <div className="origin-info">
-              <div className="origin-info-item">
-                <label>Origin X</label>
-                <span>{originPoint.x.toFixed(1)}</span>
-              </div>
-              <div className="origin-info-item">
-                <label>Origin Y</label>
-                <span>{originPoint.y.toFixed(1)}</span>
-              </div>
-              <div className="origin-info-item">
-                <label>Direction</label>
-                <span>{(directionAngle * 180 / Math.PI).toFixed(0)}&deg;</span>
-              </div>
-              <div className="origin-info-item">
-                <label>Length</label>
-                <span>{directionLength.toFixed(0)}px</span>
-              </div>
-            </div>
-          )}
         </div>
 
+        {/* Compact footer with info and actions */}
         <div className="dialog-footer">
-          <button className="button-secondary" onClick={handleReset}>
-            Reset
-          </button>
+          <div className="origin-info">
+            <span className="info-item">X: <strong>{originPoint ? originPoint.x.toFixed(0) : '-'}</strong></span>
+            <span className="info-item">Y: <strong>{originPoint ? originPoint.y.toFixed(0) : '-'}</strong></span>
+            <span className="info-item">Dir: <strong>{originPoint ? `${(directionAngle * 180 / Math.PI).toFixed(0)}°` : '-'}</strong></span>
+          </div>
           <div className="footer-actions">
-            <button className="button-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-            <button
-              className="button-primary"
-              onClick={handleSave}
-              disabled={!canSave}
-            >
-              Save Origin
-            </button>
+            <button className="btn-sm" onClick={handleReset}>Reset</button>
+            <button className="btn-sm" onClick={onCancel}>Cancel</button>
+            <button className="btn-sm btn-primary" onClick={handleSave} disabled={!canSave}>Save</button>
           </div>
         </div>
       </div>
