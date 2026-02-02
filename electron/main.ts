@@ -2170,6 +2170,8 @@ ipcMain.handle(
       const configJson = await configFile.async("string");
       const config = JSON.parse(configJson);
 
+      console.log(`[Model Import] Package config:`, JSON.stringify({ modelId: config.modelId, modelName: config.modelName, modelType: config.modelType }, null, 2));
+
       // Determine model type from config (default to 'detection' for backward compatibility)
       const modelType: 'detection' | 'keypoint' = config.modelType || 'detection';
 

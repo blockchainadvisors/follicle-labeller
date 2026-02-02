@@ -195,8 +195,10 @@ export const Toolbar: React.FC = () => {
   const getGlobalSettingsForExport = useSettingsStore(state => state.getGlobalSettingsForExport);
   const getImageOverridesForExport = useSettingsStore(state => state.getImageOverridesForExport);
   const missingModelInfo = useSettingsStore(state => state.missingModelInfo);
+  const missingKeypointModelInfo = useSettingsStore(state => state.missingKeypointModelInfo);
   const validateModelAvailability = useSettingsStore(state => state.validateModelAvailability);
   const clearMissingModelWarning = useSettingsStore(state => state.clearMissingModelWarning);
+  const clearMissingKeypointModelWarning = useSettingsStore(state => state.clearMissingKeypointModelWarning);
 
   // Use effective settings for active image (supports per-image overrides)
   const detectionSettings = getEffectiveSettings(activeImageId);
@@ -715,11 +717,15 @@ export const Toolbar: React.FC = () => {
       setTimeout(markClean, 0);
 
       // Validate model availability in background (don't block UI)
-      // This checks if the saved YOLO model exists on this machine
-      yoloDetectionService.listModels()
-        .then(models => {
-          const modelIds = models.map(m => m.id);
-          validateModelAvailability(modelIds);
+      // This checks if the saved YOLO models (detection + keypoint) exist on this machine
+      Promise.all([
+        yoloDetectionService.listModels().catch(() => []),
+        yoloKeypointService.listModels().catch(() => []),
+      ])
+        .then(([detectionModels, keypointModels]) => {
+          const detectionModelIds = detectionModels.map(m => m.id);
+          const keypointModelIds = keypointModels.map(m => m.id);
+          validateModelAvailability(detectionModelIds, keypointModelIds);
         })
         .catch(error => {
           console.warn('Failed to validate YOLO models:', error);
@@ -2305,7 +2311,7 @@ export const Toolbar: React.FC = () => {
               ) : (
                 <Settings size={18} />
               )}
-              {missingModelInfo && !detectionExportState.isExporting && !keypointExportState.isExporting && (
+              {(missingModelInfo || missingKeypointModelInfo) && !detectionExportState.isExporting && !keypointExportState.isExporting && (
                 <span
                   style={{
                     position: 'absolute',
@@ -2342,7 +2348,9 @@ export const Toolbar: React.FC = () => {
               : keypointExportState.isExporting
               ? `TensorRT Export: ${keypointExportState.progress || 'Exporting keypoint model...'}`
               : missingModelInfo
-              ? `Inference Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+              ? `Inference Settings (⚠ Detection model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+              : missingKeypointModelInfo
+              ? `Inference Settings (⚠ Keypoint model "${missingKeypointModelInfo.modelName || missingKeypointModelInfo.modelId}" not found)`
               : "Inference Settings"
           }
           onClick={() => setShowDetectionSettings(true)}
