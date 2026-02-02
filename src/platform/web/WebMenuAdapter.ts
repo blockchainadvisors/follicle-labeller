@@ -10,6 +10,15 @@ import type { MenuAdapter } from '../types';
  * Web platform uses in-page UI instead of native menus
  */
 export class WebMenuAdapter implements MenuAdapter {
+  setProjectState(_hasProject: boolean): void {
+    // No-op for web - no native menu to update
+  }
+
+  async getFileToOpen(): Promise<string | null> {
+    // Web platform doesn't support file associations
+    return null;
+  }
+
   onMenuOpenImage(_callback: () => void): () => void {
     return () => {};
   }

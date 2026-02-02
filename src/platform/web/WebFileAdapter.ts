@@ -10,7 +10,6 @@ import type {
   SaveProjectResult,
   LoadProjectResult,
   ProjectImageData,
-  ServerProjectList,
 } from '../types';
 import { config } from '../config';
 
@@ -188,15 +187,69 @@ export class WebFileAdapter implements FileAdapter {
 
   async loadProjectV2(): Promise<LoadProjectResult | null> {
     try {
-      // Show project picker dialog (custom implementation)
-      const projectId = await this.showProjectPicker();
-      if (!projectId) return null;
+      // In web mode, let user pick a local .fol file, upload to server, then load from server
+      return new Promise((resolve) => {
+        const input = createFileInput('.fol,.zip');
 
-      return this.loadProjectFromPath(projectId);
+        input.onchange = async () => {
+          const file = input.files?.[0];
+          document.body.removeChild(input);
+
+          if (!file) {
+            resolve(null);
+            return;
+          }
+
+          try {
+            // Upload the .fol file directly to the server
+            const projectId = await this.uploadProjectFile(file);
+            if (!projectId) {
+              throw new Error('Failed to upload project to server');
+            }
+
+            // Load from server
+            const result = await this.loadProjectFromPath(projectId);
+            resolve(result);
+          } catch (error) {
+            console.error('Failed to import project file:', error);
+            alert('Failed to import project file. Please check the file format.');
+            resolve(null);
+          }
+        };
+
+        input.oncancel = () => {
+          document.body.removeChild(input);
+          resolve(null);
+        };
+
+        input.click();
+      });
     } catch (error) {
       console.error('Failed to load project:', error);
       return null;
     }
+  }
+
+  /**
+   * Upload a .fol project file to the server
+   * Returns the project ID on success
+   */
+  private async uploadProjectFile(file: File): Promise<string | null> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${config.backendUrl}/projects/import`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Upload failed: ${error}`);
+    }
+
+    const result = await response.json();
+    return result.projectId;
   }
 
   async loadProjectFromPath(filePath: string): Promise<LoadProjectResult | null> {
@@ -275,46 +328,5 @@ export class WebFileAdapter implements FileAdapter {
 
   setProjectState(_hasProject: boolean): void {
     // No menu state in web - this is a no-op
-  }
-
-  /**
-   * Show project picker dialog for web
-   * Lists available projects from server
-   */
-  private async showProjectPicker(): Promise<string | null> {
-    try {
-      const response = await fetch(`${config.backendUrl}/projects/list`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch projects');
-      }
-
-      const data: ServerProjectList = await response.json();
-
-      if (data.projects.length === 0) {
-        alert('No projects found on server.');
-        return null;
-      }
-
-      // Create project list string
-      const projectList = data.projects
-        .map((p, i) => `${i + 1}. ${p.name} (${p.imageCount} images, ${p.annotationCount} annotations)`)
-        .join('\n');
-
-      const choice = window.prompt(
-        `Select a project to load:\n\n${projectList}\n\nEnter project number:`
-      );
-
-      if (!choice) return null;
-
-      const index = parseInt(choice, 10) - 1;
-      if (index >= 0 && index < data.projects.length) {
-        return data.projects[index].id;
-      }
-
-      return null;
-    } catch (error) {
-      console.error('Failed to show project picker:', error);
-      return null;
-    }
   }
 }

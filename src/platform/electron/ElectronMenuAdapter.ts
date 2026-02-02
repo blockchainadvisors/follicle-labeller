@@ -6,6 +6,14 @@
 import type { MenuAdapter } from '../types';
 
 export class ElectronMenuAdapter implements MenuAdapter {
+  setProjectState(hasProject: boolean): void {
+    window.electronAPI.setProjectState(hasProject);
+  }
+
+  async getFileToOpen(): Promise<string | null> {
+    return window.electronAPI.getFileToOpen();
+  }
+
   onMenuOpenImage(callback: () => void): () => void {
     return window.electronAPI.onMenuOpenImage(callback);
   }

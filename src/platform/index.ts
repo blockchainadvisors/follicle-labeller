@@ -6,6 +6,8 @@
 import type { Platform } from './types';
 import { isElectron, isWeb, getPlatformName } from './detect';
 import { config } from './config';
+import { ElectronPlatform } from './electron';
+import { WebPlatform } from './web';
 
 // Lazy-loaded platform instance
 let platformInstance: Platform | null = null;
@@ -20,13 +22,8 @@ export function getPlatform(): Platform {
   }
 
   if (isElectron()) {
-    // Dynamic import to avoid loading Electron code in web builds
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { ElectronPlatform } = require('./electron');
     platformInstance = new ElectronPlatform();
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { WebPlatform } = require('./web');
     platformInstance = new WebPlatform();
   }
 

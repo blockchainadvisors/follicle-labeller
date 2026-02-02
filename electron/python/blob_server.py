@@ -2325,6 +2325,104 @@ async def upload_project(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post('/projects/import')
+async def import_project(file: UploadFile = File(...)):
+    """
+    Import a .fol project file (ZIP format) to server storage.
+
+    The .fol file should contain:
+    - manifest.json
+    - annotations.json
+    - images/ folder with image files
+
+    Returns:
+        - projectId: Unique project identifier
+        - success: True if import succeeded
+    """
+    import zipfile
+    import io
+
+    ensure_projects_dir()
+
+    # Generate project ID
+    project_id = str(uuid.uuid4())
+    project_dir = PROJECTS_DIR / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Read the uploaded file
+        content = await file.read()
+
+        # Open as ZIP
+        with zipfile.ZipFile(io.BytesIO(content), 'r') as zip_ref:
+            # Check for required files
+            file_list = zip_ref.namelist()
+            if 'manifest.json' not in file_list:
+                raise HTTPException(status_code=400, detail='Invalid project file: missing manifest.json')
+            if 'annotations.json' not in file_list:
+                raise HTTPException(status_code=400, detail='Invalid project file: missing annotations.json')
+
+            # Extract manifest
+            manifest = zip_ref.read('manifest.json').decode('utf-8')
+            manifest_data = json.loads(manifest)
+
+            # Extract annotations
+            annotations = zip_ref.read('annotations.json').decode('utf-8')
+            annotations_data = json.loads(annotations)
+
+            # Save manifest
+            with open(project_dir / 'manifest.json', 'w') as f:
+                f.write(manifest)
+
+            # Save annotations
+            with open(project_dir / 'annotations.json', 'w') as f:
+                f.write(annotations)
+
+            # Extract images
+            images_dir = project_dir / 'images'
+            images_dir.mkdir(exist_ok=True)
+
+            for file_info in zip_ref.filelist:
+                if file_info.filename.startswith('images/') and not file_info.is_dir():
+                    # Get just the filename, not the full path
+                    image_name = file_info.filename.split('/')[-1]
+                    if image_name:
+                        image_data = zip_ref.read(file_info.filename)
+                        with open(images_dir / image_name, 'wb') as f:
+                            f.write(image_data)
+
+        # Create metadata
+        metadata = {
+            'id': project_id,
+            'name': file.filename or project_id[:20],
+            'createdAt': datetime.now().isoformat(),
+            'updatedAt': datetime.now().isoformat(),
+            'imageCount': len(manifest_data.get('images', [])),
+            'annotationCount': len(annotations_data.get('annotations', []))
+        }
+
+        with open(project_dir / 'metadata.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        logger.info(f"Project imported: {project_id} from {file.filename} ({metadata['imageCount']} images, {metadata['annotationCount']} annotations)")
+
+        return {
+            'success': True,
+            'projectId': project_id
+        }
+
+    except zipfile.BadZipFile:
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        raise HTTPException(status_code=400, detail='Invalid file: not a valid ZIP/FOL file')
+    except Exception as e:
+        # Cleanup on error
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        logger.error(f"Failed to import project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put('/projects/{project_id}')
 async def update_project(
     project_id: str,

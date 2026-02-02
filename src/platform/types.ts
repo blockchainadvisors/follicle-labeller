@@ -523,6 +523,10 @@ export interface ModelAdapter {
  * Web platform returns no-op functions
  */
 export interface MenuAdapter {
+  /** Set project state (enables/disables menu items) */
+  setProjectState(hasProject: boolean): void;
+  /** Get file to open on startup (from file association) */
+  getFileToOpen(): Promise<string | null>;
   onMenuOpenImage(callback: () => void): () => void;
   onMenuLoadProject(callback: () => void): () => void;
   onMenuSaveProject(callback: () => void): () => void;
