@@ -469,7 +469,7 @@ export const Toolbar: React.FC = () => {
     };
 
     createSession();
-  }, [activeImageId, blobServerConnected]); // Only depend on ID, not full image object
+  }, [activeImageId, blobServerConnected, blobSessionId]); // Include blobSessionId to recreate session when it's reset
 
   // Get annotation count for the active image to use as a stable dependency
   const activeImageFollicleCount = follicles.filter(
@@ -524,7 +524,15 @@ export const Toolbar: React.FC = () => {
         setAnnotationCount(syncResult.annotationCount);
         setCanDetect(syncResult.canDetect);
       } catch (error) {
-        console.error("Failed to sync annotations:", error);
+        // If session is invalid (server restarted), reset session state to trigger recreation
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('Invalid session') || errorMessage.includes('session')) {
+          console.warn('Blob session expired, will recreate on next image change');
+          setBlobSessionId(null);
+          lastSessionImageId.current = null;
+        } else {
+          console.error("Failed to sync annotations:", error);
+        }
       } finally {
         isSyncingAnnotations.current = false;
       }
