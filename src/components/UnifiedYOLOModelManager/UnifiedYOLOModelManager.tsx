@@ -18,7 +18,7 @@ export function UnifiedYOLOModelManager({ onClose, onModelLoaded }: UnifiedYOLOM
     <div className="unified-yolo-model-manager-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="unified-yolo-model-manager-dialog">
         <div className="dialog-header">
-          <h2>YOLO Models</h2>
+          <h2>Model Library</h2>
           <button className="close-button" onClick={onClose}>
             <X size={20} />
           </button>
@@ -29,13 +29,13 @@ export function UnifiedYOLOModelManager({ onClose, onModelLoaded }: UnifiedYOLOM
             className={`tab-button ${activeTab === 'detection' ? 'active' : ''}`}
             onClick={() => setActiveTab('detection')}
           >
-            Detection
+            Area Detection
           </button>
           <button
             className={`tab-button ${activeTab === 'origin' ? 'active' : ''}`}
             onClick={() => setActiveTab('origin')}
           >
-            Origin
+            Origin Prediction
           </button>
         </div>
 

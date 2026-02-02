@@ -873,7 +873,7 @@ export function DetectionSettingsDialog({
         style={position ? { transform: `translate(${position.x}px, ${position.y}px)` } : undefined}
       >
         <div className="dialog-header" onMouseDown={handleMouseDown}>
-          <h2>Detection Settings</h2>
+          <h2>Inference Settings</h2>
           <button className="close-button" onClick={onClose}>
             <X size={18} />
           </button>
@@ -1770,15 +1770,6 @@ export function DetectionSettingsDialog({
               <ChevronDown size={16} className={`chevron ${keypointCollapsed ? 'rotated' : ''}`} />
               <Crosshair size={16} />
               Origin & Direction Prediction
-              {/* Enable toggle in header */}
-              <label className="section-enable-toggle" onClick={e => e.stopPropagation()}>
-                <input
-                  type="checkbox"
-                  checked={settings.useKeypointPrediction}
-                  onChange={e => handleChange('useKeypointPrediction', e.target.checked)}
-                />
-                <span>{settings.useKeypointPrediction ? 'Enabled' : 'Disabled'}</span>
-              </label>
             </h3>
 
             {!keypointCollapsed && (

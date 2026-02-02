@@ -2334,11 +2334,10 @@ export const Toolbar: React.FC = () => {
               : keypointExportState.isExporting
               ? `TensorRT Export: ${keypointExportState.progress || 'Exporting keypoint model...'}`
               : missingModelInfo
-              ? `Detection Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
-              : "Detection Settings"
+              ? `Inference Settings (⚠ Model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+              : "Inference Settings"
           }
           onClick={() => setShowDetectionSettings(true)}
-          disabled={!imageLoaded}
         />
       </div>
 
@@ -2348,12 +2347,12 @@ export const Toolbar: React.FC = () => {
       <div className="toolbar-group" role="group" aria-label="YOLO Machine Learning">
         <IconButton
           icon={<Brain size={18} />}
-          tooltip="YOLO Training"
+          tooltip="Model Training"
           onClick={() => setShowUnifiedYOLOTraining(true)}
         />
         <IconButton
           icon={<Database size={18} />}
-          tooltip="Manage YOLO Models"
+          tooltip="Model Library"
           onClick={() => setShowUnifiedYOLOModelManager(true)}
         />
       </div>
