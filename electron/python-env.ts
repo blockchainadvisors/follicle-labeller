@@ -587,7 +587,7 @@ export async function checkDependencies(): Promise<{
   if (!fs.existsSync(pythonPath)) {
     return {
       installed: false,
-      missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
+      missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn", "python-multipart"]
     };
   }
 
@@ -616,6 +616,10 @@ try:
     import uvicorn
 except ImportError:
     missing.append('uvicorn')
+try:
+    import multipart
+except ImportError:
+    missing.append('python-multipart')
 print(','.join(missing) if missing else 'OK')
 `;
 
@@ -645,7 +649,7 @@ print(','.join(missing) if missing else 'OK')
       } else {
         resolve({
           installed: false,
-          missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
+          missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn", "python-multipart"]
         });
       }
     });
@@ -653,7 +657,7 @@ print(','.join(missing) if missing else 'OK')
     proc.on("error", () => {
       resolve({
         installed: false,
-        missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn"]
+        missing: ["opencv-python", "numpy", "pillow", "fastapi", "uvicorn", "python-multipart"]
       });
     });
   });
