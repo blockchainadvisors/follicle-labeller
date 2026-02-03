@@ -1,5 +1,6 @@
 /**
  * Manages Python virtual environment and dependencies
+ * - Downloads portable Python on first run (python-build-standalone)
  * - Creates venv in app data directory
  * - Installs requirements.txt automatically
  * - Provides paths to venv Python executable
@@ -8,10 +9,250 @@
 import { app } from "electron";
 import path from "path";
 import fs from "fs";
-import { spawn, execSync, execFile, SpawnOptions } from "child_process";
+import https from "https";
+import { spawn, execSync, execFile } from "child_process";
+import * as tar from "tar";
 
 // Track setup status for UI feedback
 let currentSetupStatus = "";
+
+// Progress callback for Python download
+let downloadProgressCallback: ((status: string, percent?: number) => void) | null = null;
+
+/**
+ * Set the download progress callback (called from main.ts)
+ */
+export function setDownloadProgressCallback(callback: ((status: string, percent?: number) => void) | null): void {
+  downloadProgressCallback = callback;
+}
+
+// ============================================
+// Python Runtime Download (python-build-standalone)
+// ============================================
+
+// Python version and build info
+// Using Python 3.11 for broad compatibility (some packages don't support 3.12+ yet)
+const PYTHON_VERSION = "3.11.9";
+const PYTHON_BUILD_VERSION = "20240726";
+
+// Download URLs for different platforms
+// From: https://github.com/indygreg/python-build-standalone/releases
+const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
+  "win32-x64": `https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_BUILD_VERSION}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_VERSION}-x86_64-pc-windows-msvc-install_only.tar.gz`,
+  "darwin-x64": `https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_BUILD_VERSION}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_VERSION}-x86_64-apple-darwin-install_only.tar.gz`,
+  "darwin-arm64": `https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_BUILD_VERSION}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_VERSION}-aarch64-apple-darwin-install_only.tar.gz`,
+  "linux-x64": `https://github.com/indygreg/python-build-standalone/releases/download/${PYTHON_BUILD_VERSION}/cpython-${PYTHON_VERSION}+${PYTHON_BUILD_VERSION}-x86_64-unknown-linux-gnu-install_only.tar.gz`,
+};
+
+/**
+ * Get the path to the downloaded Python runtime directory.
+ * Location: {userData}/python-runtime/
+ */
+export function getPythonRuntimeDir(): string {
+  return path.join(app.getPath("userData"), "python-runtime");
+}
+
+/**
+ * Get the path to the downloaded Python executable.
+ * Returns null if Python hasn't been downloaded yet.
+ */
+export function getDownloadedPythonPath(): string | null {
+  const runtimeDir = getPythonRuntimeDir();
+
+  // python-build-standalone extracts to a 'python' subdirectory
+  const pythonExe = process.platform === "win32"
+    ? path.join(runtimeDir, "python", "python.exe")
+    : path.join(runtimeDir, "python", "bin", "python3");
+
+  if (fs.existsSync(pythonExe)) {
+    return pythonExe;
+  }
+  return null;
+}
+
+/**
+ * Check if we have a downloaded Python runtime available.
+ */
+export function hasDownloadedPython(): boolean {
+  return getDownloadedPythonPath() !== null;
+}
+
+/**
+ * Download a file with progress reporting.
+ * Handles HTTP redirects (GitHub releases use redirects).
+ */
+async function downloadFile(
+  url: string,
+  destPath: string,
+  onProgress: (percent: number) => void,
+  redirectCount = 0
+): Promise<void> {
+  // Prevent infinite redirects
+  if (redirectCount > 5) {
+    throw new Error("Too many redirects");
+  }
+
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destPath);
+
+    const request = https.get(url, (response) => {
+      // Handle redirects (301, 302, 307, 308)
+      if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        file.close();
+        fs.unlinkSync(destPath); // Remove the empty file
+        downloadFile(response.headers.location, destPath, onProgress, redirectCount + 1)
+          .then(resolve)
+          .catch(reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        file.close();
+        fs.unlinkSync(destPath);
+        reject(new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`));
+        return;
+      }
+
+      const totalSize = parseInt(response.headers["content-length"] || "0", 10);
+      let downloadedSize = 0;
+      let lastReportedPercent = -1;
+
+      response.on("data", (chunk: Buffer) => {
+        downloadedSize += chunk.length;
+        if (totalSize > 0) {
+          const percent = Math.round((downloadedSize / totalSize) * 100);
+          // Only report when percent changes to avoid too many updates
+          if (percent !== lastReportedPercent) {
+            lastReportedPercent = percent;
+            onProgress(percent);
+          }
+        }
+      });
+
+      response.pipe(file);
+
+      file.on("finish", () => {
+        file.close();
+        resolve();
+      });
+
+      file.on("error", (err) => {
+        file.close();
+        fs.unlinkSync(destPath);
+        reject(err);
+      });
+    });
+
+    request.on("error", (err) => {
+      file.close();
+      if (fs.existsSync(destPath)) {
+        fs.unlinkSync(destPath);
+      }
+      reject(err);
+    });
+
+    // Set a timeout for the request
+    request.setTimeout(300000, () => { // 5 minute timeout
+      request.destroy();
+      reject(new Error("Download timed out"));
+    });
+  });
+}
+
+/**
+ * Extract a .tar.gz file to a directory.
+ */
+async function extractTarGz(tarPath: string, destDir: string): Promise<void> {
+  await tar.extract({
+    file: tarPath,
+    cwd: destDir,
+  });
+}
+
+/**
+ * Download the Python runtime for the current platform.
+ * Downloads from python-build-standalone and extracts to userData.
+ */
+export async function downloadPythonRuntime(
+  onProgress?: (status: string, percent?: number) => void
+): Promise<string> {
+  const platform = `${process.platform}-${process.arch}`;
+  const url = PYTHON_DOWNLOAD_URLS[platform];
+
+  if (!url) {
+    throw new Error(`No Python build available for platform: ${platform}. Supported: ${Object.keys(PYTHON_DOWNLOAD_URLS).join(", ")}`);
+  }
+
+  const runtimeDir = getPythonRuntimeDir();
+  const tarPath = path.join(runtimeDir, "python.tar.gz");
+
+  // Create runtime directory
+  fs.mkdirSync(runtimeDir, { recursive: true });
+
+  // Check if already downloaded
+  const existingPython = getDownloadedPythonPath();
+  if (existingPython) {
+    console.log("[Python Download] Already have Python runtime at:", existingPython);
+    return existingPython;
+  }
+
+  console.log("[Python Download] Downloading Python runtime...");
+  console.log("[Python Download] URL:", url);
+  console.log("[Python Download] Destination:", runtimeDir);
+
+  try {
+    // Download with progress
+    onProgress?.("Downloading Python runtime...", 0);
+    setSetupStatus("Downloading Python runtime...");
+
+    await downloadFile(url, tarPath, (percent) => {
+      const status = `Downloading Python runtime... ${percent}%`;
+      setSetupStatus(status);
+      onProgress?.(status, percent);
+      downloadProgressCallback?.(status, percent);
+    });
+
+    console.log("[Python Download] Download complete, extracting...");
+    onProgress?.("Extracting Python runtime...", 100);
+    setSetupStatus("Extracting Python runtime...");
+    downloadProgressCallback?.("Extracting Python runtime...", 100);
+
+    // Extract tar.gz
+    await extractTarGz(tarPath, runtimeDir);
+
+    // Cleanup tar file
+    fs.unlinkSync(tarPath);
+
+    // Verify extraction
+    const pythonPath = getDownloadedPythonPath();
+    if (!pythonPath) {
+      throw new Error("Python extraction failed - executable not found");
+    }
+
+    // On Unix, ensure python executable is... executable
+    if (process.platform !== "win32") {
+      fs.chmodSync(pythonPath, 0o755);
+      // Also make pip executable
+      const pipPath = path.join(path.dirname(pythonPath), "pip3");
+      if (fs.existsSync(pipPath)) {
+        fs.chmodSync(pipPath, 0o755);
+      }
+    }
+
+    console.log("[Python Download] Python runtime ready at:", pythonPath);
+    onProgress?.("Python runtime ready", 100);
+    setSetupStatus("Python runtime ready");
+    downloadProgressCallback?.("Python runtime ready", 100);
+
+    return pythonPath;
+  } catch (error) {
+    // Cleanup on failure
+    if (fs.existsSync(tarPath)) {
+      fs.unlinkSync(tarPath);
+    }
+    throw error;
+  }
+}
 
 /**
  * Get the path to the Python virtual environment.
@@ -62,15 +303,35 @@ function setSetupStatus(status: string): void {
 }
 
 /**
- * Find Python executable in system PATH.
- * Tries 'python' first (works with conda/venv), then 'python3'.
+ * Find Python executable.
+ * Priority: 1) Downloaded Python, 2) System Python in PATH
  */
-async function findSystemPython(): Promise<{
+async function findPython(): Promise<{
   found: boolean;
   pythonPath?: string;
   version?: string;
+  source?: "downloaded" | "system";
   error?: string;
 }> {
+  // First, check for downloaded Python runtime
+  const downloadedPython = getDownloadedPythonPath();
+  if (downloadedPython) {
+    try {
+      const result = execSync(`"${downloadedPython}" --version`, {
+        timeout: 10000,
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const version = result.trim();
+      console.log("[Python Env] Using downloaded Python:", downloadedPython, version);
+      return { found: true, pythonPath: downloadedPython, version, source: "downloaded" };
+    } catch (err) {
+      console.warn("[Python Env] Downloaded Python found but failed to run:", err);
+      // Fall through to system Python
+    }
+  }
+
+  // Try system Python commands
   const pythonCmds = process.platform === "win32"
     ? ["python", "python3", "py"]
     : ["python3", "python"];
@@ -90,7 +351,8 @@ async function findSystemPython(): Promise<{
         const major = parseInt(match[1]);
         const minor = parseInt(match[2]);
         if (major >= 3 && minor >= 8) {
-          return { found: true, pythonPath: cmd, version };
+          console.log("[Python Env] Using system Python:", cmd, version);
+          return { found: true, pythonPath: cmd, version, source: "system" };
         }
       }
     } catch {
@@ -100,7 +362,25 @@ async function findSystemPython(): Promise<{
 
   return {
     found: false,
-    error: "Python 3.8+ not found. Please install Python from python.org"
+    error: "Python 3.8+ not found"
+  };
+}
+
+/**
+ * Find Python executable in system PATH only (legacy function for compatibility).
+ */
+async function findSystemPython(): Promise<{
+  found: boolean;
+  pythonPath?: string;
+  version?: string;
+  error?: string;
+}> {
+  const result = await findPython();
+  return {
+    found: result.found,
+    pythonPath: result.pythonPath,
+    version: result.version,
+    error: result.error,
   };
 }
 
@@ -115,29 +395,57 @@ export function isVenvValid(): boolean {
 /**
  * Ensure the virtual environment exists.
  * Creates it if it doesn't exist.
+ * Will download Python automatically if not available.
  */
-export async function ensureVenv(): Promise<{
+export async function ensureVenv(
+  onProgress?: (status: string, percent?: number) => void
+): Promise<{
   success: boolean;
   error?: string;
 }> {
   const venvPath = getVenvPath();
-  const pythonPath = getVenvPythonPath();
+  const venvPythonPath = getVenvPythonPath();
 
   // Check if venv already exists and is valid
-  if (fs.existsSync(pythonPath)) {
+  if (fs.existsSync(venvPythonPath)) {
     setSetupStatus("Virtual environment ready");
     return { success: true };
   }
 
-  setSetupStatus("Finding system Python...");
+  setSetupStatus("Finding Python...");
+  onProgress?.("Finding Python...");
 
-  // Find system Python
-  const pythonCheck = await findSystemPython();
-  if (!pythonCheck.found || !pythonCheck.pythonPath) {
-    return { success: false, error: pythonCheck.error };
+  // Try to find Python (downloaded or system)
+  let pythonCheck = await findPython();
+
+  // If no Python found, download it
+  if (!pythonCheck.found) {
+    setSetupStatus("Python not found, downloading...");
+    onProgress?.("Python not found, downloading...", 0);
+
+    try {
+      const downloadedPath = await downloadPythonRuntime(onProgress);
+      pythonCheck = {
+        found: true,
+        pythonPath: downloadedPath,
+        version: `Python ${PYTHON_VERSION}`,
+        source: "downloaded",
+      };
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        error: `Failed to download Python: ${errorMsg}`,
+      };
+    }
+  }
+
+  if (!pythonCheck.pythonPath) {
+    return { success: false, error: "No Python available" };
   }
 
   setSetupStatus(`Creating virtual environment (${pythonCheck.version})...`);
+  onProgress?.(`Creating virtual environment (${pythonCheck.version})...`);
 
   // Ensure parent directory exists
   const parentDir = path.dirname(venvPath);
@@ -145,11 +453,18 @@ export async function ensureVenv(): Promise<{
     fs.mkdirSync(parentDir, { recursive: true });
   }
 
-  // Create venv
+  // Create venv using the found Python
   return new Promise((resolve) => {
     const args = ["-m", "venv", venvPath];
 
-    const proc = spawn(pythonCheck.pythonPath!, args, {
+    // For downloaded Python, use full path; for system Python, use command name
+    const pythonCmd = pythonCheck.source === "downloaded"
+      ? pythonCheck.pythonPath!
+      : pythonCheck.pythonPath!;
+
+    console.log("[Python Env] Creating venv with:", pythonCmd, args.join(" "));
+
+    const proc = spawn(pythonCmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 120000, // 2 minute timeout
     });
@@ -161,8 +476,9 @@ export async function ensureVenv(): Promise<{
     });
 
     proc.on("close", (code) => {
-      if (code === 0 && fs.existsSync(pythonPath)) {
+      if (code === 0 && fs.existsSync(venvPythonPath)) {
         setSetupStatus("Virtual environment created");
+        onProgress?.("Virtual environment created");
         resolve({ success: true });
       } else {
         resolve({
@@ -346,17 +662,18 @@ print(','.join(missing) if missing else 'OK')
 /**
  * Full environment setup: ensures venv exists and dependencies are installed.
  * This is the main entry point for setting up the Python environment.
+ * Will download Python automatically if not available on the system.
  */
 export async function setupPythonEnvironment(
   requirementsPath: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string, percent?: number) => void
 ): Promise<{
   success: boolean;
   pythonPath?: string;
   error?: string;
 }> {
-  // Step 1: Ensure venv exists
-  const venvResult = await ensureVenv();
+  // Step 1: Ensure venv exists (will download Python if needed)
+  const venvResult = await ensureVenv(onProgress);
   if (!venvResult.success) {
     return { success: false, error: venvResult.error };
   }

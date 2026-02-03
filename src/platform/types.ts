@@ -120,7 +120,7 @@ export interface FileAdapter {
  */
 export interface BlobAdapter {
   /** Start BLOB server */
-  startServer(): Promise<{ success: boolean; error?: string }>;
+  startServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }>;
 
   /** Stop BLOB server */
   stopServer(): Promise<{ success: boolean }>;
@@ -137,14 +137,14 @@ export interface BlobAdapter {
   /** Get setup status */
   getSetupStatus(): Promise<string>;
 
-  /** Subscribe to setup progress */
-  onSetupProgress(callback: (status: string) => void): () => void;
+  /** Subscribe to setup progress (includes download percent when downloading Python) */
+  onSetupProgress(callback: (status: string, percent?: number) => void): () => void;
 
   /** Get GPU info from running server */
   getGPUInfo(): Promise<GPUInfo>;
 
   /** Restart BLOB server */
-  restartServer(): Promise<{ success: boolean; error?: string }>;
+  restartServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }>;
 }
 
 // ============================================

@@ -8,7 +8,7 @@ import type { GPUInfo } from '../../types';
 import { config } from '../config';
 
 export class WebBlobAdapter implements BlobAdapter {
-  async startServer(): Promise<{ success: boolean; error?: string }> {
+  async startServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }> {
     // In web mode, server is already running on GPU server
     // Just check if it's available
     try {
@@ -16,9 +16,17 @@ export class WebBlobAdapter implements BlobAdapter {
       if (available) {
         return { success: true };
       }
-      return { success: false, error: 'Server not available' };
+      return {
+        success: false,
+        error: 'Server not available',
+        errorDetails: `Could not connect to backend server at ${config.backendUrl}. Make sure the server is running.`,
+      };
     } catch (error) {
-      return { success: false, error: String(error) };
+      return {
+        success: false,
+        error: 'Connection failed',
+        errorDetails: String(error),
+      };
     }
   }
 
@@ -72,7 +80,7 @@ export class WebBlobAdapter implements BlobAdapter {
     return available ? 'ready' : 'unavailable';
   }
 
-  onSetupProgress(_callback: (status: string) => void): () => void {
+  onSetupProgress(_callback: (status: string, percent?: number) => void): () => void {
     // Web mode doesn't have setup progress - server is already set up
     return () => {};
   }
@@ -93,9 +101,13 @@ export class WebBlobAdapter implements BlobAdapter {
     }
   }
 
-  async restartServer(): Promise<{ success: boolean; error?: string }> {
+  async restartServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }> {
     // Web mode cannot restart the remote server
     console.warn('Web mode cannot restart the remote server');
-    return { success: false, error: 'Cannot restart remote server from web client' };
+    return {
+      success: false,
+      error: 'Cannot restart remote server',
+      errorDetails: 'Web mode cannot restart the remote server from the client. Please restart the server manually.',
+    };
   }
 }

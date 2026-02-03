@@ -74,6 +74,7 @@ import {
   DuplicateAction,
   findDuplicates,
 } from "../DuplicateDetectionDialog";
+import { ServerErrorDialog } from "../ServerErrorDialog/ServerErrorDialog";
 import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
 import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
@@ -178,6 +179,11 @@ export const Toolbar: React.FC = () => {
   const [canDetect, setCanDetect] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
   const [setupStatus, setSetupStatus] = useState<string>("");
+  const [downloadPercent, setDownloadPercent] = useState<number | undefined>();
+  const [serverError, setServerError] = useState<{
+    error: string;
+    errorDetails?: string;
+  } | null>(null);
   const MIN_ANNOTATIONS = 3;
 
   // Refs to prevent duplicate operations
@@ -217,6 +223,45 @@ export const Toolbar: React.FC = () => {
     setAnnotationCount(0);
     setCanDetect(false);
   };
+
+  // Handler for retrying server start after error
+  const handleRetryServerStart = useCallback(async () => {
+    setServerError(null);
+    setServerStarting(true);
+    setDownloadPercent(undefined);
+    setSetupStatus("Retrying server start...");
+    try {
+      const result = await getPlatform().blob.startServer();
+      if (result.success) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const available = await blobService.isAvailable();
+        setBlobServerConnected(available);
+        setSetupStatus("");
+        setDownloadPercent(undefined);
+      } else {
+        console.error("Failed to start BLOB server:", result.error);
+        setBlobServerConnected(false);
+        setSetupStatus(`Error: ${result.error}`);
+        if (result.errorDetails) {
+          setServerError({
+            error: result.error || 'Unknown error',
+            errorDetails: result.errorDetails,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error starting BLOB server:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      setSetupStatus(`Error: ${errorMessage}`);
+      setServerError({
+        error: 'Failed to start backend server',
+        errorDetails: errorMessage,
+      });
+    } finally {
+      setServerStarting(false);
+      setDownloadPercent(undefined);
+    }
+  }, []);
 
   // Handler to open Model Library from Inference Settings
   const handleOpenModelLibrary = (tab: 'detection' | 'origin') => {
@@ -330,15 +375,17 @@ export const Toolbar: React.FC = () => {
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
-    // Listen for setup progress events (Electron only)
+    // Listen for setup progress events (Electron only, includes download percent when downloading Python)
     const cleanupProgress = getPlatform().blob.onSetupProgress(
-      (status) => {
+      (status, percent) => {
         setSetupStatus(status);
+        setDownloadPercent(percent);
       }
     );
 
     const startServer = async () => {
       setServerStarting(true);
+      setServerError(null);
       setSetupStatus("Checking server status...");
       try {
         // Check if server is already running
@@ -347,6 +394,7 @@ export const Toolbar: React.FC = () => {
           setBlobServerConnected(true);
           setServerStarting(false);
           setSetupStatus("");
+          setDownloadPercent(undefined);
           return;
         }
 
@@ -358,17 +406,32 @@ export const Toolbar: React.FC = () => {
           const available = await blobService.isAvailable();
           setBlobServerConnected(available);
           setSetupStatus("");
+          setDownloadPercent(undefined);
         } else {
           console.error("Failed to start BLOB server:", result.error);
           setBlobServerConnected(false);
           setSetupStatus(`Error: ${result.error}`);
+          // Show error dialog with details if available
+          if (result.errorDetails) {
+            setServerError({
+              error: result.error || 'Unknown error',
+              errorDetails: result.errorDetails,
+            });
+          }
         }
       } catch (error) {
         console.error("Error starting BLOB server:", error);
         setBlobServerConnected(false);
-        setSetupStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        setSetupStatus(`Error: ${errorMessage}`);
+        setServerError({
+          error: 'Failed to start backend server',
+          errorDetails: errorMessage,
+        });
       } finally {
         setServerStarting(false);
+        // Clear download percent if not already cleared
+        setDownloadPercent(undefined);
       }
     };
 
@@ -2531,7 +2594,18 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-status">
         {serverStarting && setupStatus ? (
-          <span className="setup-status">{setupStatus}</span>
+          <div className="setup-status-container">
+            <Loader2 size={14} className="setup-spinner" />
+            <span className="setup-status">{setupStatus}</span>
+            {downloadPercent !== undefined && downloadPercent < 100 && (
+              <div className="download-progress-bar">
+                <div
+                  className="download-progress-fill"
+                  style={{ width: `${downloadPercent}%` }}
+                />
+              </div>
+            )}
+          </div>
         ) : imageLoaded && activeImage ? (
           <>
             {images.size > 1 && (
@@ -2650,6 +2724,16 @@ export const Toolbar: React.FC = () => {
           report={duplicateReport}
           onAction={handleDuplicateAction}
           detectionMethod={detectionMethodName}
+        />
+      )}
+
+      {/* Server Error Dialog */}
+      {serverError && (
+        <ServerErrorDialog
+          error={serverError.error}
+          errorDetails={serverError.errorDetails}
+          onRetry={handleRetryServerStart}
+          onClose={() => setServerError(null)}
         />
       )}
     </div>

@@ -7,7 +7,7 @@ import type { BlobAdapter } from '../types';
 import type { GPUInfo } from '../../types';
 
 export class ElectronBlobAdapter implements BlobAdapter {
-  async startServer(): Promise<{ success: boolean; error?: string }> {
+  async startServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }> {
     return window.electronAPI.blob.startServer();
   }
 
@@ -31,7 +31,7 @@ export class ElectronBlobAdapter implements BlobAdapter {
     return window.electronAPI.blob.getSetupStatus();
   }
 
-  onSetupProgress(callback: (status: string) => void): () => void {
+  onSetupProgress(callback: (status: string, percent?: number) => void): () => void {
     return window.electronAPI.blob.onSetupProgress(callback);
   }
 
@@ -39,7 +39,7 @@ export class ElectronBlobAdapter implements BlobAdapter {
     return window.electronAPI.blob.getGPUInfo();
   }
 
-  async restartServer(): Promise<{ success: boolean; error?: string }> {
+  async restartServer(): Promise<{ success: boolean; error?: string; errorDetails?: string }> {
     return window.electronAPI.blob.restartServer();
   }
 }

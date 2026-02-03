@@ -840,6 +840,7 @@ async function checkPythonAvailable(): Promise<{
 async function startBlobServer(): Promise<{
   success: boolean;
   error?: string;
+  errorDetails?: string;
 }> {
   // Check if already running
   if (blobServerProcess && !blobServerProcess.killed) {
@@ -854,25 +855,33 @@ async function startBlobServer(): Promise<{
     ? path.join(process.resourcesPath, "python", "requirements.txt")
     : path.join(__dirname, "..", "electron", "python", "requirements.txt");
 
-  // Setup Python environment (creates venv and installs deps if needed)
+  // Setup Python environment (creates venv, downloads Python if needed, installs deps)
   const setupResult = await setupPythonEnvironment(
     requirementsPath,
-    (status) => {
+    (status, percent) => {
       pythonSetupStatus = status;
-      // Notify renderer of progress
-      mainWindow?.webContents.send("blob:setupProgress", status);
+      // Notify renderer of progress (includes download percentage when available)
+      mainWindow?.webContents.send("blob:setupProgress", status, percent);
     }
   );
 
   if (!setupResult.success) {
     pythonSetupStatus = `Setup failed: ${setupResult.error}`;
-    return { success: false, error: setupResult.error };
+    return {
+      success: false,
+      error: 'Python environment setup failed',
+      errorDetails: setupResult.error,
+    };
   }
 
   // Check if server script exists
   const serverPath = getBlobServerPath();
   if (!fs.existsSync(serverPath)) {
-    return { success: false, error: "BLOB server script not found" };
+    return {
+      success: false,
+      error: 'BLOB server script not found',
+      errorDetails: `Expected path: ${serverPath}`,
+    };
   }
 
   // Get Python path from venv
@@ -941,7 +950,8 @@ async function startBlobServer(): Promise<{
         pythonSetupStatus = `Server exited with code ${code}`;
         resolve({
           success: false,
-          error: errorOutput || `Process exited with code ${code}`,
+          error: errorOutput ? 'Server startup failed' : `Process exited with code ${code}`,
+          errorDetails: errorOutput || undefined,
         });
       }
     });
@@ -951,7 +961,11 @@ async function startBlobServer(): Promise<{
       if (!resolved) {
         resolved = true;
         pythonSetupStatus = `Failed to start: ${err.message}`;
-        resolve({ success: false, error: err.message });
+        resolve({
+          success: false,
+          error: 'Failed to start server process',
+          errorDetails: err.message,
+        });
       }
     });
 
@@ -960,7 +974,11 @@ async function startBlobServer(): Promise<{
       if (!resolved) {
         resolved = true;
         pythonSetupStatus = "Server startup timed out";
-        resolve({ success: false, error: "Server startup timed out" });
+        resolve({
+          success: false,
+          error: "Server startup timed out",
+          errorDetails: errorOutput || undefined,
+        });
       }
     }, 60000);
   });
