@@ -54,3 +54,4 @@ electron/python/*.pt
 
 # TypeScript build cache
 *.tsbuildinfo
+dist-web/
