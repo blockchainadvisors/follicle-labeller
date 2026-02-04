@@ -196,6 +196,7 @@ class YOLODetectionService:
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
         self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
+        self._loaded_model_imgsz: int = 640  # Training image size for inference
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
@@ -781,6 +782,7 @@ class YOLODetectionService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
             # Detect backend from file extension
             model_ext = Path(model_path).suffix.lower()
@@ -794,7 +796,10 @@ class YOLODetectionService:
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
-            logger.info(f"Loaded model: {model_path} (backend: {backend})")
+            # Store the model's training imgsz to ensure consistent inference
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
+
+            logger.info(f"Loaded model: {model_path} (backend: {backend}, imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -821,8 +826,9 @@ class YOLODetectionService:
 
             self._loaded_model = YOLO(default_model)
             self._loaded_model_path = f"pretrained:{default_model}"
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
 
-            logger.info(f"Successfully loaded default model: {default_model}")
+            logger.info(f"Successfully loaded default model: {default_model} (imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -863,11 +869,12 @@ class YOLODetectionService:
             img_array = np.array(image)
             img_height, img_width = img_array.shape[:2]
 
-            # Run inference
+            # Run inference with explicit imgsz to ensure consistent results
             results = self._loaded_model.predict(
                 img_array,
                 conf=confidence_threshold,
-                verbose=False
+                verbose=False,
+                imgsz=self._loaded_model_imgsz
             )
 
             if not results or len(results) == 0:
@@ -1026,11 +1033,12 @@ class YOLODetectionService:
 
                     tile_count += 1
 
-                    # Run inference on tile
+                    # Run inference on tile with explicit imgsz
                     results = self._loaded_model.predict(
                         tile,
                         conf=confidence_threshold,
-                        verbose=False
+                        verbose=False,
+                        imgsz=self._loaded_model_imgsz
                     )
 
                     if results and len(results) > 0:

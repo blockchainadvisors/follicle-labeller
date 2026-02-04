@@ -192,6 +192,7 @@ class YOLOKeypointService:
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
         self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
+        self._loaded_model_imgsz: int = 640  # Training image size for inference
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
@@ -320,6 +321,7 @@ class YOLOKeypointService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
                 # Aggressive cleanup
                 for _ in range(3):
@@ -814,6 +816,7 @@ class YOLOKeypointService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
             # Detect backend from file extension
             model_ext = model_file.suffix.lower()
@@ -834,7 +837,12 @@ class YOLOKeypointService:
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
-            logger.info(f"Successfully loaded model: {model_path} (backend: {backend})")
+            # Store the model's training imgsz to ensure consistent inference
+            # This is critical for imported models where ultralytics may not
+            # correctly read imgsz from the checkpoint in all versions
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
+
+            logger.info(f"Successfully loaded model: {model_path} (backend: {backend}, imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -869,16 +877,21 @@ class YOLOKeypointService:
             t1 = time.time()
 
             # Run inference
+            # Explicitly pass imgsz to ensure the model's training resolution is used.
+            # Without this, some ultralytics versions default to 640px which produces
+            # wrong keypoint coordinates for models trained at different sizes (e.g. 320px).
+            imgsz = self._loaded_model_imgsz
+
             # TensorRT engines require fixed batch size, so we pad to batch=16
             if self._loaded_model_backend == 'tensorrt':
                 TENSORRT_BATCH_SIZE = 16
                 # Create a batch of 16 copies of the same image
                 batch = [img_array] * TENSORRT_BATCH_SIZE
-                batch_results = self._loaded_model.predict(batch, verbose=False)
+                batch_results = self._loaded_model.predict(batch, verbose=False, imgsz=imgsz)
                 # Take only the first result
                 results = batch_results[:1] if batch_results else []
             else:
-                results = self._loaded_model.predict(img_array, verbose=False)
+                results = self._loaded_model.predict(img_array, verbose=False, imgsz=imgsz)
 
             t2 = time.time()
 
@@ -993,6 +1006,9 @@ class YOLOKeypointService:
             else:
                 device = 'cpu'
 
+            # Explicitly pass imgsz to ensure the model's training resolution is used
+            imgsz = self._loaded_model_imgsz
+
             # TensorRT engines are compiled with fixed batch size
             # Our engines are exported with batch=16 for efficient multi-follicle inference
             if self._loaded_model_backend == 'tensorrt':
@@ -1011,7 +1027,7 @@ class YOLOKeypointService:
                         batch = batch + [batch[-1]] * padding_needed
 
                     try:
-                        batch_results = self._loaded_model.predict(batch, verbose=False, device=device)
+                        batch_results = self._loaded_model.predict(batch, verbose=False, device=device, imgsz=imgsz)
                         # Only take results for actual images (not padding)
                         results.extend(batch_results[:actual_batch_size])
                     except Exception as e:
@@ -1020,7 +1036,7 @@ class YOLOKeypointService:
                         results.extend([None] * actual_batch_size)
             else:
                 # PyTorch supports true batch inference with dynamic batch size
-                results = self._loaded_model.predict(valid_images, verbose=False, device=device)
+                results = self._loaded_model.predict(valid_images, verbose=False, device=device, imgsz=imgsz)
 
             t2 = time.time()
 

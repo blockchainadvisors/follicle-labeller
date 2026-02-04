@@ -778,6 +778,46 @@ export function DetectionSettingsDialog({
     }
   };
 
+  // Handle PyTorch CUDA upgrade (for users with CPU-only PyTorch)
+  const handleUpgradeToCUDA = async () => {
+    updateInstallState({ isInstalling: true, error: null, progress: 'Upgrading PyTorch to CUDA version...' });
+
+    try {
+      const result = await yoloKeypointService.upgradeToCUDA((message) => {
+        updateInstallState({ progress: message });
+      });
+
+      if (result.success) {
+        updateInstallState({ progress: 'Restarting detection server...' });
+        // Restart the blob server to pick up new packages
+        await window.electronAPI.blob.restartServer();
+
+        // Notify parent to recreate session (server restart invalidates old sessions)
+        onServerRestarted?.();
+
+        // Refresh GPU info
+        const info = await window.electronAPI.gpu.getHardwareInfo();
+        setGpuHardware(info);
+
+        // Also refresh gpuInfo for active backend display
+        const gpuStatus = await blobService.getGPUInfo();
+        setGpuInfo(gpuStatus);
+
+        // Refresh TensorRT status since CUDA is now available
+        const trtStatus = await yoloDetectionService.checkTensorRTAvailable();
+        setTensorrtStatus(trtStatus);
+        const nativeTrtStatus = await window.electronAPI.tensorrt.check();
+        setTensorrtCanInstall(nativeTrtStatus.canInstall && !nativeTrtStatus.available);
+
+        updateInstallState({ isInstalling: false, progress: '' });
+      } else {
+        updateInstallState({ isInstalling: false, error: result.error || 'CUDA upgrade failed' });
+      }
+    } catch (error) {
+      updateInstallState({ isInstalling: false, error: error instanceof Error ? error.message : 'CUDA upgrade failed' });
+    }
+  };
+
   // Handle TensorRT installation
   const handleInstallTensorRT = async () => {
     setTensorrtInstalling(true);
@@ -1017,6 +1057,25 @@ export function DetectionSettingsDialog({
                   <span className="gpu-status-label">CPU Mode</span>
                   <span className="gpu-status-device">No GPU Detected</span>
                 </div>
+              </div>
+            )}
+
+            {/* State 6: GPU Hardware found, packages installed, but CUDA not working - needs PyTorch upgrade */}
+            {gpuHardware?.canEnableGpu && gpuHardware.gpuEnabled && gpuInfo?.activeBackend === 'cpu' && !isInstalling && !installError && (
+              <div className="gpu-status gpu-status-available">
+                <Zap size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">GPU Available - Upgrade Required</span>
+                  <span className="gpu-status-device">
+                    {gpuHardware.hardware.nvidia.found
+                      ? gpuHardware.hardware.nvidia.name
+                      : gpuHardware.hardware.apple_silicon.chip}
+                  </span>
+                </div>
+                <button className="gpu-install-btn" onClick={handleUpgradeToCUDA}>
+                  <Zap size={14} />
+                  Upgrade to CUDA
+                </button>
               </div>
             )}
 
