@@ -669,6 +669,9 @@ export const Toolbar: React.FC = () => {
     if (images.size === 0) return false;
 
     try {
+      // Show saving indicator for large projects
+      startLoading("Saving project...");
+
       // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
@@ -705,8 +708,10 @@ export const Toolbar: React.FC = () => {
     } catch (error) {
       console.error("Failed to save project:", error);
       return false;
+    } finally {
+      stopLoading();
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport, startLoading, stopLoading]);
 
   const handleSaveAs = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;
@@ -720,7 +725,7 @@ export const Toolbar: React.FC = () => {
         getImageOverridesForExport(),
       );
 
-      // Always show save dialog
+      // Always show save dialog - show loading after user confirms location
       const result = await getPlatform().file.saveProjectV2(
         imageList,
         JSON.stringify(manifest, null, 2),
