@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { ImageId, DetectionSettingsExport } from '../types';
 import { DEFAULT_DETECTION_SETTINGS } from '../components/DetectionSettingsDialog/DetectionSettingsDialog';
 import type { DetectionSettings } from '../components/DetectionSettingsDialog/DetectionSettingsDialog';
@@ -53,7 +54,9 @@ interface SettingsState {
   clearAll: () => void;
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => ({
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set, get) => ({
   globalDetectionSettings: { ...DEFAULT_DETECTION_SETTINGS },
   imageSettingsOverrides: new Map(),
   missingModelInfo: null,
@@ -211,4 +214,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       missingKeypointModelInfo: null,
     });
   },
-}));
+    }),
+    {
+      name: 'follicle-labeller-settings',
+      // Only persist global settings - image overrides are stored in project files
+      partialize: (state) => ({
+        globalDetectionSettings: state.globalDetectionSettings,
+      }),
+    }
+  )
+);

@@ -2638,10 +2638,13 @@ export const Toolbar: React.FC = () => {
           onDetectionExportStateChange={setDetectionExportState}
           keypointExportState={keypointExportState}
           onKeypointExportStateChange={setKeypointExportState}
-          // Live settings updates (changes apply immediately and mark file dirty)
+          // Live settings updates (changes apply immediately and mark file dirty if project is open)
           onSettingsChange={(newSettings) => {
             setGlobalDetectionSettings(newSettings);
-            setDirty(true);
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
           }}
           // Per-image settings support
           activeImageId={activeImageId}
@@ -2702,7 +2705,10 @@ export const Toolbar: React.FC = () => {
                 keypointModelSource: modelId ? 'custom' : 'pretrained',
               });
             }
-            setDirty(true);
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
             setShowUnifiedYOLOModelManager(false);
             setModelLibraryInitialTab(undefined);
           }}

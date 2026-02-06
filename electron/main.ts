@@ -893,6 +893,10 @@ async function startBlobServer(): Promise<{
     console.log("[BLOB Server] Script path:", serverPath);
     console.log("[BLOB Server] CWD:", path.dirname(serverPath));
 
+    // Models are stored in userData so they persist across app updates
+    const modelsBaseDir = path.join(app.getPath('userData'), 'models');
+    console.log("[BLOB Server] Models dir:", modelsBaseDir);
+
     pythonSetupStatus = "Starting detection server...";
     mainWindow?.webContents.send("blob:setupProgress", pythonSetupStatus);
 
@@ -903,6 +907,11 @@ async function startBlobServer(): Promise<{
       {
         cwd: path.dirname(serverPath),
         stdio: ["ignore", "pipe", "pipe"],
+        // Pass models directory via environment variable so models persist across updates
+        env: {
+          ...process.env,
+          MODELS_BASE_DIR: modelsBaseDir,
+        },
         // No shell: true - direct execution is more reliable
       },
     );
@@ -1999,14 +2008,15 @@ ipcMain.handle(
 // ============================================
 
 /**
- * Get the models directory path - uses same path as Python services
+ * Get the models directory path.
+ * Models are stored in userData directory so they persist across app updates.
+ * Location: {userData}/models/{modelType}/
+ *   Windows: %APPDATA%/follicle-labeller/models/detection/ or .../keypoint/
+ *   macOS: ~/Library/Application Support/follicle-labeller/models/...
+ *   Linux: ~/.config/follicle-labeller/models/...
  */
 function getModelsDir(modelType: 'detection' | 'keypoint' = 'detection'): string {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "python", "models", modelType);
-  }
-  // In dev mode, __dirname is dist-electron/, so go up one level to find electron/python/
-  return path.join(__dirname, "..", "electron", "python", "models", modelType);
+  return path.join(app.getPath('userData'), 'models', modelType);
 }
 
 // Export model as portable package (ZIP with model.pt + config.json)

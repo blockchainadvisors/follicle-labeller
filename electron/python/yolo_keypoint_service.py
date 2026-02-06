@@ -177,13 +177,17 @@ class YOLOKeypointService:
         Initialize the YOLO keypoint service.
 
         Args:
-            models_dir: Directory to store trained models. If None, uses
-                       a 'models/keypoint' subdirectory next to this script.
+            models_dir: Directory to store trained models. If None, checks
+                       MODELS_BASE_DIR env var, then falls back to a
+                       'models/keypoint' subdirectory next to this script.
         """
         if models_dir:
             self.models_dir = Path(models_dir)
+        elif os.environ.get('MODELS_BASE_DIR'):
+            # Use environment variable (set by Electron to persist models across updates)
+            self.models_dir = Path(os.environ['MODELS_BASE_DIR']) / 'keypoint'
         else:
-            # Default to models/keypoint next to script
+            # Default to models/keypoint next to script (dev mode)
             self.models_dir = Path(__file__).parent / 'models' / 'keypoint'
 
         self.models_dir.mkdir(parents=True, exist_ok=True)
