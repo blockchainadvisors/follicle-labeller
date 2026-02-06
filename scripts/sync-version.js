@@ -36,7 +36,11 @@ try {
   }
 
   // Remove the 'v' prefix if present (v1.2.1 -> 1.2.1)
-  const version = tag.startsWith('v') ? tag.slice(1) : tag;
+  let version = tag.startsWith('v') ? tag.slice(1) : tag;
+
+  // Strip platform suffix (-win, -mac) used for platform-specific releases
+  // e.g., 2.3.14-win -> 2.3.14
+  version = version.replace(/-win$/, '').replace(/-mac$/, '');
 
   // Read and update package.json
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
