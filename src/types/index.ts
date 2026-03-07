@@ -732,7 +732,7 @@ export interface GPUHardwareInfo {
     nvidia: { found: boolean; name?: string; driver_version?: string };
     apple_silicon: { found: boolean; chip?: string };
   };
-  packages: { cupy: boolean; torch: boolean };
+  packages: { cupy: boolean; torch: boolean; torch_cuda: boolean };
   canEnableGpu: boolean;
   gpuEnabled: boolean;
 }

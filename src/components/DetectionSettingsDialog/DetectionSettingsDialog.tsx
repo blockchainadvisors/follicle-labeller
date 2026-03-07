@@ -1061,7 +1061,7 @@ export function DetectionSettingsDialog({
             )}
 
             {/* State 6: GPU Hardware found, packages installed, but CUDA not working - needs PyTorch upgrade */}
-            {gpuHardware?.canEnableGpu && gpuHardware.gpuEnabled && gpuInfo?.activeBackend === 'cpu' && !isInstalling && !installError && (
+            {gpuHardware?.canEnableGpu && gpuHardware.gpuEnabled && !gpuHardware.packages.torch_cuda && gpuInfo?.activeBackend === 'cpu' && !isInstalling && !installError && (
               <div className="gpu-status gpu-status-available">
                 <Zap size={16} />
                 <div className="gpu-status-content">
@@ -1076,6 +1076,22 @@ export function DetectionSettingsDialog({
                   <Zap size={14} />
                   Upgrade to CUDA
                 </button>
+              </div>
+            )}
+
+            {/* State 6b: GPU Hardware found, PyTorch CUDA working, but blob detection uses CPU (CuPy not installed) */}
+            {gpuHardware?.canEnableGpu && gpuHardware.packages.torch_cuda && gpuInfo?.activeBackend === 'cpu' && !isInstalling && !installError && (
+              <div className="gpu-status gpu-status-cuda">
+                <Zap size={16} />
+                <div className="gpu-status-content">
+                  <span className="gpu-status-label">CUDA Acceleration (YOLO)</span>
+                  <span className="gpu-status-device">
+                    {gpuHardware.hardware.nvidia.found
+                      ? gpuHardware.hardware.nvidia.name
+                      : gpuHardware.hardware.apple_silicon?.chip}
+                    {' '}· Blob detection: CPU
+                  </span>
+                </div>
               </div>
             )}
 

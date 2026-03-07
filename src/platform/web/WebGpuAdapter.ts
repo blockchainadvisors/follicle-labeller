@@ -31,6 +31,7 @@ export class WebGpuAdapter implements GpuAdapter {
         packages: {
           cupy: gpuInfo.activeBackend === 'cuda',
           torch: true, // Server has torch installed
+          torch_cuda: gpuInfo.backends?.cuda || false,
         },
         canEnableGpu: gpuInfo.available?.cuda || gpuInfo.available?.mps || false,
         gpuEnabled: gpuInfo.activeBackend !== 'cpu',
@@ -41,7 +42,7 @@ export class WebGpuAdapter implements GpuAdapter {
           nvidia: { found: false },
           apple_silicon: { found: false },
         },
-        packages: { cupy: false, torch: false },
+        packages: { cupy: false, torch: false, torch_cuda: false },
         canEnableGpu: false,
         gpuEnabled: false,
       };

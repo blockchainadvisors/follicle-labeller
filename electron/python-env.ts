@@ -744,7 +744,7 @@ export interface GPUHardwareInfo {
     nvidia: { found: boolean; name?: string; driver_version?: string };
     apple_silicon: { found: boolean; chip?: string };
   };
-  packages: { cupy: boolean; torch: boolean };
+  packages: { cupy: boolean; torch: boolean; torch_cuda: boolean };
   canEnableGpu: boolean;
   gpuEnabled: boolean;
 }
@@ -765,7 +765,7 @@ export async function getGPUHardwareInfo(): Promise<GPUHardwareInfo> {
   if (!fs.existsSync(pythonPath)) {
     return {
       hardware: { nvidia: { found: false }, apple_silicon: { found: false } },
-      packages: { cupy: false, torch: false },
+      packages: { cupy: false, torch: false, torch_cuda: false },
       canEnableGpu: false,
       gpuEnabled: false,
     };
@@ -776,7 +776,7 @@ export async function getGPUHardwareInfo(): Promise<GPUHardwareInfo> {
       if (error || !stdout) {
         resolve({
           hardware: { nvidia: { found: false }, apple_silicon: { found: false } },
-          packages: { cupy: false, torch: false },
+          packages: { cupy: false, torch: false, torch_cuda: false },
           canEnableGpu: false,
           gpuEnabled: false,
         });
@@ -793,7 +793,7 @@ export async function getGPUHardwareInfo(): Promise<GPUHardwareInfo> {
       } catch {
         resolve({
           hardware: { nvidia: { found: false }, apple_silicon: { found: false } },
-          packages: { cupy: false, torch: false },
+          packages: { cupy: false, torch: false, torch_cuda: false },
           canEnableGpu: false,
           gpuEnabled: false,
         });
