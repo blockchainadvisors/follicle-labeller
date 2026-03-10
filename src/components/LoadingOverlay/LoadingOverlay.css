@@ -1,0 +1,52 @@
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease;
+}
+
+.loading-dialog {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  animation: scaleIn 0.15s ease;
+  min-width: 200px;
+}
+
+.loading-spinner {
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+.loading-message {
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.loading-cancel-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--danger);
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.loading-cancel-btn:hover {
+  background-color: var(--danger);
+  color: var(--text-primary);
+}

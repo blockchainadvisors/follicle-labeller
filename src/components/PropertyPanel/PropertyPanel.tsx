@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
+import { Lock, Unlock, AlertTriangle, Crosshair, Loader2 } from 'lucide-react';
 import { useFollicleStore } from '../../store/follicleStore';
 import { useProjectStore } from '../../store/projectStore';
-import { isCircle, isRectangle, isLinear } from '../../types';
+import { useSettingsStore } from '../../store/settingsStore';
+import { isCircle, isRectangle, isLinear, RectangleAnnotation } from '../../types';
+import { blobService } from '../../services/blobService';
 
 export const PropertyPanel: React.FC = () => {
+  const [showUnlockWarning, setShowUnlockWarning] = useState(false);
+  const [showBatchUnlockWarning, setShowBatchUnlockWarning] = useState(false);
+  const [isPredicting, setIsPredicting] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
+  const [predictionProgress, setPredictionProgress] = useState<{ current: number; total: number } | null>(null);
+
   const selectedIds = useFollicleStore(state => state.selectedIds);
   const follicles = useFollicleStore(state => state.follicles);
   const setLabel = useFollicleStore(state => state.setLabel);
@@ -11,11 +20,77 @@ export const PropertyPanel: React.FC = () => {
   const deleteFollicle = useFollicleStore(state => state.deleteFollicle);
   const deleteSelected = useFollicleStore(state => state.deleteSelected);
   const updateFollicle = useFollicleStore(state => state.updateFollicle);
+  const selectMultiple = useFollicleStore(state => state.selectMultiple);
 
   const activeImageId = useProjectStore(state => state.activeImageId);
 
+  // Get keypoint inference settings
+  const keypointInferenceBackend = useSettingsStore(state => state.globalDetectionSettings.keypointInferenceBackend);
+  const keypointConfidenceThreshold = useSettingsStore(state => state.globalDetectionSettings.keypointConfidenceThreshold);
+
   // Get selected annotations that belong to the active image
   const selectedFollicles = follicles.filter(f => selectedIds.has(f.id) && f.imageId === activeImageId);
+
+  // Get rectangles without origins (eligible for prediction)
+  const rectanglesWithoutOrigins = selectedFollicles.filter(
+    (f): f is RectangleAnnotation => isRectangle(f) && !f.origin
+  );
+
+  // Handle prediction for selected rectangles using optimized batch prediction
+  const handlePredictOrigins = useCallback(async () => {
+    if (rectanglesWithoutOrigins.length === 0) return;
+
+    const sessionId = blobService.getSessionId();
+    if (!sessionId) {
+      setPredictionError('No image session. Please load an image first.');
+      return;
+    }
+
+    setIsPredicting(true);
+    setPredictionError(null);
+    setPredictionProgress({ current: 0, total: rectanglesWithoutOrigins.length });
+
+    try {
+      // Use optimized batch prediction from blobService
+      // PyTorch uses batch inference (4.9x faster), TensorRT uses sequential
+      const useTensorRT = keypointInferenceBackend === 'tensorrt';
+
+      const origins = await blobService.predictOriginsForRectangles(
+        sessionId,
+        rectanglesWithoutOrigins.map(rect => ({
+          id: rect.id,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        })),
+        useTensorRT,
+        (current, total) => {
+          setPredictionProgress({ current: Math.ceil(current), total });
+        },
+        keypointConfidenceThreshold ?? 0.3,
+      );
+
+      // Apply predicted origins to rectangles
+      let successCount = 0;
+      for (const [id, origin] of origins) {
+        updateFollicle(id, { origin });
+        successCount++;
+      }
+
+      if (successCount === 0) {
+        setPredictionError('No origins could be predicted. Try with different annotations.');
+      } else if (successCount < rectanglesWithoutOrigins.length) {
+        setPredictionError(`Predicted ${successCount}/${rectanglesWithoutOrigins.length} origins.`);
+      }
+    } catch (error) {
+      console.error('Failed to predict origins:', error);
+      setPredictionError(error instanceof Error ? error.message : 'Prediction failed');
+    } finally {
+      setIsPredicting(false);
+      setPredictionProgress(null);
+    }
+  }, [rectanglesWithoutOrigins, updateFollicle, keypointInferenceBackend, keypointConfidenceThreshold]);
 
   // No selection
   if (selectedFollicles.length === 0) {
@@ -28,8 +103,8 @@ export const PropertyPanel: React.FC = () => {
             <h4>Tips:</h4>
             <ul>
               <li><strong>Create:</strong> Click to start, click again to finish</li>
-              <li><strong>Circle (1):</strong> Click center, click for radius</li>
-              <li><strong>Rectangle (2):</strong> Click corner, click opposite corner</li>
+              <li><strong>Rectangle (1):</strong> Click corner, click opposite corner</li>
+              <li><strong>Circle (2):</strong> Click center, click for radius</li>
               <li><strong>Linear (3):</strong> Click start, click end, click for width</li>
               <li><strong>Select:</strong> Click on an annotation</li>
               <li><strong>Ctrl+Click:</strong> Add/remove from selection</li>
@@ -53,6 +128,35 @@ export const PropertyPanel: React.FC = () => {
     const circleCount = selectedFollicles.filter(isCircle).length;
     const rectangleCount = selectedFollicles.filter(isRectangle).length;
     const linearCount = selectedFollicles.filter(isLinear).length;
+
+    // Count rectangles with/without origins
+    const allRectangles = selectedFollicles.filter(isRectangle);
+    const rectanglesWithOrigin = allRectangles.filter(r => r.origin);
+    const rectanglesWithoutOrigin = allRectangles.filter(r => !r.origin);
+    const hasRectangles = allRectangles.length > 0;
+
+    // Filter handlers - modify selection to keep only matching annotations
+    const handleKeepWithOrigin = () => {
+      const toKeep = selectedFollicles
+        .filter(f => !isRectangle(f) || f.origin !== undefined)
+        .map(f => f.id);
+      selectMultiple(toKeep);
+    };
+
+    const handleKeepWithoutOrigin = () => {
+      const toKeep = selectedFollicles
+        .filter(f => !isRectangle(f) || f.origin === undefined)
+        .map(f => f.id);
+      selectMultiple(toKeep);
+    };
+
+    // Batch unlock handler - removes origins from all selected rectangles
+    const handleBatchUnlock = () => {
+      for (const rect of rectanglesWithOrigin) {
+        updateFollicle(rect.id, { origin: undefined });
+      }
+      setShowBatchUnlockWarning(false);
+    };
 
     // Batch color change handler
     const handleBatchColorChange = (color: string) => {
@@ -79,6 +183,43 @@ export const PropertyPanel: React.FC = () => {
           </div>
         </div>
 
+        {/* Origin filter for rectangles - modifies selection */}
+        {hasRectangles && (
+          <div className="property-group">
+            <label>Filter Selection</label>
+            <div className="origin-filter-buttons">
+              <button
+                className="filter-button"
+                onClick={handleKeepWithOrigin}
+                disabled={rectanglesWithOrigin.length === 0}
+              >
+                Keep With Origin ({rectanglesWithOrigin.length})
+              </button>
+              <button
+                className="filter-button"
+                onClick={handleKeepWithoutOrigin}
+                disabled={rectanglesWithoutOrigin.length === 0}
+              >
+                Keep Without Origin ({rectanglesWithoutOrigin.length})
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Batch unlock for rectangles with origins */}
+        {rectanglesWithOrigin.length > 0 && (
+          <div className="property-group">
+            <label>Batch Unlock</label>
+            <button
+              className="unlock-button batch-unlock"
+              onClick={() => setShowBatchUnlockWarning(true)}
+            >
+              <Unlock size={14} />
+              Unlock All ({rectanglesWithOrigin.length})
+            </button>
+          </div>
+        )}
+
         <div className="property-group">
           <label htmlFor="batch-color">Batch Color</label>
           <div className="color-picker">
@@ -92,6 +233,43 @@ export const PropertyPanel: React.FC = () => {
           </div>
         </div>
 
+        {/* Predict Origins button for unlocked rectangles */}
+        {rectanglesWithoutOrigins.length > 0 && (
+          <div className="property-group">
+            <label>Origin Prediction</label>
+            <div className="predict-button-wrapper">
+              <button
+                className="predict-origins-button"
+                onClick={handlePredictOrigins}
+                disabled={isPredicting}
+              >
+                {isPredicting ? (
+                  <>
+                    <Loader2 size={14} className="spin" />
+                    Predicting...
+                  </>
+                ) : (
+                  <>
+                    <Crosshair size={14} />
+                    Predict Origins ({rectanglesWithoutOrigins.length})
+                  </>
+                )}
+              </button>
+              {isPredicting && predictionProgress && (
+                <div className="predict-progress-bar">
+                  <div
+                    className="predict-progress-fill"
+                    style={{ width: `${(predictionProgress.current / predictionProgress.total) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            {predictionError && (
+              <span className="prediction-error">{predictionError}</span>
+            )}
+          </div>
+        )}
+
         <div className="property-actions">
           <button
             className="delete-button"
@@ -100,6 +278,34 @@ export const PropertyPanel: React.FC = () => {
             Delete All ({selectedFollicles.length})
           </button>
         </div>
+
+        {/* Batch unlock confirmation dialog */}
+        {showBatchUnlockWarning && (
+          <div className="unlock-warning-overlay">
+            <div className="unlock-warning-dialog">
+              <AlertTriangle size={24} className="warning-icon" />
+              <p className="warning-title">Unlock {rectanglesWithOrigin.length} Rectangles?</p>
+              <p className="warning-text">
+                This will delete the origin point and direction data from all {rectanglesWithOrigin.length} selected rectangles with origins.
+                You will need to set them again.
+              </p>
+              <div className="warning-actions">
+                <button
+                  className="cancel-button"
+                  onClick={() => setShowBatchUnlockWarning(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="danger-button"
+                  onClick={handleBatchUnlock}
+                >
+                  Unlock All
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -174,6 +380,74 @@ export const PropertyPanel: React.FC = () => {
               <span>H: {Math.round(selected.height)} px</span>
             </div>
           </div>
+
+          {/* Lock status and origin info */}
+          {selected.origin ? (
+            <>
+              <div className="property-group lock-status">
+                <div className="lock-info">
+                  <Lock size={14} />
+                  <span>Locked (origin set)</span>
+                </div>
+                <button
+                  className="unlock-button"
+                  onClick={() => setShowUnlockWarning(true)}
+                >
+                  <Unlock size={14} />
+                  Unlock
+                </button>
+              </div>
+
+              <div className="property-group readonly">
+                <label>Origin Point</label>
+                <div className="coordinate-display">
+                  <span>X: {selected.origin.originPoint.x.toFixed(1)}</span>
+                  <span>Y: {selected.origin.originPoint.y.toFixed(1)}</span>
+                </div>
+              </div>
+
+              <div className="property-group readonly">
+                <label>Direction</label>
+                <span className="radius-display">
+                  {(selected.origin.directionAngle * 180 / Math.PI).toFixed(0)}°
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="property-group origin-actions">
+              <span className="hint-text">Double-click to set origin manually</span>
+              <div className="predict-button-wrapper">
+                <button
+                  className="predict-origins-button small"
+                  onClick={handlePredictOrigins}
+                  disabled={isPredicting}
+                >
+                  {isPredicting ? (
+                    <>
+                      <Loader2 size={14} className="spin" />
+                      Predicting...
+                    </>
+                  ) : (
+                    <>
+                      <Crosshair size={14} />
+                      Predict Origin
+                    </>
+                  )}
+                </button>
+                {isPredicting && predictionProgress && (
+                  <div className="predict-progress-bar">
+                    <div
+                      className="predict-progress-fill"
+                      style={{ width: `${(predictionProgress.current / predictionProgress.total) * 100}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+              {predictionError && (
+                <span className="prediction-error">{predictionError}</span>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -239,6 +513,37 @@ export const PropertyPanel: React.FC = () => {
           Delete {shapeLabel}
         </button>
       </div>
+
+      {/* Unlock confirmation dialog */}
+      {showUnlockWarning && isRectangle(selected) && (
+        <div className="unlock-warning-overlay">
+          <div className="unlock-warning-dialog">
+            <AlertTriangle size={24} className="warning-icon" />
+            <p className="warning-title">Unlock Rectangle?</p>
+            <p className="warning-text">
+              Unlocking will delete the origin point and direction data.
+              You will need to set them again.
+            </p>
+            <div className="warning-actions">
+              <button
+                className="cancel-button"
+                onClick={() => setShowUnlockWarning(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="danger-button"
+                onClick={() => {
+                  updateFollicle(selected.id, { origin: undefined });
+                  setShowUnlockWarning(false);
+                }}
+              >
+                Unlock & Delete Origin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useProjectStore, generateImageId } from '../../store/projectStore';
 import { useFollicleStore } from '../../store/follicleStore';
+import { useSettingsStore } from '../../store/settingsStore';
+import { useLoadingStore } from '../../store/loadingStore';
 import { ProjectImage } from '../../types';
+import { AlertTriangle, Settings } from 'lucide-react';
 
 // Generate thumbnail using OffscreenCanvas
 async function generateThumbnail(imageBitmap: ImageBitmap, maxSize: number = 48): Promise<string> {
@@ -28,11 +31,12 @@ interface ImageItemProps {
   image: ProjectImage;
   isActive: boolean;
   annotationCount: number;
+  hasCustomSettings: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }
 
-const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, onSelect, onRemove }) => {
+const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, hasCustomSettings, onSelect, onRemove }) => {
   const [thumbnail, setThumbnail] = useState<string>('');
   const [isHovered, setIsHovered] = useState(false);
 
@@ -72,6 +76,11 @@ const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount,
       <div className="image-info">
         <span className="image-name" title={image.fileName}>
           {truncateFileName(image.fileName)}
+          {hasCustomSettings && (
+            <span className="custom-settings-indicator" title="Has custom detection settings">
+              <Settings size={10} />
+            </span>
+          )}
         </span>
         <span className="annotation-count">
           {annotationCount} annotation{annotationCount !== 1 ? 's' : ''}
@@ -104,43 +113,101 @@ export const ImageExplorer: React.FC = () => {
   const follicles = useFollicleStore(state => state.follicles);
   const deleteFolliclesForImage = useFollicleStore(state => state.deleteFolliclesForImage);
 
+  const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
+
+  // Loading store for global loading overlay
+  const startLoading = useLoadingStore((state) => state.startLoading);
+  const stopLoading = useLoadingStore((state) => state.stopLoading);
+
+  // State for delete confirmation dialog
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    imageId: string;
+    fileName: string;
+    annotationCount: number;
+  } | null>(null);
+
   // Get annotation counts per image
   const getAnnotationCount = (imageId: string) => {
     return follicles.filter(f => f.imageId === imageId).length;
   };
 
   const handleAddImage = async () => {
-    const result = await window.electronAPI.openImageDialog();
-    if (!result) return;
+    try {
+      const result = await window.electronAPI.openImageDialog();
+      if (!result) return;
 
-    const { fileName, data } = result;
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading image...", true);
 
-    // Create object URL and ImageBitmap
-    const blob = new Blob([data]);
-    const imageSrc = URL.createObjectURL(blob);
-    const imageBitmap = await createImageBitmap(blob);
+      try {
+        const { fileName, data } = result;
 
-    const newImage: ProjectImage = {
-      id: generateImageId(),
-      fileName,
-      width: imageBitmap.width,
-      height: imageBitmap.height,
-      imageData: data,
-      imageBitmap,
-      imageSrc,
-      viewport: { offsetX: 0, offsetY: 0, scale: 1 },
-      createdAt: Date.now(),
-      sortOrder: imageOrder.length,
-    };
+        // Create object URL and ImageBitmap
+        const blob = new Blob([data]);
+        const imageSrc = URL.createObjectURL(blob);
 
-    addImage(newImage);
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(imageSrc);
+          return;
+        }
+
+        const imageBitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(imageSrc);
+          imageBitmap.close();
+          return;
+        }
+
+        const newImage: ProjectImage = {
+          id: generateImageId(),
+          fileName,
+          width: imageBitmap.width,
+          height: imageBitmap.height,
+          imageData: data,
+          imageBitmap,
+          imageSrc,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: imageOrder.length,
+        };
+
+        addImage(newImage);
+      } finally {
+        stopLoading();
+      }
+    } catch (error) {
+      console.error("Failed to add image:", error);
+    }
   };
 
+  // Show confirmation dialog before removing image
   const handleRemoveImage = (imageId: string) => {
+    const image = images.get(imageId);
+    if (!image) return;
+
+    const annotationCount = getAnnotationCount(imageId);
+    setDeleteConfirm({
+      imageId,
+      fileName: image.fileName,
+      annotationCount,
+    });
+  };
+
+  // Actually remove the image after confirmation
+  const confirmRemoveImage = () => {
+    if (!deleteConfirm) return;
+
     // Delete annotations for this image
-    deleteFolliclesForImage(imageId);
+    deleteFolliclesForImage(deleteConfirm.imageId);
     // Remove the image
-    removeImage(imageId);
+    removeImage(deleteConfirm.imageId);
+    // Close dialog
+    setDeleteConfirm(null);
+  };
+
+  const cancelRemoveImage = () => {
+    setDeleteConfirm(null);
   };
 
   // Don't render if only one image
@@ -149,30 +216,59 @@ export const ImageExplorer: React.FC = () => {
   }
 
   return (
-    <div className="image-explorer">
-      <div className="explorer-header">
-        <h3>Images</h3>
-        <button className="add-image-btn" onClick={handleAddImage} title="Add image">
-          +
-        </button>
-      </div>
-      <div className="image-list">
-        {imageOrder.map(imageId => {
-          const image = images.get(imageId);
-          if (!image) return null;
+    <>
+      <div className="image-explorer">
+        <div className="explorer-header">
+          <h3>Images</h3>
+          <button className="add-image-btn" onClick={handleAddImage} title="Add image">
+            +
+          </button>
+        </div>
+        <div className="image-list">
+          {imageOrder.map(imageId => {
+            const image = images.get(imageId);
+            if (!image) return null;
 
-          return (
-            <ImageItem
-              key={imageId}
-              image={image}
-              isActive={imageId === activeImageId}
-              annotationCount={getAnnotationCount(imageId)}
-              onSelect={() => setActiveImage(imageId)}
-              onRemove={() => handleRemoveImage(imageId)}
-            />
-          );
-        })}
+            return (
+              <ImageItem
+                key={imageId}
+                image={image}
+                isActive={imageId === activeImageId}
+                annotationCount={getAnnotationCount(imageId)}
+                hasCustomSettings={imageSettingsOverrides.has(imageId)}
+                onSelect={() => setActiveImage(imageId)}
+                onRemove={() => handleRemoveImage(imageId)}
+              />
+            );
+          })}
+        </div>
       </div>
-    </div>
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <div className="delete-confirm-overlay" onClick={cancelRemoveImage}>
+          <div className="delete-confirm-dialog" onClick={e => e.stopPropagation()}>
+            <div className="delete-confirm-icon">
+              <AlertTriangle size={32} />
+            </div>
+            <h3>Delete Image?</h3>
+            <p className="delete-confirm-filename">{deleteConfirm.fileName}</p>
+            {deleteConfirm.annotationCount > 0 && (
+              <p className="delete-confirm-warning">
+                This will also delete <strong>{deleteConfirm.annotationCount}</strong> annotation{deleteConfirm.annotationCount !== 1 ? 's' : ''}.
+              </p>
+            )}
+            <div className="delete-confirm-actions">
+              <button className="delete-confirm-cancel" onClick={cancelRemoveImage}>
+                Cancel
+              </button>
+              <button className="delete-confirm-delete" onClick={confirmRemoveImage}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };

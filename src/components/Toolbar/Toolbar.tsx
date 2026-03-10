@@ -3,9 +3,6 @@ import {
   Pencil,
   MousePointer2,
   Hand,
-  Circle,
-  Square,
-  Minus,
   ZoomIn,
   ZoomOut,
   RotateCcw,
@@ -24,17 +21,25 @@ import {
   BarChart3,
   Settings,
   GraduationCap,
-  SlidersHorizontal,
+  Brain,
+  Database,
+  FileUp,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
+import { useLoadingStore } from "../../store/loadingStore";
 import { useFollicleStore, useTemporalStore } from "../../store/follicleStore";
 import {
   generateExportV2,
   parseImportV2,
   exportYOLODataset,
   exportToCSV,
+  exportYOLOKeypointDatasetZip,
+  exportSelectedAnnotationsJSON,
+  importAnnotationsFromJSONWithDuplicateCheck,
 } from "../../utils/export-utils";
+import { exportToCOCO, getCOCOExportStats } from "../../utils/coco-export";
+import { isCOCOFormat, importCOCOWithStats } from "../../utils/coco-import";
 import {
   extractAllFolliclesToZip,
   extractSelectedFolliclesToZip,
@@ -44,18 +49,39 @@ import {
 import { blobService } from "../../services/blobService";
 import {
   DetectionSettingsDialog,
-  DetectionSettings,
-  DEFAULT_DETECTION_SETTINGS,
+  GPUInstallState,
+  TensorRTExportState,
 } from "../DetectionSettingsDialog/DetectionSettingsDialog";
+import { useSettingsStore } from "../../store/settingsStore";
 import {
   LearnedDetectionDialog,
   LearnedDetectionSettings,
   DEFAULT_LEARNED_SETTINGS,
 } from "../LearnedDetectionDialog/LearnedDetectionDialog";
 import { ExportMenu, ExportType } from "../ExportMenu/ExportMenu";
+import { ShapeToolDropdown } from "../ShapeToolDropdown/ShapeToolDropdown";
 import { ThemePicker } from "../ThemePicker/ThemePicker";
-import { ProjectImage, RectangleAnnotation } from "../../types";
+import { UnifiedYOLOTraining } from "../UnifiedYOLOTraining";
+import { UnifiedYOLOModelManager } from "../UnifiedYOLOModelManager";
+import {
+  ImportAnnotationsDialog,
+  ImportAnalysis,
+  ImportOptions,
+} from "../ImportAnnotationsDialog/ImportAnnotationsDialog";
+import {
+  DuplicateDetectionDialog,
+  DuplicateReport,
+  DuplicateAction,
+  findDuplicates,
+} from "../DuplicateDetectionDialog";
+import { ServerErrorDialog } from "../ServerErrorDialog/ServerErrorDialog";
+import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
+import { yoloKeypointService } from "../../services/yoloKeypointService";
+import type { BlobDetection } from "../../services/blobService";
+import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { generateId } from "../../utils/id-generator";
+import { getPlatform } from "../../platform";
+import type { LoadProjectResult } from "../../platform/types";
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -97,8 +123,6 @@ export const Toolbar: React.FC = () => {
   const toggleLabels = useCanvasStore((state) => state.toggleLabels);
   const showShapes = useCanvasStore((state) => state.showShapes);
   const toggleShapes = useCanvasStore((state) => state.toggleShapes);
-  const currentShapeType = useCanvasStore((state) => state.currentShapeType);
-  const setShapeType = useCanvasStore((state) => state.setShapeType);
   const selectionToolType = useCanvasStore((state) => state.selectionToolType);
   const setSelectionToolType = useCanvasStore(
     (state) => state.setSelectionToolType,
@@ -140,6 +164,7 @@ export const Toolbar: React.FC = () => {
   const follicles = useFollicleStore((state) => state.follicles);
   const selectedIds = useFollicleStore((state) => state.selectedIds);
   const importFollicles = useFollicleStore((state) => state.importFollicles);
+  const updateFollicle = useFollicleStore((state) => state.updateFollicle);
   const clearAll = useFollicleStore((state) => state.clearAll);
 
   const temporalStore = useTemporalStore();
@@ -153,6 +178,12 @@ export const Toolbar: React.FC = () => {
   const [annotationCount, setAnnotationCount] = useState(0);
   const [canDetect, setCanDetect] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
+  const [setupStatus, setSetupStatus] = useState<string>("");
+  const [downloadPercent, setDownloadPercent] = useState<number | undefined>();
+  const [serverError, setServerError] = useState<{
+    error: string;
+    errorDetails?: string;
+  } | null>(null);
   const MIN_ANNOTATIONS = 3;
 
   // Refs to prevent duplicate operations
@@ -160,17 +191,160 @@ export const Toolbar: React.FC = () => {
   const isSyncingAnnotations = useRef(false);
   const lastSessionImageId = useRef<string | null>(null);
 
-  // State for detection settings dialog (manual settings mode)
-  const [detectionSettings, setDetectionSettings] = useState<DetectionSettings>(
-    DEFAULT_DETECTION_SETTINGS,
-  );
+  // Settings store for detection settings (persisted with project)
+  const globalDetectionSettings = useSettingsStore(state => state.globalDetectionSettings);
+  const setGlobalDetectionSettings = useSettingsStore(state => state.setGlobalDetectionSettings);
+  const setImageSettingsOverride = useSettingsStore(state => state.setImageSettingsOverride);
+  const clearImageSettingsOverride = useSettingsStore(state => state.clearImageSettingsOverride);
+  const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
+  const getEffectiveSettings = useSettingsStore(state => state.getEffectiveSettings);
+  const loadSettingsFromProject = useSettingsStore(state => state.loadFromProject);
+  const clearSettings = useSettingsStore(state => state.clearAll);
+  const getGlobalSettingsForExport = useSettingsStore(state => state.getGlobalSettingsForExport);
+  const getImageOverridesForExport = useSettingsStore(state => state.getImageOverridesForExport);
+  const missingModelInfo = useSettingsStore(state => state.missingModelInfo);
+  const missingKeypointModelInfo = useSettingsStore(state => state.missingKeypointModelInfo);
+  const validateModelAvailability = useSettingsStore(state => state.validateModelAvailability);
+  const clearMissingModelWarning = useSettingsStore(state => state.clearMissingModelWarning);
+  const clearMissingKeypointModelWarning = useSettingsStore(state => state.clearMissingKeypointModelWarning);
+
+  // Use effective settings for active image (supports per-image overrides)
+  const detectionSettings = getEffectiveSettings(activeImageId);
+  const hasImageOverride = activeImageId ? imageSettingsOverrides.has(activeImageId) : false;
+
+  // State for detection settings dialog visibility
   const [showDetectionSettings, setShowDetectionSettings] = useState(false);
+
+  // Handler for when the BLOB server restarts (e.g., after GPU install)
+  // Clears session state to force recreation
+  const handleServerRestarted = () => {
+    setBlobSessionId(null);
+    lastSessionImageId.current = null;
+    setAnnotationCount(0);
+    setCanDetect(false);
+  };
+
+  // Handler for retrying server start after error
+  const handleRetryServerStart = useCallback(async () => {
+    setServerError(null);
+    setServerStarting(true);
+    setDownloadPercent(undefined);
+    setSetupStatus("Retrying server start...");
+    try {
+      const result = await getPlatform().blob.startServer();
+      if (result.success) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const available = await blobService.isAvailable();
+        setBlobServerConnected(available);
+        setSetupStatus("");
+        setDownloadPercent(undefined);
+      } else {
+        console.error("Failed to start BLOB server:", result.error);
+        setBlobServerConnected(false);
+        setSetupStatus(`Error: ${result.error}`);
+        if (result.errorDetails) {
+          setServerError({
+            error: result.error || 'Unknown error',
+            errorDetails: result.errorDetails,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error starting BLOB server:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      setSetupStatus(`Error: ${errorMessage}`);
+      setServerError({
+        error: 'Failed to start backend server',
+        errorDetails: errorMessage,
+      });
+    } finally {
+      setServerStarting(false);
+      setDownloadPercent(undefined);
+    }
+  }, []);
+
+  // Handler to open Model Library from Inference Settings
+  const handleOpenModelLibrary = (tab: 'detection' | 'origin') => {
+    setModelLibraryInitialTab(tab);
+    setShowDetectionSettings(false);  // Close inference settings
+    setShowUnifiedYOLOModelManager(true);  // Open model library
+  };
 
   // State for learned detection dialog
   const [learnedSettings, setLearnedSettings] =
     useState<LearnedDetectionSettings>(DEFAULT_LEARNED_SETTINGS);
   const [showLearnedDetection, setShowLearnedDetection] = useState(false);
   const [isLearnedDetecting, setIsLearnedDetecting] = useState(false);
+
+  // State for GPU package installation (persisted across dialog open/close)
+  const [gpuInstallState, setGpuInstallState] = useState<GPUInstallState>({
+    isInstalling: false,
+    progress: '',
+    error: null,
+  });
+
+  // State for TensorRT export (persisted across dialog open/close)
+  const [detectionExportState, setDetectionExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
+  });
+
+  const [keypointExportState, setKeypointExportState] = useState<TensorRTExportState>({
+    isExporting: false,
+    progress: '',
+    error: null,
+    enginePath: null,
+    completed: false,
+  });
+
+  // Elapsed time for export progress display
+  const [exportElapsedSeconds, setExportElapsedSeconds] = useState(0);
+
+  // Update elapsed time every second during export
+  useEffect(() => {
+    if (!keypointExportState.isExporting && !detectionExportState.isExporting) {
+      setExportElapsedSeconds(0);
+      return;
+    }
+
+    const startTime = keypointExportState.isExporting ? keypointExportState.startTime : detectionExportState.startTime;
+    if (!startTime) return;
+
+    // Calculate initial elapsed time
+    setExportElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+
+    const interval = setInterval(() => {
+      setExportElapsedSeconds(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [keypointExportState.isExporting, keypointExportState.startTime, detectionExportState.isExporting, detectionExportState.startTime]);
+
+  // Format seconds into "Xm Ys" format
+  const formatExportTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    if (mins > 0) {
+      return `${mins}m ${secs}s`;
+    }
+    return `${secs}s`;
+  };
+
+  // State for unified YOLO dialogs
+  const [showUnifiedYOLOTraining, setShowUnifiedYOLOTraining] = useState(false);
+  const [showUnifiedYOLOModelManager, setShowUnifiedYOLOModelManager] = useState(false);
+  const [modelLibraryInitialTab, setModelLibraryInitialTab] = useState<'detection' | 'origin' | undefined>();
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
+
+  // State for duplicate detection dialog
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [duplicateReport, setDuplicateReport] = useState<DuplicateReport | null>(null);
+  const [pendingDetections, setPendingDetections] = useState<RectangleAnnotation[]>([]);
+  const [detectionMethodName, setDetectionMethodName] = useState<string>("Detection");
 
   // Get annotation count for active image only
   const activeImageAnnotationCount = activeImageId
@@ -180,7 +354,7 @@ export const Toolbar: React.FC = () => {
   // Update menu state when project changes
   useEffect(() => {
     const hasProject = images.size > 0;
-    window.electronAPI.setProjectState(hasProject);
+    getPlatform().menu.setProjectState(hasProject);
   }, [images.size]);
 
   // Track follicle changes to mark project as dirty
@@ -201,33 +375,63 @@ export const Toolbar: React.FC = () => {
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
+    // Listen for setup progress events (Electron only, includes download percent when downloading Python)
+    const cleanupProgress = getPlatform().blob.onSetupProgress(
+      (status, percent) => {
+        setSetupStatus(status);
+        setDownloadPercent(percent);
+      }
+    );
+
     const startServer = async () => {
       setServerStarting(true);
+      setServerError(null);
+      setSetupStatus("Checking server status...");
       try {
         // Check if server is already running
         const isRunning = await blobService.isAvailable();
         if (isRunning) {
           setBlobServerConnected(true);
           setServerStarting(false);
+          setSetupStatus("");
+          setDownloadPercent(undefined);
           return;
         }
 
-        // Start the server via Electron IPC
-        const result = await window.electronAPI.blob.startServer();
+        // Start the server (Electron: via IPC, Web: server already running externally)
+        const result = await getPlatform().blob.startServer();
         if (result.success) {
           // Wait a bit for server to be fully ready
           await new Promise((resolve) => setTimeout(resolve, 1000));
           const available = await blobService.isAvailable();
           setBlobServerConnected(available);
+          setSetupStatus("");
+          setDownloadPercent(undefined);
         } else {
           console.error("Failed to start BLOB server:", result.error);
           setBlobServerConnected(false);
+          setSetupStatus(`Error: ${result.error}`);
+          // Show error dialog with details if available
+          if (result.errorDetails) {
+            setServerError({
+              error: result.error || 'Unknown error',
+              errorDetails: result.errorDetails,
+            });
+          }
         }
       } catch (error) {
         console.error("Error starting BLOB server:", error);
         setBlobServerConnected(false);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        setSetupStatus(`Error: ${errorMessage}`);
+        setServerError({
+          error: 'Failed to start backend server',
+          errorDetails: errorMessage,
+        });
       } finally {
         setServerStarting(false);
+        // Clear download percent if not already cleared
+        setDownloadPercent(undefined);
       }
     };
 
@@ -235,6 +439,7 @@ export const Toolbar: React.FC = () => {
 
     // Cleanup on unmount
     return () => {
+      cleanupProgress();
       if (blobSessionId) {
         blobService.clearSession(blobSessionId);
       }
@@ -329,7 +534,7 @@ export const Toolbar: React.FC = () => {
     };
 
     createSession();
-  }, [activeImageId, blobServerConnected]); // Only depend on ID, not full image object
+  }, [activeImageId, blobServerConnected, blobSessionId]); // Include blobSessionId to recreate session when it's reset
 
   // Get annotation count for the active image to use as a stable dependency
   const activeImageFollicleCount = follicles.filter(
@@ -384,7 +589,15 @@ export const Toolbar: React.FC = () => {
         setAnnotationCount(syncResult.annotationCount);
         setCanDetect(syncResult.canDetect);
       } catch (error) {
-        console.error("Failed to sync annotations:", error);
+        // If session is invalid (server restarted), reset session state to trigger recreation
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('Invalid session') || errorMessage.includes('session')) {
+          console.warn('Blob session expired, will recreate on next image change');
+          setBlobSessionId(null);
+          lastSessionImageId.current = null;
+        } else {
+          console.error("Failed to sync annotations:", error);
+        }
       } finally {
         isSyncingAnnotations.current = false;
       }
@@ -398,16 +611,37 @@ export const Toolbar: React.FC = () => {
     blobServerConnected,
   ]);
 
+  // Loading store for global loading overlay
+  const startLoading = useLoadingStore((state) => state.startLoading);
+  const stopLoading = useLoadingStore((state) => state.stopLoading);
+
   // Handler functions
   const handleOpenImage = useCallback(async () => {
     try {
-      const result = await window.electronAPI.openImageDialog();
-      if (result) {
+      const result = await getPlatform().file.openImageDialog();
+      if (!result) return;
+
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading image...", true);
+
+      try {
         const blob = new Blob([result.data]);
         const url = URL.createObjectURL(blob);
 
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+
         // Create pre-decoded ImageBitmap for smooth rendering
-        const bitmap = await createImageBitmap(blob);
+        // Use imageOrientation: 'from-image' to apply EXIF rotation (matches backend)
+        const bitmap = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+
+        if (controller?.signal.aborted) {
+          URL.revokeObjectURL(url);
+          bitmap.close();
+          return;
+        }
 
         const newImage: ProjectImage = {
           id: generateImageId(),
@@ -423,26 +657,34 @@ export const Toolbar: React.FC = () => {
         };
 
         addImage(newImage);
+      } finally {
+        stopLoading();
       }
     } catch (error) {
       console.error("Failed to open image:", error);
     }
-  }, [addImage, imageOrder.length]);
+  }, [addImage, imageOrder.length, startLoading, stopLoading]);
 
   const handleSave = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;
 
     try {
+      // Show saving indicator for large projects
+      startLoading("Saving project...");
+
+      // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
         follicles,
+        getGlobalSettingsForExport(),
+        getImageOverridesForExport(),
       );
 
       let result: { success: boolean; filePath?: string };
 
       if (currentProjectPath) {
         // Silent save to existing path
-        result = await window.electronAPI.saveProjectV2ToPath(
+        result = await getPlatform().file.saveProjectV2ToPath(
           currentProjectPath,
           imageList,
           JSON.stringify(manifest, null, 2),
@@ -450,7 +692,7 @@ export const Toolbar: React.FC = () => {
         );
       } else {
         // Show save dialog
-        result = await window.electronAPI.saveProjectV2(
+        result = await getPlatform().file.saveProjectV2(
           imageList,
           JSON.stringify(manifest, null, 2),
           JSON.stringify(annotations, null, 2),
@@ -466,20 +708,25 @@ export const Toolbar: React.FC = () => {
     } catch (error) {
       console.error("Failed to save project:", error);
       return false;
+    } finally {
+      stopLoading();
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport, startLoading, stopLoading]);
 
   const handleSaveAs = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;
 
     try {
+      // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
         follicles,
+        getGlobalSettingsForExport(),
+        getImageOverridesForExport(),
       );
 
-      // Always show save dialog
-      const result = await window.electronAPI.saveProjectV2(
+      // Always show save dialog - show loading after user confirms location
+      const result = await getPlatform().file.saveProjectV2(
         imageList,
         JSON.stringify(manifest, null, 2),
         JSON.stringify(annotations, null, 2),
@@ -496,14 +743,14 @@ export const Toolbar: React.FC = () => {
       console.error("Failed to save project:", error);
       return false;
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
   // Check for unsaved changes and prompt user
   // Returns true if safe to proceed, false if user cancelled
   const checkUnsavedChanges = useCallback(async (): Promise<boolean> => {
     if (!isDirty) return true;
 
-    const response = await window.electronAPI.showUnsavedChangesDialog();
+    const response = await getPlatform().file.showUnsavedChangesDialog();
 
     if (response === "save") {
       const saved = await handleSave();
@@ -519,17 +766,21 @@ export const Toolbar: React.FC = () => {
   // Load project from parsed result (shared logic)
   const loadProjectFromResult = useCallback(
     async (
-      result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>,
+      result: LoadProjectResult | null,
     ) => {
       if (!result) return;
 
       // Clear existing project
       clearProject();
       clearAll();
+      clearSettings();
 
-      const { loadedImages, loadedFollicles } = await parseImportV2(result);
+      const { loadedImages, loadedFollicles, globalSettings, imageSettingsMap } = await parseImportV2(result);
 
-      // Add all loaded images
+      // Load detection settings (uses defaults for old files without settings)
+      loadSettingsFromProject(globalSettings, imageSettingsMap);
+
+      // Add all loaded images first (don't block on model validation)
       for (const image of loadedImages) {
         addImage(image);
       }
@@ -543,10 +794,33 @@ export const Toolbar: React.FC = () => {
       // Mark as clean after loading - use setTimeout to ensure it runs after
       // dirty-tracking effects have fired (addImage sets isDirty, useEffect also sets it)
       setTimeout(markClean, 0);
+
+      // Validate model availability in background (don't block UI)
+      // This checks if the saved YOLO models (detection + keypoint) exist on this machine
+      Promise.all([
+        yoloDetectionService.listModels().catch(() => []),
+        yoloKeypointService.listModels().catch(() => []),
+      ])
+        .then(([detectionModels, keypointModels]) => {
+          const detectionModelIds = detectionModels.map(m => m.id);
+          const keypointModelIds = keypointModels.map(m => m.id);
+          validateModelAvailability(detectionModelIds, keypointModelIds);
+        })
+        .catch(error => {
+          console.warn('Failed to validate YOLO models:', error);
+          // If we can't list models, we can't validate - clear any warnings
+          clearMissingModelWarning();
+          clearMissingKeypointModelWarning();
+        });
     },
     [
       clearProject,
       clearAll,
+      clearSettings,
+      loadSettingsFromProject,
+      validateModelAvailability,
+      clearMissingModelWarning,
+      clearMissingKeypointModelWarning,
       addImage,
       importFollicles,
       setCurrentProjectPath,
@@ -560,13 +834,23 @@ export const Toolbar: React.FC = () => {
     if (!canProceed) return;
 
     try {
-      const result = await window.electronAPI.loadProjectV2();
-      await loadProjectFromResult(result);
+      const result = await getPlatform().file.loadProjectV2();
+      if (!result) return;
+
+      // Show loading spinner after file is selected
+      const controller = startLoading("Loading project...", true);
+
+      try {
+        if (controller?.signal.aborted) return;
+        await loadProjectFromResult(result);
+      } finally {
+        stopLoading();
+      }
     } catch (error) {
       console.error("Failed to load project:", error);
       alert("Failed to load project file. Please check the file format.");
     }
-  }, [loadProjectFromResult, checkUnsavedChanges]);
+  }, [loadProjectFromResult, checkUnsavedChanges, startLoading, stopLoading]);
 
   const handleCloseProject = useCallback(async () => {
     // Check for unsaved changes first
@@ -575,7 +859,8 @@ export const Toolbar: React.FC = () => {
 
     clearProject();
     clearAll();
-  }, [clearProject, clearAll, checkUnsavedChanges]);
+    clearSettings();
+  }, [clearProject, clearAll, clearSettings, checkUnsavedChanges]);
 
   const handleUndo = useCallback(() => {
     temporalStore.getState().undo();
@@ -613,7 +898,7 @@ export const Toolbar: React.FC = () => {
 
       // If there's a selection, show options dialog
       if (selectedCount > 0) {
-        const choice = await window.electronAPI.showDownloadOptionsDialog(
+        const choice = await getPlatform().file.showDownloadOptionsDialog(
           selectedCount,
           currentImageCount,
           totalCount,
@@ -744,6 +1029,262 @@ export const Toolbar: React.FC = () => {
     }
   }, [images, follicles, currentProjectPath]);
 
+  // Export selected annotations as JSON
+  const handleExportSelectedJSON = useCallback(() => {
+    if (selectedIds.size === 0) {
+      alert("No annotations selected. Please select annotations to export.");
+      return;
+    }
+
+    if (!activeImage) {
+      alert("No image loaded.");
+      return;
+    }
+
+    try {
+      const selectedFollicles = follicles.filter(f => selectedIds.has(f.id));
+      const json = exportSelectedAnnotationsJSON(
+        selectedFollicles,
+        selectedIds,
+        { width: activeImage.width, height: activeImage.height }
+      );
+
+      // Create and download JSON file
+      const blob = new Blob([json], { type: "application/json" });
+      const baseName = activeImage.fileName.replace(/\.[^/.]+$/, "");
+      downloadBlob(blob, `${baseName}_selected_annotations.json`);
+
+      console.log(`Exported ${selectedIds.size} selected annotations`);
+    } catch (error) {
+      console.error("Failed to export selected annotations:", error);
+      alert("Failed to export selected annotations. Please try again.");
+    }
+  }, [selectedIds, follicles, activeImage]);
+
+  // Import annotations from JSON (supports both internal format and COCO) - opens file dialog and shows import dialog
+  const handleImportAnnotations = useCallback(async () => {
+    if (!activeImageId || !activeImage) {
+      alert("Please load an image first before importing annotations.");
+      return;
+    }
+
+    try {
+      // Open file dialog for JSON
+      const result = await getPlatform().file.openFileDialog({
+        filters: [{ name: "JSON Files", extensions: ["json"] }],
+        title: "Import Annotations",
+      });
+
+      if (!result) return;
+
+      const text = new TextDecoder().decode(result.data);
+
+      // Detect format and parse accordingly
+      if (isCOCOFormat(text)) {
+        // Parse as COCO format
+        const cocoResult = importCOCOWithStats(text, {
+          targetImageId: activeImageId,
+          importKeypoints: true,
+        });
+
+        if (cocoResult.totalImported === 0) {
+          alert("No annotations found in the COCO file.");
+          return;
+        }
+
+        // Convert to ImportAnalysis format (COCO imports are all new, no duplicates check for now)
+        const analysis: ImportAnalysis = {
+          newAnnotations: cocoResult.newAnnotations,
+          augmentable: [],
+          alreadyAugmented: [],
+          duplicates: [],
+          totalImported: cocoResult.totalImported,
+        };
+
+        // Show the import dialog
+        setImportAnalysis(analysis);
+        setShowImportDialog(true);
+
+        console.log(
+          `COCO import: ${cocoResult.totalImported} annotations (${cocoResult.stats.withKeypoints} with keypoints)`
+        );
+      } else {
+        // Parse as internal format
+        const analysis = importAnnotationsFromJSONWithDuplicateCheck(text, activeImageId, follicles);
+
+        if (analysis.totalImported === 0) {
+          alert("No annotations found in the file.");
+          return;
+        }
+
+        // Show the import dialog
+        setImportAnalysis(analysis);
+        setShowImportDialog(true);
+      }
+    } catch (error) {
+      console.error("Failed to import annotations:", error);
+      alert(`Failed to import annotations: ${error instanceof Error ? error.message : "Unknown error"}`);
+    }
+  }, [activeImageId, activeImage, follicles]);
+
+  // Handle import confirmation from dialog
+  const handleImportConfirm = useCallback((options: ImportOptions) => {
+    if (!importAnalysis) return;
+
+    const { newAnnotations, augmentable, alreadyAugmented, duplicates } = importAnalysis;
+
+    // Update existing annotations with origin data
+    if (options.updateExisting && augmentable.length > 0) {
+      for (const { imported, existingId } of augmentable) {
+        updateFollicle(existingId, { origin: imported.origin });
+      }
+      console.log(`Updated ${augmentable.length} existing annotations with origin data`);
+    }
+
+    // Build list of annotations to import
+    const annotationsToImport: typeof newAnnotations = [];
+
+    if (options.importNew) {
+      annotationsToImport.push(...newAnnotations);
+    }
+    if (options.importAlreadyAugmented) {
+      annotationsToImport.push(...alreadyAugmented);
+    }
+    if (options.importDuplicates) {
+      annotationsToImport.push(...duplicates);
+    }
+
+    // Import new annotations
+    if (annotationsToImport.length > 0) {
+      const allFollicles = [...follicles, ...annotationsToImport];
+      importFollicles(allFollicles);
+      console.log(`Imported ${annotationsToImport.length} new annotations`);
+    }
+
+    // Close dialog
+    setShowImportDialog(false);
+    setImportAnalysis(null);
+  }, [importAnalysis, follicles, importFollicles, updateFollicle]);
+
+  // Handle import cancel
+  const handleImportCancel = useCallback(() => {
+    setShowImportDialog(false);
+    setImportAnalysis(null);
+  }, []);
+
+  // Handle duplicate detection dialog action
+  const handleDuplicateAction = useCallback((action: DuplicateAction) => {
+    if (!duplicateReport || pendingDetections.length === 0) {
+      setShowDuplicateDialog(false);
+      setDuplicateReport(null);
+      setPendingDetections([]);
+      return;
+    }
+
+    if (action === "cancel") {
+      // Don't add any detections
+      console.log("Detection cancelled by user");
+    } else if (action === "keepNew") {
+      // Filter out duplicates and add only new detections
+      const newDetections = pendingDetections.filter(
+        (_, index) => !duplicateReport.duplicateIndices.has(index)
+      );
+      if (newDetections.length > 0) {
+        const allFollicles = [...follicles, ...newDetections];
+        importFollicles(allFollicles);
+        console.log(`Added ${newDetections.length} new detections (skipped ${duplicateReport.duplicates} duplicates)`);
+      }
+    } else if (action === "keepAll") {
+      // Add all detections including duplicates
+      const allFollicles = [...follicles, ...pendingDetections];
+      importFollicles(allFollicles);
+      console.log(`Added all ${pendingDetections.length} detections`);
+    }
+
+    // Clear state
+    setShowDuplicateDialog(false);
+    setDuplicateReport(null);
+    setPendingDetections([]);
+  }, [duplicateReport, pendingDetections, follicles, importFollicles]);
+
+  // Export to YOLO Keypoint dataset format (for pose/keypoint training)
+  const handleExportYOLOKeypoint = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) return;
+
+    try {
+      const { blob, stats } = await exportYOLOKeypointDatasetZip(
+        images,
+        follicles
+      );
+
+      if (stats.annotationsWithOrigin === 0) {
+        alert(
+          "No annotations with origin data found. Please set follicle origins (entry point and direction) before exporting the keypoint dataset."
+        );
+        return;
+      }
+
+      // Download the ZIP file
+      const baseName = currentProjectPath
+        ? currentProjectPath
+            .replace(/\.[^/.]+$/, "")
+            .split(/[/\\]/)
+            .pop()
+        : "yolo_keypoint_dataset";
+      downloadBlob(blob, `${baseName}_keypoint.zip`);
+
+      console.log(
+        `Exported YOLO Keypoint dataset: ${stats.trainCount} train, ${stats.valCount} val (${stats.skippedNoOrigin} skipped without origin)`
+      );
+    } catch (error) {
+      console.error("Failed to export YOLO Keypoint dataset:", error);
+      alert("Failed to export YOLO Keypoint dataset. Please try again.");
+    }
+  }, [images, follicles, currentProjectPath]);
+
+  // Export to COCO JSON format
+  const handleExportCOCO = useCallback(async () => {
+    if (images.size === 0 || follicles.length === 0) {
+      alert("No annotations to export.");
+      return;
+    }
+
+    try {
+      const stats = getCOCOExportStats(images, follicles);
+
+      // Ask about keypoints if any annotations have them
+      let includeKeypoints = true;
+      if (stats.annotationsWithKeypoints > 0) {
+        includeKeypoints = confirm(
+          `${stats.annotationsWithKeypoints} of ${stats.annotationCount} annotations have origin/direction data.\n\nInclude keypoints in COCO export?`
+        );
+      }
+
+      const cocoJson = exportToCOCO(images, follicles, {
+        includeKeypoints,
+        exportImages: false,
+        categoryName: "follicle",
+      });
+
+      // Create blob and download
+      const blob = new Blob([cocoJson], { type: "application/json" });
+      const baseName = currentProjectPath
+        ? currentProjectPath
+            .replace(/\.[^/.]+$/, "")
+            .split(/[/\\]/)
+            .pop()
+        : "annotations";
+      downloadBlob(blob, `${baseName}_coco.json`);
+
+      console.log(
+        `Exported COCO JSON: ${stats.imageCount} images, ${stats.annotationCount} annotations`
+      );
+    } catch (error) {
+      console.error("Failed to export COCO JSON:", error);
+      alert("Failed to export COCO JSON. Please try again.");
+    }
+  }, [images, follicles, currentProjectPath]);
+
   // Handle export menu selection
   const handleExport = useCallback(
     (type: ExportType) => {
@@ -754,12 +1295,21 @@ export const Toolbar: React.FC = () => {
         case "yolo":
           handleExportYOLO();
           break;
+        case "yolo-keypoint":
+          handleExportYOLOKeypoint();
+          break;
         case "csv":
           handleExportCSV();
           break;
+        case "selected-json":
+          handleExportSelectedJSON();
+          break;
+        case "coco-json":
+          handleExportCOCO();
+          break;
       }
     },
-    [handleDownloadFollicles, handleExportYOLO, handleExportCSV],
+    [handleDownloadFollicles, handleExportYOLO, handleExportYOLOKeypoint, handleExportCSV, handleExportSelectedJSON, handleExportCOCO],
   );
 
   // Colors for auto-detected annotations (cycles through)
@@ -778,8 +1328,470 @@ export const Toolbar: React.FC = () => {
     "#00CEC9",
   ];
 
-  // Auto-detect follicles using manual settings
-  const handleSettingsDetect = useCallback(async () => {
+  // Helper to get image as base64
+  const getImageBase64 = useCallback(async (image: ProjectImage): Promise<string> => {
+    // Convert ArrayBuffer to base64
+    const bytes = new Uint8Array(image.imageData);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    // Determine mime type from filename
+    const ext = image.fileName.toLowerCase().split('.').pop();
+    let mimeType = 'image/jpeg';
+    if (ext === 'png') mimeType = 'image/png';
+    else if (ext === 'webp') mimeType = 'image/webp';
+    else if (ext === 'tiff' || ext === 'tif') mimeType = 'image/tiff';
+    else if (ext === 'bmp') mimeType = 'image/bmp';
+
+    return `data:${mimeType};base64,${base64}`;
+  }, []);
+
+  // Auto-detect follicles using YOLO detection
+  const handleYoloDetect = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    setIsDetecting(true);
+
+    try {
+      // Load model if needed - select .pt or .engine based on backend setting
+      if (detectionSettings.yoloModelId) {
+        // Load custom trained model
+        const models = await yoloDetectionService.listModels();
+        const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
+        if (selectedModel) {
+          let modelPath = selectedModel.path;
+
+          // Check if TensorRT backend is selected
+          if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
+            // Try to use .engine file if it exists
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            const engineExists = await getPlatform().file.fileExists(enginePath);
+            if (engineExists) {
+              modelPath = enginePath;
+              console.log('Using TensorRT engine:', enginePath);
+            } else {
+              console.warn('TensorRT backend selected but no .engine file found. Using PyTorch model.');
+            }
+          } else {
+            // PyTorch backend - ensure we use .pt file
+            if (modelPath.endsWith('.engine')) {
+              const ptPath = modelPath.replace(/\.engine$/i, '.pt');
+              const ptExists = await getPlatform().file.fileExists(ptPath);
+              if (ptExists) {
+                modelPath = ptPath;
+                console.log('Using PyTorch model:', ptPath);
+              } else {
+                // No .pt file - will use .engine file (Ultralytics will use TensorRT for it)
+                console.warn('PyTorch backend selected but no .pt file found. Using TensorRT engine instead.');
+              }
+            }
+          }
+
+          const loaded = await yoloDetectionService.loadModel(modelPath);
+          if (!loaded) {
+            throw new Error('Failed to load selected YOLO model');
+          }
+        }
+      }
+      // If no model ID is set, the pre-trained model will be downloaded/used automatically
+
+      // Get image as base64
+      const imageBase64 = await getImageBase64(activeImage);
+
+      // Run YOLO detection (tiled or regular based on settings)
+      let predictions: DetectionPrediction[];
+      let actualBackend: string;
+      const inferenceStartTime = performance.now();
+
+      if (detectionSettings.yoloUseTiledInference) {
+        // Calculate scale factor based on mode
+        // "Automatic Detection" always uses imageSize-based scaling
+        // Annotation-based scaling is only available via "Learn from Selection"
+        let scaleFactor = detectionSettings.yoloScaleFactor;
+        const autoScaleMode = detectionSettings.yoloAutoScaleMode;
+
+        if (autoScaleMode === 'auto') {
+          // Auto-calculate based on image size vs training reference
+          const trainingSize = detectionSettings.yoloTrainingImageSize;
+          const currentSize = Math.max(activeImage.width, activeImage.height);
+
+          if (currentSize < trainingSize) {
+            scaleFactor = trainingSize / currentSize;
+            scaleFactor = Math.min(scaleFactor, 3.0); // Cap at 3.0x
+            scaleFactor = Math.round(scaleFactor * 10) / 10;
+          } else {
+            scaleFactor = 1.0;
+          }
+          console.log(`Auto-scale (imageSize): image ${activeImage.width}x${activeImage.height}, training ref ${trainingSize}, scale=${scaleFactor}x`);
+        }
+        // else mode === 'none', use manual scaleFactor from settings
+
+        // Use tiled inference for large images
+        const result = await yoloDetectionService.predictTiled(
+          imageBase64,
+          detectionSettings.yoloConfidenceThreshold,
+          detectionSettings.yoloTileSize,
+          detectionSettings.yoloTileOverlap,
+          detectionSettings.yoloNmsThreshold,
+          scaleFactor
+        );
+        predictions = result.predictions;
+        actualBackend = result.backend;
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] YOLO (${actualBackend}) tiled inference: ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections (tile_size=${detectionSettings.yoloTileSize}, scale=${scaleFactor}x)`);
+      } else {
+        // Use regular inference (scales full image)
+        const result = await yoloDetectionService.predict(
+          imageBase64,
+          detectionSettings.yoloConfidenceThreshold
+        );
+        predictions = result.predictions;
+        actualBackend = result.backend;
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] YOLO (${actualBackend}) inference: ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections`);
+      }
+
+      if (predictions.length === 0) {
+        console.log("No follicles detected by YOLO");
+        alert("No follicles detected. Try lowering the confidence threshold or adjusting tile settings.");
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert predictions to RECTANGLE annotations
+      const existingCount = follicles.filter(
+        (f) => f.imageId === activeImageId,
+      ).length;
+      const now = Date.now();
+
+      // Create follicle IDs first so we can use them for origin lookup
+      const follicleIds = predictions.map(() => generateId());
+
+      // Run keypoint prediction if enabled (before creating annotations so we can include origins)
+      let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+      if (detectionSettings.useKeypointPrediction && blobSessionId) {
+        const keypointStartTime = performance.now();
+        predictedOrigins = new Map<string, FollicleOrigin>();
+
+        // Load keypoint model with correct backend
+        const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+        const keypointModels = await yoloKeypointService.listModels();
+        if (keypointModels.length > 0) {
+          let modelPath = keypointModels[0].path;
+          if (useTensorRT) {
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            try {
+              const engineExists = await getPlatform().file.fileExists(enginePath);
+              if (engineExists) {
+                modelPath = enginePath;
+              }
+            } catch {
+              // Fall back to PyTorch
+            }
+          }
+          await yoloKeypointService.loadModel(modelPath);
+
+          // Predict keypoints for each detection
+          for (let i = 0; i < predictions.length; i++) {
+            const detection = predictions[i];
+            try {
+              // Get crop region as base64
+              const cropBase64 = await blobService.getCropBase64(blobSessionId, {
+                x: detection.x,
+                y: detection.y,
+                width: detection.width,
+                height: detection.height,
+              });
+              if (!cropBase64) continue;
+
+              // Run keypoint prediction
+              const prediction = await yoloKeypointService.predict(cropBase64);
+              if (!prediction || prediction.confidence < 0.3) continue;
+
+              // Transform from normalized crop coords (0-1) to image coords
+              const originX = detection.x + (prediction.origin.x * detection.width);
+              const originY = detection.y + (prediction.origin.y * detection.height);
+              const dirEndX = detection.x + (prediction.directionEndpoint.x * detection.width);
+              const dirEndY = detection.y + (prediction.directionEndpoint.y * detection.height);
+
+              // Calculate direction angle and length for FollicleOrigin format
+              const dx = dirEndX - originX;
+              const dy = dirEndY - originY;
+              const directionAngle = Math.atan2(dy, dx);
+              const directionLength = Math.sqrt(dx * dx + dy * dy);
+
+              predictedOrigins.set(follicleIds[i], {
+                originPoint: { x: originX, y: originY },
+                directionAngle,
+                directionLength,
+              });
+            } catch (error) {
+              console.warn(`Keypoint prediction failed for detection ${i}:`, error);
+            }
+          }
+        }
+        const keypointTime = performance.now() - keypointStartTime;
+        console.log(`[BENCHMARK] Keypoint prediction: ${keypointTime.toFixed(0)}ms - ${predictedOrigins.size}/${predictions.length} origins predicted`);
+      }
+
+      const newFollicles: RectangleAnnotation[] = predictions.map(
+        (detection: DetectionPrediction, i: number) => {
+          const follicleId = follicleIds[i];
+          const origin = predictedOrigins?.get(follicleId);
+          return {
+            id: follicleId,
+            imageId: activeImageId,
+            shape: "rectangle" as const,
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+            label: `YOLO ${existingCount + i + 1}`,
+            notes: `YOLO detection (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+            color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+            createdAt: now,
+            updatedAt: now,
+            origin, // Include predicted origin if available
+          };
+        },
+      );
+
+      const originsCount = predictedOrigins?.size ?? 0;
+
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
+
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("YOLO");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`YOLO detected ${predictions.length} follicles (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
+      }
+    } catch (error) {
+      console.error("YOLO detection failed:", error);
+      alert(
+        `YOLO detection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      setIsDetecting(false);
+      // Clean up GPU memory after detection tasks complete
+      blobService.clearDetectionGpuMemory().catch(err =>
+        console.warn('Failed to clear detection GPU memory:', err)
+      );
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isDetecting,
+    follicles,
+    importFollicles,
+    blobSessionId,
+    detectionSettings.yoloModelId,
+    detectionSettings.yoloConfidenceThreshold,
+    detectionSettings.yoloUseTiledInference,
+    detectionSettings.yoloTileSize,
+    detectionSettings.yoloTileOverlap,
+    detectionSettings.yoloNmsThreshold,
+    detectionSettings.yoloScaleFactor,
+    detectionSettings.yoloAutoScaleMode,
+    detectionSettings.yoloTrainingImageSize,
+    detectionSettings.yoloInferenceBackend,
+    detectionSettings.useKeypointPrediction,
+    detectionSettings.keypointInferenceBackend,
+    getImageBase64,
+  ]);
+
+  // YOLO detection with annotation-based scaling (Learn from Selection for YOLO)
+  const handleYoloLearnFromSelection = useCallback(async () => {
+    if (!activeImage || !activeImageId || isDetecting) return;
+
+    // Get SELECTED annotations for this image
+    const selectedFollicles = follicles.filter(f => f.imageId === activeImageId && selectedIds.has(f.id));
+
+    if (selectedFollicles.length < 3) {
+      alert(`Please select at least 3 annotations to learn from. Currently selected: ${selectedFollicles.length}`);
+      return;
+    }
+
+    setIsDetecting(true);
+
+    try {
+      // Load model if needed - select .pt or .engine based on backend setting
+      if (detectionSettings.yoloModelId) {
+        const models = await yoloDetectionService.listModels();
+        const selectedModel = models.find(m => m.id === detectionSettings.yoloModelId);
+        if (selectedModel) {
+          let modelPath = selectedModel.path;
+
+          // Check if TensorRT backend is selected
+          if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
+            // Try to use .engine file if it exists
+            const enginePath = modelPath.replace(/\.pt$/i, '.engine');
+            const engineExists = await getPlatform().file.fileExists(enginePath);
+            if (engineExists) {
+              modelPath = enginePath;
+              console.log('Using TensorRT engine:', enginePath);
+            } else {
+              console.warn('TensorRT backend selected but no .engine file found. Using PyTorch model.');
+            }
+          } else {
+            // PyTorch backend - ensure we use .pt file
+            if (modelPath.endsWith('.engine')) {
+              const ptPath = modelPath.replace(/\.engine$/i, '.pt');
+              const ptExists = await getPlatform().file.fileExists(ptPath);
+              if (ptExists) {
+                modelPath = ptPath;
+                console.log('Using PyTorch model:', ptPath);
+              } else {
+                // No .pt file - will use .engine file (Ultralytics will use TensorRT for it)
+                console.warn('PyTorch backend selected but no .pt file found. Using TensorRT engine instead.');
+              }
+            }
+          }
+
+          const loaded = await yoloDetectionService.loadModel(modelPath);
+          if (!loaded) {
+            throw new Error('Failed to load selected YOLO model');
+          }
+        }
+      }
+
+      // Get image as base64
+      const imageBase64 = await getImageBase64(activeImage);
+
+      // Calculate scale factor based on SELECTED annotation sizes
+      const avgSize = selectedFollicles.reduce((sum, f) => {
+        let size = 0;
+        if (f.shape === 'circle') {
+          size = f.radius * 2; // Diameter
+        } else if (f.shape === 'rectangle') {
+          size = Math.max(f.width, f.height);
+        } else if (f.shape === 'linear') {
+          // Linear: calculate length and width
+          const dx = f.endPoint.x - f.startPoint.x;
+          const dy = f.endPoint.y - f.startPoint.y;
+          const length = Math.sqrt(dx * dx + dy * dy);
+          const width = f.halfWidth * 2;
+          size = Math.max(length, width);
+        }
+        return sum + size;
+      }, 0) / selectedFollicles.length;
+
+      const trainingAnnotationSize = detectionSettings.yoloTrainingAnnotationSize;
+      let scaleFactor = 1.0;
+
+      if (avgSize > 0 && avgSize < trainingAnnotationSize) {
+        scaleFactor = trainingAnnotationSize / avgSize;
+        scaleFactor = Math.min(scaleFactor, 3.0); // Cap at 3.0x
+        scaleFactor = Math.round(scaleFactor * 10) / 10;
+      }
+
+      console.log(`YOLO Learn from Selection: ${selectedFollicles.length} selected, avg size ${avgSize.toFixed(1)}px, training ref ${trainingAnnotationSize}px, scale=${scaleFactor}x`);
+
+      // Run tiled inference with annotation-based scale factor
+      const inferenceStartTime = performance.now();
+      const result = await yoloDetectionService.predictTiled(
+        imageBase64,
+        detectionSettings.yoloConfidenceThreshold,
+        detectionSettings.yoloTileSize,
+        detectionSettings.yoloTileOverlap,
+        detectionSettings.yoloNmsThreshold,
+        scaleFactor
+      );
+      const predictions = result.predictions;
+      const actualBackend = result.backend;
+      const inferenceTime = performance.now() - inferenceStartTime;
+      console.log(`[BENCHMARK] YOLO Learn from Selection (${actualBackend}): ${inferenceTime.toFixed(0)}ms - ${predictions.length} detections (scale=${scaleFactor}x)`);
+
+      if (predictions.length === 0) {
+        console.log("No follicles detected by YOLO");
+        alert("No follicles detected. Try selecting different reference annotations or lowering the confidence threshold.");
+        setIsDetecting(false);
+        return;
+      }
+
+      // Convert predictions to RECTANGLE annotations
+      const existingCount = follicles.filter(
+        (f) => f.imageId === activeImageId,
+      ).length;
+      const now = Date.now();
+
+      const newFollicles: RectangleAnnotation[] = predictions.map(
+        (detection: DetectionPrediction, i: number) => ({
+          id: generateId(),
+          imageId: activeImageId,
+          shape: "rectangle" as const,
+          x: detection.x,
+          y: detection.y,
+          width: detection.width,
+          height: detection.height,
+          label: `YOLO Learned ${existingCount + i + 1}`,
+          notes: `YOLO detection from selection (conf: ${(detection.confidence * 100).toFixed(0)}%, scale: ${scaleFactor}x)`,
+          color: ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
+
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("YOLO (Learned)");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`YOLO detected ${predictions.length} follicles using annotation-based scaling (no duplicates)`);
+      }
+    } catch (error) {
+      console.error("YOLO detection failed:", error);
+      alert(
+        `YOLO detection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      setIsDetecting(false);
+      // Clean up GPU memory after detection tasks complete
+      blobService.clearDetectionGpuMemory().catch(err =>
+        console.warn('Failed to clear detection GPU memory:', err)
+      );
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isDetecting,
+    follicles,
+    selectedIds,
+    importFollicles,
+    detectionSettings.yoloModelId,
+    detectionSettings.yoloConfidenceThreshold,
+    detectionSettings.yoloTileSize,
+    detectionSettings.yoloTileOverlap,
+    detectionSettings.yoloNmsThreshold,
+    detectionSettings.yoloTrainingAnnotationSize,
+    detectionSettings.yoloInferenceBackend,
+    getImageBase64,
+  ]);
+
+  // Auto-detect follicles using manual settings (blob detection)
+  const handleBlobDetect = useCallback(async () => {
     if (!activeImage || !activeImageId || isDetecting) return;
 
     // Check if server is connected
@@ -799,8 +1811,7 @@ export const Toolbar: React.FC = () => {
     setIsDetecting(true);
 
     try {
-      // Call the BLOB detection server with manual settings
-      const result = await blobService.blobDetect(blobSessionId, {
+      const detectSettings = {
         minWidth: detectionSettings.minWidth,
         maxWidth: detectionSettings.maxWidth,
         minHeight: detectionSettings.minHeight,
@@ -809,9 +1820,30 @@ export const Toolbar: React.FC = () => {
         useCLAHE: detectionSettings.useCLAHE,
         claheClipLimit: detectionSettings.claheClipLimit,
         claheTileSize: detectionSettings.claheTileSize,
-      });
+        forceCPU: detectionSettings.forceCPU,
+      };
 
-      if (result.count === 0) {
+      // Use detectWithKeypoints if keypoint prediction is enabled
+      let detections: BlobDetection[];
+      let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+      let count = 0;
+
+      const inferenceStartTime = performance.now();
+      if (detectionSettings.useKeypointPrediction) {
+        const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+        const result = await blobService.detectWithKeypoints(blobSessionId, detectSettings, undefined, useTensorRT);
+        detections = result.detections;
+        predictedOrigins = result.origins;
+        count = result.count;
+      } else {
+        const result = await blobService.blobDetect(blobSessionId, detectSettings);
+        detections = result.detections;
+        count = result.count;
+      }
+      const inferenceTime = performance.now() - inferenceStartTime;
+      console.log(`[BENCHMARK] SimpleBlobDetector: ${inferenceTime.toFixed(0)}ms - ${count} detections`);
+
+      if (count === 0) {
         console.log("No follicles detected");
         alert("No follicles detected. Try adjusting the detection settings.");
         setIsDetecting(false);
@@ -824,29 +1856,51 @@ export const Toolbar: React.FC = () => {
       ).length;
       const now = Date.now();
 
-      const newFollicles: RectangleAnnotation[] = result.detections.map(
-        (detection, i) => ({
-          id: generateId(),
-          imageId: activeImageId,
-          shape: "rectangle" as const,
-          x: detection.x,
-          y: detection.y,
-          width: detection.width,
-          height: detection.height,
-          label: `Settings ${existingCount + i + 1}`,
-          notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
-          color:
-            ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
-          createdAt: now,
-          updatedAt: now,
-        }),
+      const newFollicles: RectangleAnnotation[] = detections.map(
+        (detection, i) => {
+          const detectionId = `det_${i}_${detection.x}_${detection.y}`;
+          const origin = predictedOrigins?.get(detectionId);
+
+          return {
+            id: generateId(),
+            imageId: activeImageId,
+            shape: "rectangle" as const,
+            x: detection.x,
+            y: detection.y,
+            width: detection.width,
+            height: detection.height,
+            label: `Settings ${existingCount + i + 1}`,
+            notes: origin
+              ? `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%) + origin predicted`
+              : `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+            color:
+              ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+            createdAt: now,
+            updatedAt: now,
+            origin, // Include predicted origin if available
+          };
+        },
       );
 
-      // Import all at once (supports undo as single action)
-      const allFollicles = [...follicles, ...newFollicles];
-      importFollicles(allFollicles);
+      // Check for duplicates with existing annotations
+      const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+      const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+      const report = findDuplicates(detectionBoxes, existingAnnotations);
 
-      console.log(`Detected ${result.count} follicles using manual settings`);
+      const originsCount = predictedOrigins?.size ?? 0;
+
+      if (report.duplicates > 0) {
+        // Show dialog to let user decide
+        setPendingDetections(newFollicles);
+        setDuplicateReport(report);
+        setDetectionMethodName("BLOB");
+        setShowDuplicateDialog(true);
+      } else {
+        // No duplicates, import all directly
+        const allFollicles = [...follicles, ...newFollicles];
+        importFollicles(allFollicles);
+        console.log(`Detected ${count} follicles using manual settings (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`);
+      }
     } catch (error) {
       console.error("Failed to detect follicles:", error);
       alert(
@@ -854,6 +1908,10 @@ export const Toolbar: React.FC = () => {
       );
     } finally {
       setIsDetecting(false);
+      // Clean up GPU memory after blob detection (CuPy preprocessing)
+      blobService.clearBlobGpuMemory().catch(err =>
+        console.warn('Failed to clear blob GPU memory:', err)
+      );
     }
   }, [
     activeImage,
@@ -865,6 +1923,15 @@ export const Toolbar: React.FC = () => {
     blobSessionId,
     detectionSettings,
   ]);
+
+  // Auto-detect follicles - routes to YOLO or blob based on settings
+  const handleSettingsDetect = useCallback(async () => {
+    if (detectionSettings.detectionMethod === 'yolo') {
+      await handleYoloDetect();
+    } else {
+      await handleBlobDetect();
+    }
+  }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
   // Handle learned detection (from annotations)
   const handleLearnedDetect = useCallback(
@@ -892,18 +1959,37 @@ export const Toolbar: React.FC = () => {
       setLearnedSettings(settings);
 
       try {
-        // Call the BLOB detection server with useLearnedStats mode
-        // The server will calculate stats from annotations and apply tolerance
-        const result = await blobService.blobDetect(blobSessionId, {
+        const learnedDetectSettings = {
           useLearnedStats: true,
           tolerance: settings.tolerance,
           darkBlobs: settings.darkBlobs,
           useCLAHE: true,
           claheClipLimit: 3.0,
           claheTileSize: 8,
-        });
+          forceCPU: detectionSettings.forceCPU,
+        };
 
-        if (result.count === 0) {
+        // Use detectWithKeypoints if keypoint prediction is enabled
+        let detections: BlobDetection[];
+        let predictedOrigins: Map<string, FollicleOrigin> | null = null;
+        let count = 0;
+
+        const inferenceStartTime = performance.now();
+        if (detectionSettings.useKeypointPrediction) {
+          const useTensorRT = detectionSettings.keypointInferenceBackend === 'tensorrt';
+          const result = await blobService.detectWithKeypoints(blobSessionId, learnedDetectSettings, undefined, useTensorRT);
+          detections = result.detections;
+          predictedOrigins = result.origins;
+          count = result.count;
+        } else {
+          const result = await blobService.blobDetect(blobSessionId, learnedDetectSettings);
+          detections = result.detections;
+          count = result.count;
+        }
+        const inferenceTime = performance.now() - inferenceStartTime;
+        console.log(`[BENCHMARK] Learned Blob Detection: ${inferenceTime.toFixed(0)}ms - ${count} detections (tolerance: ${settings.tolerance}%)`);
+
+        if (count === 0) {
           console.log("No follicles detected");
           alert(
             "No follicles detected. Try adjusting the tolerance or drawing more diverse annotations.",
@@ -918,31 +2004,53 @@ export const Toolbar: React.FC = () => {
         ).length;
         const now = Date.now();
 
-        const newFollicles: RectangleAnnotation[] = result.detections.map(
-          (detection, i) => ({
-            id: generateId(),
-            imageId: activeImageId,
-            shape: "rectangle" as const,
-            x: detection.x,
-            y: detection.y,
-            width: detection.width,
-            height: detection.height,
-            label: `Learned ${existingCount + i + 1}`,
-            notes: `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
-            color:
-              ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
-            createdAt: now,
-            updatedAt: now,
-          }),
+        const newFollicles: RectangleAnnotation[] = detections.map(
+          (detection, i) => {
+            const detectionId = `det_${i}_${detection.x}_${detection.y}`;
+            const origin = predictedOrigins?.get(detectionId);
+
+            return {
+              id: generateId(),
+              imageId: activeImageId,
+              shape: "rectangle" as const,
+              x: detection.x,
+              y: detection.y,
+              width: detection.width,
+              height: detection.height,
+              label: `Learned ${existingCount + i + 1}`,
+              notes: origin
+                ? `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%) + origin predicted`
+                : `Detected via ${detection.method} (conf: ${(detection.confidence * 100).toFixed(0)}%)`,
+              color:
+                ANNOTATION_COLORS[(existingCount + i) % ANNOTATION_COLORS.length],
+              createdAt: now,
+              updatedAt: now,
+              origin, // Include predicted origin if available
+            };
+          },
         );
 
-        // Import all at once (supports undo as single action)
-        const allFollicles = [...follicles, ...newFollicles];
-        importFollicles(allFollicles);
+        // Check for duplicates with existing annotations
+        const existingAnnotations = follicles.filter(f => f.imageId === activeImageId);
+        const detectionBoxes = newFollicles.map(f => ({ x: f.x, y: f.y, width: f.width, height: f.height }));
+        const report = findDuplicates(detectionBoxes, existingAnnotations);
 
-        console.log(
-          `Detected ${result.count} follicles using learned settings (tolerance: ${settings.tolerance}%)`,
-        );
+        const originsCount = predictedOrigins?.size ?? 0;
+
+        if (report.duplicates > 0) {
+          // Show dialog to let user decide
+          setPendingDetections(newFollicles);
+          setDuplicateReport(report);
+          setDetectionMethodName("Learned BLOB");
+          setShowDuplicateDialog(true);
+        } else {
+          // No duplicates, import all directly
+          const allFollicles = [...follicles, ...newFollicles];
+          importFollicles(allFollicles);
+          console.log(
+            `Detected ${count} follicles using learned settings (tolerance: ${settings.tolerance}%) (no duplicates)${originsCount > 0 ? ` (${originsCount} with predicted origins)` : ''}`,
+          );
+        }
       } catch (error) {
         console.error("Failed to detect follicles:", error);
         alert(
@@ -950,6 +2058,10 @@ export const Toolbar: React.FC = () => {
         );
       } finally {
         setIsLearnedDetecting(false);
+        // Clean up GPU memory after learned blob detection (CuPy preprocessing)
+        blobService.clearBlobGpuMemory().catch(err =>
+          console.warn('Failed to clear blob GPU memory:', err)
+        );
       }
     },
     [
@@ -961,19 +2073,33 @@ export const Toolbar: React.FC = () => {
       blobServerConnected,
       blobSessionId,
       canDetect,
+      detectionSettings,
     ],
   );
 
-  // Open learned detection dialog
+  // Open learned detection dialog or run YOLO with annotation-based scaling
   const handleOpenLearnedDetection = useCallback(() => {
-    if (!canDetect) {
-      alert(
-        `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
-      );
-      return;
+    if (detectionSettings.detectionMethod === 'yolo') {
+      // For YOLO: Check selected annotations and run directly
+      const selectedCount = follicles.filter(f => f.imageId === activeImageId && selectedIds.has(f.id)).length;
+      if (selectedCount < 3) {
+        alert(
+          `Please select at least 3 annotations to learn from. Currently selected: ${selectedCount}`,
+        );
+        return;
+      }
+      handleYoloLearnFromSelection();
+    } else {
+      // For BLOB: Check total annotations and open dialog
+      if (!canDetect) {
+        alert(
+          `Please draw at least ${MIN_ANNOTATIONS} annotations first to learn from.`,
+        );
+        return;
+      }
+      setShowLearnedDetection(true);
     }
-    setShowLearnedDetection(true);
-  }, [canDetect]);
+  }, [canDetect, detectionSettings.detectionMethod, follicles, activeImageId, selectedIds, handleYoloLearnFromSelection]);
 
   // Listen for auto-detect trigger from ImageCanvas keyboard shortcut
   // Use learned detection if we have annotations, otherwise settings-based
@@ -999,21 +2125,22 @@ export const Toolbar: React.FC = () => {
 
   // Register menu event listeners
   useEffect(() => {
+    const menu = getPlatform().menu;
     const cleanups = [
-      window.electronAPI.onMenuOpenImage(handleOpenImage),
-      window.electronAPI.onMenuLoadProject(handleLoad),
-      window.electronAPI.onMenuSaveProject(handleSave),
-      window.electronAPI.onMenuSaveProjectAs(handleSaveAs),
-      window.electronAPI.onMenuCloseProject(handleCloseProject),
-      window.electronAPI.onMenuUndo(handleUndo),
-      window.electronAPI.onMenuRedo(handleRedo),
-      window.electronAPI.onMenuClearAll(clearAll),
-      window.electronAPI.onMenuToggleShapes(toggleShapes),
-      window.electronAPI.onMenuToggleLabels(toggleLabels),
-      window.electronAPI.onMenuZoomIn(handleZoomIn),
-      window.electronAPI.onMenuZoomOut(handleZoomOut),
-      window.electronAPI.onMenuResetZoom(resetZoom),
-      window.electronAPI.onMenuShowHelp(toggleHelp),
+      menu.onMenuOpenImage(handleOpenImage),
+      menu.onMenuLoadProject(handleLoad),
+      menu.onMenuSaveProject(handleSave),
+      menu.onMenuSaveProjectAs(handleSaveAs),
+      menu.onMenuCloseProject(handleCloseProject),
+      menu.onMenuUndo(handleUndo),
+      menu.onMenuRedo(handleRedo),
+      menu.onMenuClearAll(clearAll),
+      menu.onMenuToggleShapes(toggleShapes),
+      menu.onMenuToggleLabels(toggleLabels),
+      menu.onMenuZoomIn(handleZoomIn),
+      menu.onMenuZoomOut(handleZoomOut),
+      menu.onMenuResetZoom(resetZoom),
+      menu.onMenuShowHelp(toggleHelp),
     ];
 
     return () => cleanups.forEach((cleanup) => cleanup());
@@ -1037,38 +2164,43 @@ export const Toolbar: React.FC = () => {
   // Handle file open from file association (double-click .fol file)
   useEffect(() => {
     const loadFromPath = async (filePath: string) => {
+      const controller = startLoading("Loading project...", true);
       try {
-        const result = await window.electronAPI.loadProjectFromPath(filePath);
+        const result = await getPlatform().file.loadProjectFromPath(filePath);
+        if (controller?.signal.aborted) return;
         await loadProjectFromResult(result);
       } catch (error) {
+        if (controller?.signal.aborted) return;
         console.error("Failed to load project from file association:", error);
         alert("Failed to load project file. Please check the file format.");
+      } finally {
+        stopLoading();
       }
     };
 
-    // Check for file to open on startup
-    window.electronAPI.getFileToOpen().then((filePath) => {
+    // Check for file to open on startup (Electron only)
+    getPlatform().menu.getFileToOpen().then((filePath) => {
       if (filePath) {
         loadFromPath(filePath);
       }
     });
 
-    // Listen for file open while app is running
-    const cleanup = window.electronAPI.onFileOpen((filePath) => {
+    // Listen for file open while app is running (Electron only)
+    const cleanup = getPlatform().menu.onFileOpen((filePath) => {
       loadFromPath(filePath);
     });
 
     return cleanup;
-  }, [loadProjectFromResult]);
+  }, [loadProjectFromResult, startLoading, stopLoading]);
 
-  // Handle app close - check for unsaved changes
+  // Handle app close - check for unsaved changes (Electron only)
   useEffect(() => {
     const handleCheckUnsavedChanges = async () => {
       const canClose = await checkUnsavedChanges();
-      window.electronAPI.confirmClose(canClose);
+      getPlatform().menu.confirmClose(canClose);
     };
 
-    const cleanup = window.electronAPI.onCheckUnsavedChanges(
+    const cleanup = getPlatform().menu.onCheckUnsavedChanges(
       handleCheckUnsavedChanges,
     );
     return cleanup;
@@ -1085,12 +2217,15 @@ export const Toolbar: React.FC = () => {
           currentProjectPath,
         );
         try {
+          // Include detection settings in the auto-save
           const { manifest, annotations, imageList } = generateExportV2(
             Array.from(images.values()),
             follicles,
+            getGlobalSettingsForExport(),
+            getImageOverridesForExport(),
           );
 
-          const result = await window.electronAPI.saveProjectV2ToPath(
+          const result = await getPlatform().file.saveProjectV2ToPath(
             currentProjectPath,
             imageList,
             JSON.stringify(manifest, null, 2),
@@ -1107,9 +2242,9 @@ export const Toolbar: React.FC = () => {
       }
     };
 
-    const cleanup = window.electronAPI.onSystemSuspend(handleSystemSuspend);
+    const cleanup = getPlatform().menu.onSystemSuspend(handleSystemSuspend);
     return cleanup;
-  }, [isDirty, currentProjectPath, images, follicles, markClean]);
+  }, [isDirty, currentProjectPath, images, follicles, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
   const zoomPercent = Math.round(viewport.scale * 100);
 
@@ -1202,27 +2337,7 @@ export const Toolbar: React.FC = () => {
       {mode === "create" && (
         <>
           <div className="toolbar-group" role="group" aria-label="Shape types">
-            <IconButton
-              icon={<Circle size={18} />}
-              tooltip="Circle Shape"
-              shortcut="1"
-              onClick={() => setShapeType("circle")}
-              active={currentShapeType === "circle"}
-            />
-            <IconButton
-              icon={<Square size={18} />}
-              tooltip="Rectangle Shape"
-              shortcut="2"
-              onClick={() => setShapeType("rectangle")}
-              active={currentShapeType === "rectangle"}
-            />
-            <IconButton
-              icon={<Minus size={18} strokeWidth={3} />}
-              tooltip="Linear Shape"
-              shortcut="3"
-              onClick={() => setShapeType("linear")}
-              active={currentShapeType === "linear"}
-            />
+            <ShapeToolDropdown />
           </div>
           <div className="toolbar-divider" />
         </>
@@ -1232,7 +2347,7 @@ export const Toolbar: React.FC = () => {
       <div className="toolbar-group" role="group" aria-label="Detection tools">
         <IconButton
           icon={
-            isLearnedDetecting || serverStarting ? (
+            isLearnedDetecting || isDetecting || serverStarting ? (
               <Loader2 size={18} className="animate-spin" />
             ) : (
               <GraduationCap size={18} />
@@ -1241,18 +2356,23 @@ export const Toolbar: React.FC = () => {
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
-              : !canDetect
-                ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable learning`
-                : "Learn from Selection"
+              : detectionSettings.detectionMethod === 'yolo'
+                ? selectedIds.size < 3
+                  ? `Select at least 3 annotations (${selectedIds.size} selected)`
+                  : "Learn from Selection (YOLO)"
+                : !canDetect
+                  ? `Draw ${MIN_ANNOTATIONS - annotationCount} more annotation${MIN_ANNOTATIONS - annotationCount === 1 ? "" : "s"} to enable learning`
+                  : "Learn from Selection"
           }
           shortcut="L"
           onClick={handleOpenLearnedDetection}
           disabled={
             !imageLoaded ||
             isLearnedDetecting ||
+            isDetecting ||
             serverStarting ||
             !blobServerConnected ||
-            !canDetect
+            (detectionSettings.detectionMethod === 'yolo' ? selectedIds.size < 3 : !canDetect)
           }
         />
         <IconButton
@@ -1260,14 +2380,14 @@ export const Toolbar: React.FC = () => {
             isDetecting || serverStarting ? (
               <Loader2 size={18} className="animate-spin" />
             ) : (
-              <SlidersHorizontal size={18} />
+              <Sparkles size={18} />
             )
           }
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
               : detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0
-                ? "Detect with Manual Settings"
+                ? "Auto Detect"
                 : "Configure settings first"
           }
           shortcut="D"
@@ -1281,10 +2401,72 @@ export const Toolbar: React.FC = () => {
           }
         />
         <IconButton
-          icon={<Settings size={18} />}
-          tooltip="Detection Settings"
+          icon={
+            <span style={{ position: 'relative' }}>
+              {(detectionExportState.isExporting || keypointExportState.isExporting) ? (
+                <Loader2 size={18} className="spin" />
+              ) : (
+                <Settings size={18} />
+              )}
+              {(missingModelInfo || missingKeypointModelInfo) && !detectionExportState.isExporting && !keypointExportState.isExporting && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: '#f59e0b',
+                  }}
+                  title="Saved model not found"
+                />
+              )}
+              {(detectionExportState.isExporting || keypointExportState.isExporting) && (
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                  }}
+                  title="TensorRT export in progress"
+                />
+              )}
+            </span>
+          }
+          tooltip={
+            detectionExportState.isExporting
+              ? `TensorRT Export: ${detectionExportState.progress || 'Exporting detection model...'}`
+              : keypointExportState.isExporting
+              ? `TensorRT Export: ${keypointExportState.progress || 'Exporting keypoint model...'}`
+              : missingModelInfo
+              ? `Inference Settings (⚠ Detection model "${missingModelInfo.modelName || missingModelInfo.modelId}" not found)`
+              : missingKeypointModelInfo
+              ? `Inference Settings (⚠ Keypoint model "${missingKeypointModelInfo.modelName || missingKeypointModelInfo.modelId}" not found)`
+              : "Inference Settings"
+          }
           onClick={() => setShowDetectionSettings(true)}
-          disabled={!imageLoaded}
+        />
+      </div>
+
+      <div className="toolbar-divider" />
+
+      {/* YOLO Machine Learning */}
+      <div className="toolbar-group" role="group" aria-label="YOLO Machine Learning">
+        <IconButton
+          icon={<Brain size={18} />}
+          tooltip="Model Training"
+          onClick={() => setShowUnifiedYOLOTraining(true)}
+        />
+        <IconButton
+          icon={<Database size={18} />}
+          tooltip="Model Library"
+          onClick={() => setShowUnifiedYOLOModelManager(true)}
         />
       </div>
 
@@ -1352,8 +2534,14 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-divider" />
 
-      {/* Export options */}
-      <div className="toolbar-group" role="group" aria-label="Export">
+      {/* Import/Export options */}
+      <div className="toolbar-group" role="group" aria-label="Import/Export">
+        <IconButton
+          icon={<FileUp size={18} />}
+          tooltip="Import Annotations"
+          onClick={handleImportAnnotations}
+          disabled={!imageLoaded}
+        />
         <ExportMenu
           onExport={handleExport}
           disabled={!imageLoaded || follicles.length === 0}
@@ -1383,8 +2571,47 @@ export const Toolbar: React.FC = () => {
 
       {/* Status display */}
       <div className="toolbar-spacer" />
+
+      {/* TensorRT Export Status (visible when exporting) */}
+      {(detectionExportState.isExporting || keypointExportState.isExporting) && (
+        <div className="toolbar-export-status">
+          <Loader2 size={14} className="spin" />
+          <span className="export-status-text">
+            {(() => {
+              const exportState = keypointExportState.isExporting ? keypointExportState : detectionExportState;
+              const baseMsg = exportState.progress || 'Exporting...';
+              const estimate = exportState.estimatedSeconds;
+              if (exportElapsedSeconds > 0) {
+                const elapsed = formatExportTime(exportElapsedSeconds);
+                if (estimate) {
+                  const remaining = Math.max(0, estimate - exportElapsedSeconds);
+                  return remaining > 0
+                    ? `${baseMsg} (${elapsed}, ~${formatExportTime(remaining)} left)`
+                    : `${baseMsg} (${elapsed}, finishing...)`;
+                }
+                return `${baseMsg} (${elapsed})`;
+              }
+              return baseMsg;
+            })()}
+          </span>
+        </div>
+      )}
+
       <div className="toolbar-status">
-        {imageLoaded && activeImage ? (
+        {serverStarting && setupStatus ? (
+          <div className="setup-status-container">
+            <Loader2 size={14} className="setup-spinner" />
+            <span className="setup-status">{setupStatus}</span>
+            {downloadPercent !== undefined && downloadPercent < 100 && (
+              <div className="download-progress-bar">
+                <div
+                  className="download-progress-fill"
+                  style={{ width: `${downloadPercent}%` }}
+                />
+              </div>
+            )}
+          </div>
+        ) : imageLoaded && activeImage ? (
           <>
             {images.size > 1 && (
               <span className="image-count">{images.size} images</span>
@@ -1406,11 +2633,39 @@ export const Toolbar: React.FC = () => {
       {showDetectionSettings && (
         <DetectionSettingsDialog
           settings={detectionSettings}
-          onSave={(settings) => {
-            setDetectionSettings(settings);
-            setShowDetectionSettings(false);
+          onClose={() => setShowDetectionSettings(false)}
+          blobServerConnected={blobServerConnected}
+          onServerRestarted={handleServerRestarted}
+          installState={gpuInstallState}
+          onInstallStateChange={setGpuInstallState}
+          // TensorRT export state (persisted across dialog open/close)
+          detectionExportState={detectionExportState}
+          onDetectionExportStateChange={setDetectionExportState}
+          keypointExportState={keypointExportState}
+          onKeypointExportStateChange={setKeypointExportState}
+          // Live settings updates (changes apply immediately and mark file dirty if project is open)
+          onSettingsChange={(newSettings) => {
+            setGlobalDetectionSettings(newSettings);
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
           }}
-          onCancel={() => setShowDetectionSettings(false)}
+          // Per-image settings support
+          activeImageId={activeImageId}
+          activeImageName={activeImage?.fileName}
+          hasImageOverride={hasImageOverride}
+          globalSettings={globalDetectionSettings}
+          onImageSettingsChange={(imageId, newSettings) => {
+            setImageSettingsOverride(imageId, newSettings);
+            setDirty(true);
+          }}
+          onClearImageOverride={(imageId) => {
+            clearImageSettingsOverride(imageId);
+            setDirty(true);
+          }}
+          // Navigation to Model Library
+          onOpenModelLibrary={handleOpenModelLibrary}
         />
       )}
 
@@ -1421,6 +2676,75 @@ export const Toolbar: React.FC = () => {
           settings={learnedSettings}
           onRun={handleLearnedDetect}
           onCancel={() => setShowLearnedDetection(false)}
+        />
+      )}
+
+      {/* Unified YOLO Training Dialog */}
+      {showUnifiedYOLOTraining && (
+        <UnifiedYOLOTraining onClose={() => setShowUnifiedYOLOTraining(false)} />
+      )}
+
+      {/* Unified YOLO Model Manager Dialog */}
+      {showUnifiedYOLOModelManager && (
+        <UnifiedYOLOModelManager
+          onClose={() => {
+            setShowUnifiedYOLOModelManager(false);
+            setModelLibraryInitialTab(undefined);
+          }}
+          initialTab={modelLibraryInitialTab}
+          selectedDetectionModelId={globalDetectionSettings.yoloModelId}
+          selectedKeypointModelId={globalDetectionSettings.keypointModelId}
+          onModelSelected={(modelType, modelId, modelName) => {
+            if (modelType === 'detection') {
+              setGlobalDetectionSettings({
+                ...globalDetectionSettings,
+                yoloModelId: modelId,
+                yoloModelName: modelName,
+                yoloModelSource: modelId ? 'custom' : 'pretrained',
+              });
+            } else {
+              setGlobalDetectionSettings({
+                ...globalDetectionSettings,
+                keypointModelId: modelId,
+                keypointModelName: modelName,
+                keypointModelSource: modelId ? 'custom' : 'pretrained',
+              });
+            }
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
+            setShowUnifiedYOLOModelManager(false);
+            setModelLibraryInitialTab(undefined);
+          }}
+        />
+      )}
+
+      {/* Import Annotations Dialog */}
+      {showImportDialog && importAnalysis && (
+        <ImportAnnotationsDialog
+          analysis={importAnalysis}
+          onImport={handleImportConfirm}
+          onCancel={handleImportCancel}
+        />
+      )}
+
+      {/* Duplicate Detection Dialog */}
+      {showDuplicateDialog && duplicateReport && (
+        <DuplicateDetectionDialog
+          report={duplicateReport}
+          onAction={handleDuplicateAction}
+          detectionMethod={detectionMethodName}
+        />
+      )}
+
+      {/* Server Error Dialog */}
+      {serverError && (
+        <ServerErrorDialog
+          error={serverError.error}
+          errorDetails={serverError.errorDetails}
+          onRetry={handleRetryServerStart}
+          onClose={() => setServerError(null)}
         />
       )}
     </div>

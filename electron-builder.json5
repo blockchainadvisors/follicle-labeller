@@ -10,6 +10,13 @@
     "dist/**/*",
     "dist-electron/**/*"
   ],
+  "extraResources": [
+    {
+      "from": "electron/python",
+      "to": "python",
+      "filter": ["*.py", "requirements.txt"]
+    }
+  ],
   "publish": {
     "provider": "github",
     "owner": "blockchainadvisors",

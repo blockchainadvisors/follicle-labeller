@@ -12,6 +12,16 @@ const electronAPI = {
     data: ArrayBuffer;
   } | null> => ipcRenderer.invoke("dialog:openImage"),
 
+  // Open generic file dialog with filters - returns file path and data
+  openFileDialog: (options: {
+    filters?: Array<{ name: string; extensions: string[] }>;
+    title?: string;
+  }): Promise<{
+    filePath: string;
+    fileName: string;
+    data: ArrayBuffer;
+  } | null> => ipcRenderer.invoke("dialog:openFile", options),
+
   // Legacy V1: Save project as .fol archive (image + annotations)
   saveProject: (
     imageData: ArrayBuffer,
@@ -238,7 +248,7 @@ const electronAPI = {
   // BLOB Detection Server API
   blob: {
     // Start the BLOB detection server
-    startServer: (): Promise<{ success: boolean; error?: string }> =>
+    startServer: (): Promise<{ success: boolean; error?: string; errorDetails?: string }> =>
       ipcRenderer.invoke("blob:startServer"),
 
     // Stop the BLOB detection server
@@ -261,6 +271,606 @@ const electronAPI = {
       running: boolean;
       scriptPath: string;
     }> => ipcRenderer.invoke("blob:getServerInfo"),
+
+    // Get setup progress status
+    getSetupStatus: (): Promise<string> =>
+      ipcRenderer.invoke("blob:getSetupStatus"),
+
+    // Listen for setup progress events (includes download percentage when downloading Python)
+    onSetupProgress: (callback: (status: string, percent?: number) => void) => {
+      const handler = (_event: IpcRendererEvent, status: string, percent?: number) =>
+        callback(status, percent);
+      ipcRenderer.on("blob:setupProgress", handler);
+      return () => ipcRenderer.removeListener("blob:setupProgress", handler);
+    },
+
+    // Get GPU backend information
+    getGPUInfo: (): Promise<{
+      activeBackend: "cuda" | "mps" | "cpu";
+      deviceName: string;
+      memoryGB?: number;
+      available: { cuda: boolean; mps: boolean };
+    }> => ipcRenderer.invoke("blob:getGPUInfo"),
+
+    // Restart the BLOB server (after GPU package installation)
+    restartServer: (): Promise<{ success: boolean; error?: string; errorDetails?: string }> =>
+      ipcRenderer.invoke("blob:restartServer"),
+  },
+
+  // GPU Hardware Detection & Package Installation API
+  gpu: {
+    // Get GPU hardware info (works before packages installed)
+    getHardwareInfo: (): Promise<{
+      hardware: {
+        nvidia: { found: boolean; name?: string; driver_version?: string };
+        apple_silicon: { found: boolean; chip?: string };
+      };
+      packages: { cupy: boolean; torch: boolean };
+      canEnableGpu: boolean;
+      gpuEnabled: boolean;
+    }> => ipcRenderer.invoke("gpu:getHardwareInfo"),
+
+    // Install GPU packages (cupy-cuda12x on Windows/Linux, torch on macOS)
+    installPackages: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("gpu:installPackages"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("gpu:installProgress", handler);
+      return () => ipcRenderer.removeListener("gpu:installProgress", handler);
+    },
+  },
+
+  // File system utilities
+  fileExists: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke("file:exists", filePath),
+
+  // TensorRT Installation API
+  tensorrt: {
+    // Check TensorRT availability and CUDA support
+    check: (): Promise<{
+      available: boolean;
+      version: string | null;
+      canInstall: boolean;
+    }> => ipcRenderer.invoke("tensorrt:check"),
+
+    // Install TensorRT packages
+    install: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("tensorrt:install"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("tensorrt:installProgress", handler);
+      return () => ipcRenderer.removeListener("tensorrt:installProgress", handler);
+    },
+  },
+
+  // YOLO Keypoint Training API
+  yoloKeypoint: {
+    // Check if YOLO dependencies are installed
+    checkDependencies: (): Promise<{
+      installed: boolean;
+      missing: string[];
+      estimatedSize: string;
+    }> => ipcRenderer.invoke("yolo:checkDependencies"),
+
+    // Install YOLO dependencies
+    installDependencies: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("yolo:installDependencies"),
+
+    // Upgrade PyTorch to CUDA version for GPU training
+    upgradeToCUDA: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke("yolo:upgradeToCUDA"),
+
+    // Listen for install progress events
+    onInstallProgress: (
+      callback: (data: { message: string; percent?: number }) => void
+    ) => {
+      const handler = (_event: IpcRendererEvent, data: { message: string; percent?: number }) =>
+        callback(data);
+      ipcRenderer.on("yolo:installProgress", handler);
+      return () => ipcRenderer.removeListener("yolo:installProgress", handler);
+    },
+
+    // Get service status
+    getStatus: (): Promise<{
+      available: boolean;
+      sseAvailable: boolean;
+      activeTrainingJobs: number;
+    }> => ipcRenderer.invoke("yolo-keypoint:getStatus"),
+
+    // Get system info (CPU/GPU, memory)
+    getSystemInfo: (): Promise<{
+      python_version: string;
+      platform: string;
+      cpu_count: number;
+      cpu_percent: number;
+      memory_total_gb: number;
+      memory_used_gb: number;
+      memory_percent: number;
+      device: string;
+      device_name: string;
+      cuda_available: boolean;
+      mps_available: boolean;
+      torch_version: string | null;
+      gpu_memory_total_gb: number | null;
+      gpu_memory_used_gb: number | null;
+    }> => ipcRenderer.invoke("yolo-keypoint:getSystemInfo"),
+
+    // Validate dataset
+    validateDataset: (
+      datasetPath: string
+    ): Promise<{
+      valid: boolean;
+      trainImages: number;
+      valImages: number;
+      trainLabels: number;
+      valLabels: number;
+      errors: string[];
+      warnings: string[];
+    }> => ipcRenderer.invoke("yolo-keypoint:validateDataset", datasetPath),
+
+    // Start training
+    startTraining: (
+      datasetPath: string,
+      config: {
+        modelSize?: string;
+        epochs?: number;
+        imgSize?: number;
+        batchSize?: number;
+        patience?: number;
+        device?: string;
+      },
+      modelName?: string
+    ): Promise<{ jobId: string; status: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:startTraining", datasetPath, config, modelName),
+
+    // Stop training
+    stopTraining: (jobId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:stopTraining", jobId),
+
+    // Subscribe to training progress via IPC (main process proxies SSE)
+    subscribeProgress: (
+      jobId: string,
+      onProgress: (progress: {
+        status: string;
+        epoch: number;
+        totalEpochs: number;
+        loss: number;
+        boxLoss: number;
+        poseLoss: number;
+        kobjLoss: number;
+        metrics: Record<string, number>;
+        eta: string;
+        message: string;
+      }) => void,
+      onError: (error: string) => void,
+      onComplete: () => void
+    ): (() => void) => {
+      // Set up IPC listeners for progress events from main process
+      const progressHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        progress: any
+      ) => {
+        if (receivedJobId !== jobId) return;
+        // Map snake_case to camelCase
+        onProgress({
+          status: progress.status || "",
+          epoch: progress.epoch || 0,
+          totalEpochs: progress.total_epochs || 0,
+          loss: progress.loss || 0,
+          boxLoss: progress.box_loss || 0,
+          poseLoss: progress.pose_loss || 0,
+          kobjLoss: progress.kobj_loss || 0,
+          metrics: progress.metrics || {},
+          eta: progress.eta || "",
+          message: progress.message || "",
+        });
+      };
+
+      const errorHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        error: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        onError(error);
+      };
+
+      const completeHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        cleanup();
+        onComplete();
+      };
+
+      // Register listeners
+      ipcRenderer.on("yolo-keypoint:progress", progressHandler);
+      ipcRenderer.on("yolo-keypoint:progress-error", errorHandler);
+      ipcRenderer.on("yolo-keypoint:progress-complete", completeHandler);
+
+      // Start the SSE subscription in main process
+      ipcRenderer.invoke("yolo-keypoint:subscribeProgress", jobId);
+
+      // Cleanup function
+      const cleanup = () => {
+        ipcRenderer.removeListener("yolo-keypoint:progress", progressHandler);
+        ipcRenderer.removeListener(
+          "yolo-keypoint:progress-error",
+          errorHandler
+        );
+        ipcRenderer.removeListener(
+          "yolo-keypoint:progress-complete",
+          completeHandler
+        );
+        ipcRenderer.invoke("yolo-keypoint:unsubscribeProgress", jobId);
+      };
+
+      return cleanup;
+    },
+
+    // List trained models
+    listModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+      }>;
+    }> => ipcRenderer.invoke("yolo-keypoint:listModels"),
+
+    // Load model for inference
+    loadModel: (modelPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:loadModel", modelPath),
+
+    // Run prediction
+    predict: (
+      imageData: string
+    ): Promise<{
+      success: boolean;
+      prediction?: {
+        origin: { x: number; y: number };
+        directionEndpoint: { x: number; y: number };
+        confidence: number;
+      };
+      message?: string;
+    }> => ipcRenderer.invoke("yolo-keypoint:predict", imageData),
+
+    // Show save dialog for ONNX export
+    showExportDialog: (
+      defaultFileName: string
+    ): Promise<{ canceled: boolean; filePath?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:showExportDialog", defaultFileName),
+
+    // Export to ONNX
+    exportONNX: (
+      modelPath: string,
+      outputPath: string
+    ): Promise<{ success: boolean; outputPath?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:exportONNX", modelPath, outputPath),
+
+    // Delete model
+    deleteModel: (modelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-keypoint:deleteModel", modelId),
+
+    // Write dataset files to temp directory (for training from current project)
+    writeDatasetToTemp: (
+      files: Array<{ path: string; content: ArrayBuffer | string }>
+    ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:writeDatasetToTemp", files),
+
+    // Check TensorRT availability for keypoint inference
+    checkTensorRTAvailable: (): Promise<{ available: boolean; version: string | null }> =>
+      ipcRenderer.invoke("yolo-keypoint:checkTensorRT"),
+
+    // Export to TensorRT engine format
+    exportToTensorRT: (
+      modelPath: string,
+      outputPath?: string,
+      half?: boolean,
+      imgsz?: number
+    ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-keypoint:exportTensorRT", modelPath, outputPath, half, imgsz),
+  },
+
+  // Model Export/Import API
+  model: {
+    // Export model as portable package (ZIP with model.pt + config.json)
+    // suggestedFileName is optional - if not provided, filename is generated from config
+    exportPackage: (
+      modelId: string,
+      modelPath: string,
+      config: Record<string, unknown>,
+      suggestedFileName?: string
+    ): Promise<{ success: boolean; filePath?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke("model:exportPackage", modelId, modelPath, config, suggestedFileName),
+
+    // Preview model package before import (read config.json from ZIP)
+    // Optionally pass expectedModelType to validate the package type
+    previewPackage: (
+      expectedModelType?: 'detection' | 'keypoint'
+    ): Promise<{
+      valid: boolean;
+      filePath?: string;
+      config?: Record<string, unknown>;
+      modelType?: 'detection' | 'keypoint';
+      hasEngine?: boolean;
+      canceled?: boolean;
+      error?: string;
+    }> => ipcRenderer.invoke("model:previewPackage", expectedModelType),
+
+    // Import model package
+    importPackage: (
+      filePath: string,
+      newModelName?: string
+    ): Promise<{
+      success: boolean;
+      modelId?: string;
+      modelPath?: string;
+      modelName?: string;
+      modelType?: 'detection' | 'keypoint';
+      error?: string;
+    }> => ipcRenderer.invoke("model:importPackage", filePath, newModelName),
+  },
+
+  // YOLO Detection Training API (for follicle bounding box detection)
+  yoloDetection: {
+    // Get service status
+    getStatus: (): Promise<{
+      available: boolean;
+      sseAvailable: boolean;
+      activeTrainingJobs: number;
+      loadedModel: string | null;
+    }> => ipcRenderer.invoke("yolo-detection:getStatus"),
+
+    // Validate dataset
+    validateDataset: (
+      datasetPath: string
+    ): Promise<{
+      valid: boolean;
+      train_images: number;
+      val_images: number;
+      train_labels: number;
+      val_labels: number;
+      errors: string[];
+      warnings: string[];
+    }> => ipcRenderer.invoke("yolo-detection:validateDataset", datasetPath),
+
+    // Start training
+    startTraining: (
+      datasetPath: string,
+      config: {
+        modelSize?: string;
+        epochs?: number;
+        imgSize?: number;
+        batchSize?: number;
+        patience?: number;
+        device?: string;
+      },
+      modelName?: string
+    ): Promise<{ jobId: string; status: string }> =>
+      ipcRenderer.invoke("yolo-detection:startTraining", datasetPath, config, modelName),
+
+    // Stop training
+    stopTraining: (jobId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:stopTraining", jobId),
+
+    // Subscribe to training progress via IPC (main process proxies SSE)
+    subscribeProgress: (
+      jobId: string,
+      onProgress: (progress: {
+        status: string;
+        epoch: number;
+        totalEpochs: number;
+        loss: number;
+        boxLoss: number;
+        clsLoss: number;
+        dflLoss: number;
+        metrics: Record<string, number>;
+        eta: string;
+        message: string;
+      }) => void,
+      onError: (error: string) => void,
+      onComplete: () => void
+    ): (() => void) => {
+      const progressHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        progress: any
+      ) => {
+        if (receivedJobId !== jobId) return;
+        // Map snake_case to camelCase
+        onProgress({
+          status: progress.status || "",
+          epoch: progress.epoch || 0,
+          totalEpochs: progress.total_epochs || 0,
+          loss: progress.loss || 0,
+          boxLoss: progress.box_loss || 0,
+          clsLoss: progress.cls_loss || 0,
+          dflLoss: progress.dfl_loss || 0,
+          metrics: progress.metrics || {},
+          eta: progress.eta || "",
+          message: progress.message || "",
+        });
+      };
+
+      const errorHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string,
+        error: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        onError(error);
+      };
+
+      const completeHandler = (
+        _event: Electron.IpcRendererEvent,
+        receivedJobId: string
+      ) => {
+        if (receivedJobId !== jobId) return;
+        cleanup();
+        onComplete();
+      };
+
+      // Register listeners
+      ipcRenderer.on("yolo-detection:progress", progressHandler);
+      ipcRenderer.on("yolo-detection:progress-error", errorHandler);
+      ipcRenderer.on("yolo-detection:progress-complete", completeHandler);
+
+      // Start the SSE subscription in main process
+      ipcRenderer.invoke("yolo-detection:subscribeProgress", jobId);
+
+      // Cleanup function
+      const cleanup = () => {
+        ipcRenderer.removeListener("yolo-detection:progress", progressHandler);
+        ipcRenderer.removeListener(
+          "yolo-detection:progress-error",
+          errorHandler
+        );
+        ipcRenderer.removeListener(
+          "yolo-detection:progress-complete",
+          completeHandler
+        );
+        ipcRenderer.invoke("yolo-detection:unsubscribeProgress", jobId);
+      };
+
+      return cleanup;
+    },
+
+    // List trained models
+    listModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+      }>;
+    }> => ipcRenderer.invoke("yolo-detection:listModels"),
+
+    // Get resumable models (incomplete training with last.pt)
+    getResumableModels: (): Promise<{
+      models: Array<{
+        id: string;
+        name: string;
+        path: string;
+        createdAt: string;
+        epochsTrained: number;
+        imgSize: number;
+        metrics: Record<string, number>;
+        epochsCompleted: number;
+        totalEpochs: number;
+        canResume: boolean;
+      }>;
+    }> => ipcRenderer.invoke("yolo-detection:getResumableModels"),
+
+    // Load model for inference
+    loadModel: (modelPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:loadModel", modelPath),
+
+    // Run detection prediction on full image
+    predict: (
+      imageData: string,
+      confidenceThreshold?: number
+    ): Promise<{
+      success: boolean;
+      detections: Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        confidence: number;
+        classId: number;
+        className: string;
+      }>;
+      count: number;
+    }> => ipcRenderer.invoke("yolo-detection:predict", imageData, confidenceThreshold),
+
+    // Run tiled detection prediction (for large images with small objects)
+    predictTiled: (
+      imageData: string,
+      confidenceThreshold?: number,
+      tileSize?: number,
+      overlap?: number,
+      nmsThreshold?: number,
+      scaleFactor?: number
+    ): Promise<{
+      success: boolean;
+      detections: Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        confidence: number;
+        classId: number;
+        className: string;
+      }>;
+      count: number;
+      method: string;
+      tileSize: number;
+      overlap: number;
+      scaleFactor: number;
+    }> => ipcRenderer.invoke(
+      "yolo-detection:predictTiled",
+      imageData,
+      confidenceThreshold,
+      tileSize,
+      overlap,
+      nmsThreshold,
+      scaleFactor
+    ),
+
+    // Show save dialog for ONNX export
+    showExportDialog: (
+      defaultFileName: string
+    ): Promise<{ canceled: boolean; filePath?: string }> =>
+      ipcRenderer.invoke("yolo-detection:showExportDialog", defaultFileName),
+
+    // Export to ONNX
+    exportONNX: (
+      modelPath: string,
+      outputPath: string
+    ): Promise<{ success: boolean; outputPath?: string }> =>
+      ipcRenderer.invoke("yolo-detection:exportONNX", modelPath, outputPath),
+
+    // Delete model
+    deleteModel: (modelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke("yolo-detection:deleteModel", modelId),
+
+    // Write dataset files to temp directory (for training from current project)
+    writeDatasetToTemp: (
+      files: Array<{ path: string; content: ArrayBuffer | string }>
+    ): Promise<{ success: boolean; datasetPath?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-detection:writeDatasetToTemp", files),
+
+    // Check if TensorRT is available on this system
+    checkTensorRTAvailable: (): Promise<{ available: boolean; version: string | null }> =>
+      ipcRenderer.invoke("yolo-detection:checkTensorRT"),
+
+    // Export model to TensorRT engine format
+    exportToTensorRT: (
+      modelPath: string,
+      outputPath?: string,
+      half?: boolean,
+      imgsz?: number
+    ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
+      ipcRenderer.invoke("yolo-detection:exportTensorRT", modelPath, outputPath, half, imgsz),
   },
 };
 

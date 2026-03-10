@@ -10,6 +10,10 @@ interface ProjectState {
   currentProjectPath: string | null;  // Path to the currently loaded/saved project file
   isDirty: boolean;  // Track unsaved changes
 
+  // Canvas dimensions (for fit-to-screen calculations)
+  canvasWidth: number;
+  canvasHeight: number;
+
   // Actions
   addImage: (image: ProjectImage) => void;
   removeImage: (imageId: ImageId) => void;
@@ -20,6 +24,7 @@ interface ProjectState {
   setDirty: (dirty: boolean) => void;
   markClean: () => void;
   clearProject: () => void;
+  setCanvasSize: (width: number, height: number) => void;
 
   // Viewport actions for active image
   zoom: (delta: number, centerPoint?: Point) => void;
@@ -41,6 +46,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   activeImageId: null,
   currentProjectPath: null,
   isDirty: false,
+  canvasWidth: 800,  // Default, will be updated by ImageCanvas
+  canvasHeight: 600,
 
   addImage: (image) => {
     set(state => {
@@ -165,6 +172,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
+  setCanvasSize: (width, height) => {
+    set({ canvasWidth: width, canvasHeight: height });
+  },
+
   // Viewport actions for active image
   zoom: (delta, centerPoint) => {
     const state = get();
@@ -209,7 +220,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   resetZoom: () => {
     const state = get();
     if (!state.activeImageId) return;
-    get().setImageViewport(state.activeImageId, { offsetX: 0, offsetY: 0, scale: 1 });
+    // Fit to screen instead of resetting to 100%
+    get().zoomToFit(state.canvasWidth, state.canvasHeight);
   },
 
   pan: (deltaX, deltaY) => {
@@ -219,9 +231,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const image = state.images.get(state.activeImageId);
     if (!image) return;
 
+    const newOffsetX = image.viewport.offsetX + deltaX;
+    const newOffsetY = image.viewport.offsetY + deltaY;
+
     get().setImageViewport(state.activeImageId, {
-      offsetX: image.viewport.offsetX + deltaX,
-      offsetY: image.viewport.offsetY + deltaY,
+      offsetX: newOffsetX,
+      offsetY: newOffsetY,
     });
   },
 

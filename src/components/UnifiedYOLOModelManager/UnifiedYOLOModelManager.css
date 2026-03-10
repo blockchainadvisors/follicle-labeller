@@ -1,0 +1,519 @@
+/* Unified YOLO Model Manager Dialog */
+.unified-yolo-model-manager-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.unified-yolo-model-manager-dialog {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  width: 640px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Dialog Header */
+.unified-yolo-model-manager-dialog .dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .dialog-header h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.unified-yolo-model-manager-dialog .close-button {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unified-yolo-model-manager-dialog .close-button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+/* Tab Bar */
+.unified-yolo-model-manager-dialog .tab-bar {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .tab-button {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .tab-button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.unified-yolo-model-manager-dialog .tab-button.active {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: var(--font-semibold);
+}
+
+/* Tab Content */
+.unified-yolo-model-manager-dialog .tab-content {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.unified-yolo-model-manager-dialog .model-manager-tab-content {
+  padding: 20px;
+}
+
+/* Tab Header with Import and Refresh buttons */
+.unified-yolo-model-manager-dialog .tab-header {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.unified-yolo-model-manager-dialog .refresh-button,
+.unified-yolo-model-manager-dialog .import-model-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .refresh-button:hover:not(:disabled),
+.unified-yolo-model-manager-dialog .import-model-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.unified-yolo-model-manager-dialog .refresh-button:disabled,
+.unified-yolo-model-manager-dialog .import-model-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.unified-yolo-model-manager-dialog .import-model-button {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.unified-yolo-model-manager-dialog .import-model-button:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+}
+
+/* Error Message */
+.unified-yolo-model-manager-dialog .error-message {
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--danger);
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: var(--text-base);
+}
+
+/* Loading and Empty States */
+.unified-yolo-model-manager-dialog .loading-state,
+.unified-yolo-model-manager-dialog .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+}
+
+.unified-yolo-model-manager-dialog .empty-state .hint {
+  font-size: var(--text-base);
+  opacity: 0.7;
+}
+
+/* Models List */
+.unified-yolo-model-manager-dialog .models-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Model Card */
+.unified-yolo-model-manager-dialog .model-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .model-card:hover {
+  border-color: var(--accent);
+}
+
+.unified-yolo-model-manager-dialog .model-card.loaded {
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+/* Model Info */
+.unified-yolo-model-manager-dialog .model-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.unified-yolo-model-manager-dialog .model-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.unified-yolo-model-manager-dialog .loaded-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--success);
+  color: white;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  border-radius: 4px;
+}
+
+.unified-yolo-model-manager-dialog .model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.unified-yolo-model-manager-dialog .model-metrics {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+/* Model Actions */
+.unified-yolo-model-manager-dialog .model-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.unified-yolo-model-manager-dialog .action-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.unified-yolo-model-manager-dialog .action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.unified-yolo-model-manager-dialog .action-button.load:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.unified-yolo-model-manager-dialog .action-button.export:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.unified-yolo-model-manager-dialog .action-button.export-tensorrt {
+  color: #f59e0b;
+}
+
+.unified-yolo-model-manager-dialog .action-button.export-tensorrt:hover:not(:disabled) {
+  color: #d97706;
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.unified-yolo-model-manager-dialog .action-button.export-package:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.unified-yolo-model-manager-dialog .action-button.delete:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* Tab Footer */
+.unified-yolo-model-manager-dialog .model-manager-tab-content .tab-footer {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .model-count {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+
+/* Dialog Footer */
+.unified-yolo-model-manager-dialog .dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .close-dialog-button {
+  padding: 10px 20px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+}
+
+.unified-yolo-model-manager-dialog .close-dialog-button:hover {
+  background: var(--bg-hover);
+}
+
+/* Import Preview Dialog */
+.unified-yolo-model-manager-dialog .import-preview-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.unified-yolo-model-manager-dialog .import-preview-dialog {
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  width: 440px;
+  max-width: 90vw;
+}
+
+.unified-yolo-model-manager-dialog .import-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .import-preview-header h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+
+.unified-yolo-model-manager-dialog .import-preview-content {
+  padding: 20px;
+}
+
+.unified-yolo-model-manager-dialog .preview-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .preview-item:last-child {
+  border-bottom: none;
+}
+
+.unified-yolo-model-manager-dialog .preview-label {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.unified-yolo-model-manager-dialog .preview-value {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.unified-yolo-model-manager-dialog .preview-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  margin-top: 12px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+}
+
+.unified-yolo-model-manager-dialog .import-preview-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.unified-yolo-model-manager-dialog .cancel-button {
+  padding: 10px 16px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.unified-yolo-model-manager-dialog .cancel-button:hover {
+  background: var(--bg-hover);
+}
+
+.unified-yolo-model-manager-dialog .import-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.unified-yolo-model-manager-dialog .import-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.unified-yolo-model-manager-dialog .import-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Spinner animation */
+.unified-yolo-model-manager-dialog .spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Active model card (selected for inference) */
+.unified-yolo-model-manager-dialog .model-card.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+/* Selectable model cards have pointer cursor */
+.unified-yolo-model-manager-dialog .model-card.selectable {
+  cursor: pointer;
+}
+
+/* Active badge - green for light themes */
+.unified-yolo-model-manager-dialog .active-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--success);
+  color: white;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  border-radius: 4px;
+}
+
+/* Activate button */
+.unified-yolo-model-manager-dialog .action-button.activate:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+/* Dark theme specific adjustments */
+[data-theme="dark"] .unified-yolo-model-manager-dialog .model-card.active {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+/* Active badge - cyan/teal for dark themes (more visible) */
+[data-theme="dark"] .unified-yolo-model-manager-dialog .active-badge {
+  background: #06b6d4;
+}

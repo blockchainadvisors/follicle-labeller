@@ -1,0 +1,68 @@
+# Docker Compose for GPU Server Deployment
+# Run on Ubuntu 24 + RTX 4070 server
+
+version: '3.8'
+
+services:
+  # Backend API server with GPU support
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    image: follicle-labeller-backend:latest
+    container_name: follicle-backend
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    volumes:
+      # Persist trained models
+      - models-data:/app/models
+      # Persist project storage
+      - projects-data:/root/.follicle-labeller/projects
+      # Temp datasets for training
+      - temp-datasets:/root/.follicle-labeller/temp_datasets
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Optional: Nginx reverse proxy for web frontend
+  # Uncomment this section if serving the web frontend from the same server
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: follicle-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ../dist-web:/usr/share/nginx/html:ro
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     # Add SSL certificates for HTTPS
+  #     # - ./certs:/etc/nginx/certs:ro
+  #   depends_on:
+  #     - backend
+
+volumes:
+  models-data:
+    driver: local
+  projects-data:
+    driver: local
+  temp-datasets:
+    driver: local
+
+networks:
+  default:
+    name: follicle-network
