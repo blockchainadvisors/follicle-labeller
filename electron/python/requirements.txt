@@ -10,6 +10,7 @@ opencv-python>=4.8.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
 sse-starlette>=1.6.0
+python-multipart>=0.0.6
 
 # YOLO Training (for keypoint/pose model training)
 ultralytics>=8.3.0

@@ -7,14 +7,40 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.set-platforms.outputs.platforms }}
+      is_release: ${{ steps.set-platforms.outputs.is_release }}
+      clean_tag: ${{ steps.set-platforms.outputs.clean_tag }}
+    steps:
+      - id: set-platforms
+        run: |
+          TAG="${GITHUB_REF_NAME:-all}"
+          IS_RELEASE=${{ startsWith(github.ref, 'refs/tags/v') }}
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+
+          # Strip platform suffix to get clean version tag
+          CLEAN_TAG=$(echo "$TAG" | sed 's/-win$//' | sed 's/-mac$//')
+          echo "clean_tag=$CLEAN_TAG" >> $GITHUB_OUTPUT
+
+          if [[ "$TAG" == *-win ]]; then
+            echo 'platforms=[{"os":"windows-latest","platform":"win"}]' >> $GITHUB_OUTPUT
+            echo "Building Windows only (tag: $TAG)"
+          elif [[ "$TAG" == *-mac ]]; then
+            echo 'platforms=[{"os":"macos-latest","platform":"mac"}]' >> $GITHUB_OUTPUT
+            echo "Building macOS only (tag: $TAG)"
+          else
+            echo 'platforms=[{"os":"windows-latest","platform":"win"},{"os":"macos-latest","platform":"mac"}]' >> $GITHUB_OUTPUT
+            echo "Building all platforms (tag: $TAG)"
+          fi
+
   build:
+    needs: setup
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            platform: win
-          - os: macos-latest
-            platform: mac
+        include: ${{ fromJson(needs.setup.outputs.platforms) }}
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -183,18 +209,20 @@ jobs:
           if-no-files-found: ignore
 
   release:
-    needs: build
+    needs: [setup, build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Download Windows artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: windows-build
           path: release
 
       - name: Download macOS artifacts
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: macos-build
@@ -215,5 +243,6 @@ jobs:
           files: release/*
           draft: false
           generate_release_notes: true
+          name: ${{ needs.setup.outputs.clean_tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

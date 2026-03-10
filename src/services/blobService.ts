@@ -8,10 +8,13 @@
  * - Auto-detection using SimpleBlobDetector + contour fallback
  *
  * Requires minimum 3 user annotations before auto-detection can run.
+ *
+ * This service uses the platform adapter to work in both Electron and Web modes.
  */
 
 import type { DetectedBlob, GPUInfo, FollicleOrigin, KeypointPrediction } from "../types";
 import { yoloKeypointService } from "./yoloKeypointService";
+import { getPlatform, config as platformConfig } from "../platform";
 
 export interface BlobServerConfig {
   host: string;
@@ -52,19 +55,23 @@ export class BlobService {
 
   /**
    * Get the base URL for the BLOB server.
+   * Uses platform config for web deployments, local config for Electron.
    */
   private get baseUrl(): string {
-    return `http://${this.config.host}:${this.config.port}`;
+    // In web mode, use the platform config backend URL
+    // In Electron mode, use local config
+    return platformConfig.storageMode === 'server'
+      ? platformConfig.backendUrl
+      : `http://${this.config.host}:${this.config.port}`;
   }
 
   /**
    * Check if the BLOB server is available.
-   * Uses IPC to avoid browser console errors during startup.
+   * Uses platform adapter to avoid browser console errors during startup.
    */
   async isAvailable(): Promise<boolean> {
     try {
-      // Use IPC to check availability - this avoids ERR_CONNECTION_REFUSED in browser console
-      return await window.electronAPI.blob.isAvailable();
+      return await getPlatform().blob.isAvailable();
     } catch {
       return false;
     }
@@ -72,12 +79,11 @@ export class BlobService {
 
   /**
    * Check if the BLOB server is running.
-   * Uses IPC to avoid browser console errors during startup.
+   * Uses platform adapter to avoid browser console errors during startup.
    */
   async isServerRunning(): Promise<boolean> {
     try {
-      // Use IPC to check server status - this avoids ERR_CONNECTION_REFUSED in browser console
-      return await window.electronAPI.blob.isAvailable();
+      return await getPlatform().blob.isAvailable();
     } catch {
       return false;
     }
@@ -493,7 +499,7 @@ export class BlobService {
         const enginePath = keypointModel.replace(/\.pt$/i, '.engine');
         // Check if engine file exists via electron API
         try {
-          const engineExists = await window.electronAPI.fileExists(enginePath);
+          const engineExists = await getPlatform().file.fileExists(enginePath);
           if (engineExists) {
             modelToLoad = enginePath;
             console.log('Using TensorRT engine for keypoint model:', enginePath);
@@ -518,7 +524,7 @@ export class BlobService {
         if (useTensorRT && !modelPath.endsWith('.engine')) {
           const enginePath = modelPath.replace(/\.pt$/i, '.engine');
           try {
-            const engineExists = await window.electronAPI.fileExists(enginePath);
+            const engineExists = await getPlatform().file.fileExists(enginePath);
             if (engineExists) {
               modelPath = enginePath;
               console.log('[Keypoint] Using TensorRT engine:', enginePath);
@@ -690,7 +696,7 @@ export class BlobService {
     if (useTensorRT && !modelPath.endsWith('.engine')) {
       const enginePath = modelPath.replace(/\.pt$/i, '.engine');
       try {
-        const engineExists = await window.electronAPI.fileExists(enginePath);
+        const engineExists = await getPlatform().file.fileExists(enginePath);
         if (engineExists) {
           modelPath = enginePath;
           actuallyUsingTensorRT = true;

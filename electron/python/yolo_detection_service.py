@@ -181,13 +181,17 @@ class YOLODetectionService:
         Initialize the YOLO detection service.
 
         Args:
-            models_dir: Directory to store trained models. If None, uses
-                       a 'models/detection' subdirectory next to this script.
+            models_dir: Directory to store trained models. If None, checks
+                       MODELS_BASE_DIR env var, then falls back to a
+                       'models/detection' subdirectory next to this script.
         """
         if models_dir:
             self.models_dir = Path(models_dir)
+        elif os.environ.get('MODELS_BASE_DIR'):
+            # Use environment variable (set by Electron to persist models across updates)
+            self.models_dir = Path(os.environ['MODELS_BASE_DIR']) / 'detection'
         else:
-            # Default to models/detection next to script
+            # Default to models/detection next to script (dev mode)
             self.models_dir = Path(__file__).parent / 'models' / 'detection'
 
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +200,7 @@ class YOLODetectionService:
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
         self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
+        self._loaded_model_imgsz: int = 640  # Training image size for inference
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
@@ -757,12 +762,25 @@ class YOLODetectionService:
             return True
         return False
 
+    def _get_inference_device(self):
+        """Get the best available device for inference."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return 0  # CUDA device
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return 'mps'  # Apple Silicon
+        except ImportError:
+            pass
+        return 'cpu'
+
     def load_model(self, model_path: str) -> bool:
         """
         Load a trained model for inference.
 
         Supports both PyTorch (.pt) and TensorRT (.engine) formats.
         Ultralytics handles TensorRT engines directly.
+        Handles cross-device loading (e.g. CUDA-trained models on MPS/CPU).
 
         Args:
             model_path: Path to model file (.pt or .engine)
@@ -781,6 +799,7 @@ class YOLODetectionService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
             # Detect backend from file extension
             model_ext = Path(model_path).suffix.lower()
@@ -789,12 +808,45 @@ class YOLODetectionService:
             else:
                 backend = 'pytorch'
 
-            # Load new model (Ultralytics handles both .pt and .engine)
-            self._loaded_model = YOLO(model_path)
+            # For PyTorch models, ensure CUDA-trained models can load on CPU/MPS
+            # by pre-loading with map_location='cpu' if CUDA is not available
+            if backend == 'pytorch':
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        # Force-remap CUDA tensors to CPU before YOLO loads them
+                        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                            # Ensure model tensors are on CPU
+                            if hasattr(checkpoint['model'], 'float'):
+                                checkpoint['model'] = checkpoint['model'].float()
+                        # Save remapped checkpoint to a temp file and load via YOLO
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as tmp:
+                            torch.save(checkpoint, tmp.name)
+                            self._loaded_model = YOLO(tmp.name)
+                        # Clean up temp file
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                        logger.info(f"Loaded CUDA-trained model on {self._get_inference_device()} via CPU remapping")
+                    else:
+                        self._loaded_model = YOLO(model_path)
+                except Exception as e:
+                    logger.warning(f"Cross-device load failed, trying direct load: {e}")
+                    self._loaded_model = YOLO(model_path)
+            else:
+                # TensorRT engines - load directly (GPU-architecture specific)
+                self._loaded_model = YOLO(model_path)
+
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
-            logger.info(f"Loaded model: {model_path} (backend: {backend})")
+            # Store the model's training imgsz to ensure consistent inference
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
+
+            logger.info(f"Loaded model: {model_path} (backend: {backend}, imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -821,8 +873,9 @@ class YOLODetectionService:
 
             self._loaded_model = YOLO(default_model)
             self._loaded_model_path = f"pretrained:{default_model}"
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
 
-            logger.info(f"Successfully loaded default model: {default_model}")
+            logger.info(f"Successfully loaded default model: {default_model} (imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -863,11 +916,14 @@ class YOLODetectionService:
             img_array = np.array(image)
             img_height, img_width = img_array.shape[:2]
 
-            # Run inference
+            # Run inference with explicit device and imgsz to ensure consistent results
+            device = self._get_inference_device()
             results = self._loaded_model.predict(
                 img_array,
                 conf=confidence_threshold,
-                verbose=False
+                verbose=False,
+                imgsz=self._loaded_model_imgsz,
+                device=device
             )
 
             if not results or len(results) == 0:
@@ -1004,6 +1060,9 @@ class YOLODetectionService:
                 logger.info("Image smaller than tile size, using regular prediction")
                 return self.predict(image_data, confidence_threshold)
 
+            # Determine inference device
+            device = self._get_inference_device()
+
             # Calculate tile positions
             step = tile_size - overlap
             all_predictions = []
@@ -1026,11 +1085,13 @@ class YOLODetectionService:
 
                     tile_count += 1
 
-                    # Run inference on tile
+                    # Run inference on tile with explicit device and imgsz
                     results = self._loaded_model.predict(
                         tile,
                         conf=confidence_threshold,
-                        verbose=False
+                        verbose=False,
+                        imgsz=self._loaded_model_imgsz,
+                        device=device
                     )
 
                     if results and len(results) > 0:

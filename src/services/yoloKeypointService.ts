@@ -3,6 +3,8 @@
  *
  * Provides a TypeScript interface for YOLO11-pose model training
  * and inference for follicle origin detection.
+ *
+ * This service uses the platform adapter to work in both Electron and Web modes.
  */
 
 import {
@@ -15,6 +17,7 @@ import {
   YoloDependenciesInfo,
   DEFAULT_TRAINING_CONFIG,
 } from '../types';
+import { getPlatform } from '../platform';
 
 /**
  * Sleep for specified milliseconds.
@@ -115,7 +118,7 @@ export class YOLOKeypointService {
   async getStatus(): Promise<YoloKeypointStatus> {
     try {
       return await withRetry(
-        () => window.electronAPI.yoloKeypoint.getStatus(),
+        () => getPlatform().yoloKeypoint.getStatus(),
         {
           maxRetries: 8,
           initialDelayMs: 500,
@@ -170,7 +173,7 @@ export class YOLOKeypointService {
   private async fetchDependencies(): Promise<YoloDependenciesInfo> {
     try {
       return await withRetry(
-        () => window.electronAPI.yoloKeypoint.checkDependencies(),
+        () => getPlatform().yoloKeypoint.checkDependencies(),
         {
           maxRetries: 8,
           initialDelayMs: 500,
@@ -205,16 +208,18 @@ export class YOLOKeypointService {
   async installDependencies(
     onProgress?: (message: string, percent?: number) => void
   ): Promise<{ success: boolean; error?: string }> {
+    const platform = getPlatform();
+
     // Set up progress listener if callback provided
     let cleanup: (() => void) | undefined;
     if (onProgress) {
-      cleanup = window.electronAPI.yoloKeypoint.onInstallProgress((data) => {
+      cleanup = platform.yoloKeypoint.onInstallProgress((data) => {
         onProgress(data.message, data.percent);
       });
     }
 
     try {
-      const result = await window.electronAPI.yoloKeypoint.installDependencies();
+      const result = await platform.yoloKeypoint.installDependencies();
       // Invalidate cache after successful installation so next check will see updated state
       if (result.success) {
         this.invalidateDependenciesCache();
@@ -241,16 +246,18 @@ export class YOLOKeypointService {
   async upgradeToCUDA(
     onProgress?: (message: string, percent?: number) => void
   ): Promise<{ success: boolean; error?: string }> {
+    const platform = getPlatform();
+
     // Set up progress listener if callback provided
     let cleanup: (() => void) | undefined;
     if (onProgress) {
-      cleanup = window.electronAPI.yoloKeypoint.onInstallProgress((data) => {
+      cleanup = platform.yoloKeypoint.onInstallProgress((data) => {
         onProgress(data.message, data.percent);
       });
     }
 
     try {
-      const result = await window.electronAPI.yoloKeypoint.upgradeToCUDA();
+      const result = await platform.yoloKeypoint.upgradeToCUDA();
       // Invalidate cache after successful upgrade so next check will see updated state
       if (result.success) {
         this.invalidateDependenciesCache();
@@ -275,7 +282,7 @@ export class YOLOKeypointService {
    */
   async validateDataset(datasetPath: string): Promise<DatasetValidation> {
     try {
-      const result = await window.electronAPI.yoloKeypoint.validateDataset(datasetPath);
+      const result = await getPlatform().yoloKeypoint.validateDataset(datasetPath);
       return {
         valid: result.valid,
         trainImages: result.trainImages,
@@ -314,12 +321,14 @@ export class YOLOKeypointService {
     onProgress: (progress: TrainingProgress) => void,
     modelName?: string
   ): Promise<string> {
+    const platform = getPlatform();
+
     // Stop any existing training
     await this.stopTraining();
 
     try {
       // Start training
-      const result = await window.electronAPI.yoloKeypoint.startTraining(
+      const result = await platform.yoloKeypoint.startTraining(
         datasetPath,
         config,
         modelName
@@ -332,7 +341,7 @@ export class YOLOKeypointService {
       this.activeJobId = result.jobId;
 
       // Subscribe to progress updates
-      this.cleanupFunction = window.electronAPI.yoloKeypoint.subscribeProgress(
+      this.cleanupFunction = platform.yoloKeypoint.subscribeProgress(
         result.jobId,
         (rawProgress) => {
           // Map to TrainingProgress type
@@ -392,7 +401,7 @@ export class YOLOKeypointService {
     // Stop the training job
     if (this.activeJobId) {
       try {
-        await window.electronAPI.yoloKeypoint.stopTraining(this.activeJobId);
+        await getPlatform().yoloKeypoint.stopTraining(this.activeJobId);
       } catch (error) {
         console.error('Failed to stop training:', error);
       }
@@ -421,7 +430,7 @@ export class YOLOKeypointService {
   async listModels(): Promise<ModelInfo[]> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloKeypoint.listModels(),
+        () => getPlatform().yoloKeypoint.listModels(),
         {
           maxRetries: 8,
           initialDelayMs: 500,
@@ -462,7 +471,7 @@ export class YOLOKeypointService {
   async loadModel(modelPath: string): Promise<boolean> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloKeypoint.loadModel(modelPath),
+        () => getPlatform().yoloKeypoint.loadModel(modelPath),
         {
           maxRetries: 5,
           initialDelayMs: 500,
@@ -487,7 +496,7 @@ export class YOLOKeypointService {
   async predict(imageBase64: string): Promise<KeypointPrediction | null> {
     try {
       const result = await withRetry(
-        () => window.electronAPI.yoloKeypoint.predict(imageBase64),
+        () => getPlatform().yoloKeypoint.predict(imageBase64),
         {
           maxRetries: 3,
           initialDelayMs: 500,
@@ -519,7 +528,7 @@ export class YOLOKeypointService {
    */
   async showExportDialog(defaultFileName: string): Promise<string | null> {
     try {
-      const result = await window.electronAPI.yoloKeypoint.showExportDialog(defaultFileName);
+      const result = await getPlatform().yoloKeypoint.showExportDialog(defaultFileName);
       return result.canceled ? null : result.filePath || null;
     } catch (error) {
       console.error('Failed to show export dialog:', error);
@@ -536,7 +545,7 @@ export class YOLOKeypointService {
    */
   async exportONNX(modelPath: string, outputPath: string): Promise<string | null> {
     try {
-      const result = await window.electronAPI.yoloKeypoint.exportONNX(
+      const result = await getPlatform().yoloKeypoint.exportONNX(
         modelPath,
         outputPath
       );
@@ -555,7 +564,7 @@ export class YOLOKeypointService {
    */
   async deleteModel(modelId: string): Promise<boolean> {
     try {
-      const result = await window.electronAPI.yoloKeypoint.deleteModel(modelId);
+      const result = await getPlatform().yoloKeypoint.deleteModel(modelId);
       return result.success;
     } catch (error) {
       console.error('Failed to delete model:', error);
@@ -573,7 +582,7 @@ export class YOLOKeypointService {
    */
   async checkTensorRTAvailable(): Promise<{ available: boolean; version: string | null }> {
     try {
-      return await window.electronAPI.yoloKeypoint.checkTensorRTAvailable();
+      return await getPlatform().yoloKeypoint.checkTensorRTAvailable();
     } catch (error) {
       console.error('Failed to check TensorRT availability:', error);
       return { available: false, version: null };
@@ -600,7 +609,7 @@ export class YOLOKeypointService {
     imgsz: number = 640
   ): Promise<{ success: boolean; engine_path?: string; error?: string }> {
     try {
-      return await window.electronAPI.yoloKeypoint.exportToTensorRT(
+      return await getPlatform().yoloKeypoint.exportToTensorRT(
         modelPath,
         outputPath,
         half,

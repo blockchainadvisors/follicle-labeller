@@ -74,11 +74,14 @@ import {
   DuplicateAction,
   findDuplicates,
 } from "../DuplicateDetectionDialog";
+import { ServerErrorDialog } from "../ServerErrorDialog/ServerErrorDialog";
 import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
 import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { generateId } from "../../utils/id-generator";
+import { getPlatform } from "../../platform";
+import type { LoadProjectResult } from "../../platform/types";
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -176,6 +179,11 @@ export const Toolbar: React.FC = () => {
   const [canDetect, setCanDetect] = useState(false);
   const [serverStarting, setServerStarting] = useState(false);
   const [setupStatus, setSetupStatus] = useState<string>("");
+  const [downloadPercent, setDownloadPercent] = useState<number | undefined>();
+  const [serverError, setServerError] = useState<{
+    error: string;
+    errorDetails?: string;
+  } | null>(null);
   const MIN_ANNOTATIONS = 3;
 
   // Refs to prevent duplicate operations
@@ -215,6 +223,45 @@ export const Toolbar: React.FC = () => {
     setAnnotationCount(0);
     setCanDetect(false);
   };
+
+  // Handler for retrying server start after error
+  const handleRetryServerStart = useCallback(async () => {
+    setServerError(null);
+    setServerStarting(true);
+    setDownloadPercent(undefined);
+    setSetupStatus("Retrying server start...");
+    try {
+      const result = await getPlatform().blob.startServer();
+      if (result.success) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const available = await blobService.isAvailable();
+        setBlobServerConnected(available);
+        setSetupStatus("");
+        setDownloadPercent(undefined);
+      } else {
+        console.error("Failed to start BLOB server:", result.error);
+        setBlobServerConnected(false);
+        setSetupStatus(`Error: ${result.error}`);
+        if (result.errorDetails) {
+          setServerError({
+            error: result.error || 'Unknown error',
+            errorDetails: result.errorDetails,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error starting BLOB server:", error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      setSetupStatus(`Error: ${errorMessage}`);
+      setServerError({
+        error: 'Failed to start backend server',
+        errorDetails: errorMessage,
+      });
+    } finally {
+      setServerStarting(false);
+      setDownloadPercent(undefined);
+    }
+  }, []);
 
   // Handler to open Model Library from Inference Settings
   const handleOpenModelLibrary = (tab: 'detection' | 'origin') => {
@@ -307,7 +354,7 @@ export const Toolbar: React.FC = () => {
   // Update menu state when project changes
   useEffect(() => {
     const hasProject = images.size > 0;
-    window.electronAPI.setProjectState(hasProject);
+    getPlatform().menu.setProjectState(hasProject);
   }, [images.size]);
 
   // Track follicle changes to mark project as dirty
@@ -328,15 +375,17 @@ export const Toolbar: React.FC = () => {
     if (serverStartAttempted.current) return;
     serverStartAttempted.current = true;
 
-    // Listen for setup progress events
-    const cleanupProgress = window.electronAPI.blob.onSetupProgress(
-      (status) => {
+    // Listen for setup progress events (Electron only, includes download percent when downloading Python)
+    const cleanupProgress = getPlatform().blob.onSetupProgress(
+      (status, percent) => {
         setSetupStatus(status);
+        setDownloadPercent(percent);
       }
     );
 
     const startServer = async () => {
       setServerStarting(true);
+      setServerError(null);
       setSetupStatus("Checking server status...");
       try {
         // Check if server is already running
@@ -345,28 +394,44 @@ export const Toolbar: React.FC = () => {
           setBlobServerConnected(true);
           setServerStarting(false);
           setSetupStatus("");
+          setDownloadPercent(undefined);
           return;
         }
 
-        // Start the server via Electron IPC
-        const result = await window.electronAPI.blob.startServer();
+        // Start the server (Electron: via IPC, Web: server already running externally)
+        const result = await getPlatform().blob.startServer();
         if (result.success) {
           // Wait a bit for server to be fully ready
           await new Promise((resolve) => setTimeout(resolve, 1000));
           const available = await blobService.isAvailable();
           setBlobServerConnected(available);
           setSetupStatus("");
+          setDownloadPercent(undefined);
         } else {
           console.error("Failed to start BLOB server:", result.error);
           setBlobServerConnected(false);
           setSetupStatus(`Error: ${result.error}`);
+          // Show error dialog with details if available
+          if (result.errorDetails) {
+            setServerError({
+              error: result.error || 'Unknown error',
+              errorDetails: result.errorDetails,
+            });
+          }
         }
       } catch (error) {
         console.error("Error starting BLOB server:", error);
         setBlobServerConnected(false);
-        setSetupStatus(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        setSetupStatus(`Error: ${errorMessage}`);
+        setServerError({
+          error: 'Failed to start backend server',
+          errorDetails: errorMessage,
+        });
       } finally {
         setServerStarting(false);
+        // Clear download percent if not already cleared
+        setDownloadPercent(undefined);
       }
     };
 
@@ -553,7 +618,7 @@ export const Toolbar: React.FC = () => {
   // Handler functions
   const handleOpenImage = useCallback(async () => {
     try {
-      const result = await window.electronAPI.openImageDialog();
+      const result = await getPlatform().file.openImageDialog();
       if (!result) return;
 
       // Show loading spinner after file is selected
@@ -604,6 +669,9 @@ export const Toolbar: React.FC = () => {
     if (images.size === 0) return false;
 
     try {
+      // Show saving indicator for large projects
+      startLoading("Saving project...");
+
       // Include detection settings in the export
       const { manifest, annotations, imageList } = generateExportV2(
         Array.from(images.values()),
@@ -616,7 +684,7 @@ export const Toolbar: React.FC = () => {
 
       if (currentProjectPath) {
         // Silent save to existing path
-        result = await window.electronAPI.saveProjectV2ToPath(
+        result = await getPlatform().file.saveProjectV2ToPath(
           currentProjectPath,
           imageList,
           JSON.stringify(manifest, null, 2),
@@ -624,7 +692,7 @@ export const Toolbar: React.FC = () => {
         );
       } else {
         // Show save dialog
-        result = await window.electronAPI.saveProjectV2(
+        result = await getPlatform().file.saveProjectV2(
           imageList,
           JSON.stringify(manifest, null, 2),
           JSON.stringify(annotations, null, 2),
@@ -640,8 +708,10 @@ export const Toolbar: React.FC = () => {
     } catch (error) {
       console.error("Failed to save project:", error);
       return false;
+    } finally {
+      stopLoading();
     }
-  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
+  }, [images, follicles, currentProjectPath, setCurrentProjectPath, markClean, getGlobalSettingsForExport, getImageOverridesForExport, startLoading, stopLoading]);
 
   const handleSaveAs = useCallback(async (): Promise<boolean> => {
     if (images.size === 0) return false;
@@ -655,8 +725,8 @@ export const Toolbar: React.FC = () => {
         getImageOverridesForExport(),
       );
 
-      // Always show save dialog
-      const result = await window.electronAPI.saveProjectV2(
+      // Always show save dialog - show loading after user confirms location
+      const result = await getPlatform().file.saveProjectV2(
         imageList,
         JSON.stringify(manifest, null, 2),
         JSON.stringify(annotations, null, 2),
@@ -680,7 +750,7 @@ export const Toolbar: React.FC = () => {
   const checkUnsavedChanges = useCallback(async (): Promise<boolean> => {
     if (!isDirty) return true;
 
-    const response = await window.electronAPI.showUnsavedChangesDialog();
+    const response = await getPlatform().file.showUnsavedChangesDialog();
 
     if (response === "save") {
       const saved = await handleSave();
@@ -696,7 +766,7 @@ export const Toolbar: React.FC = () => {
   // Load project from parsed result (shared logic)
   const loadProjectFromResult = useCallback(
     async (
-      result: Awaited<ReturnType<typeof window.electronAPI.loadProjectV2>>,
+      result: LoadProjectResult | null,
     ) => {
       if (!result) return;
 
@@ -764,7 +834,7 @@ export const Toolbar: React.FC = () => {
     if (!canProceed) return;
 
     try {
-      const result = await window.electronAPI.loadProjectV2();
+      const result = await getPlatform().file.loadProjectV2();
       if (!result) return;
 
       // Show loading spinner after file is selected
@@ -828,7 +898,7 @@ export const Toolbar: React.FC = () => {
 
       // If there's a selection, show options dialog
       if (selectedCount > 0) {
-        const choice = await window.electronAPI.showDownloadOptionsDialog(
+        const choice = await getPlatform().file.showDownloadOptionsDialog(
           selectedCount,
           currentImageCount,
           totalCount,
@@ -1000,7 +1070,7 @@ export const Toolbar: React.FC = () => {
 
     try {
       // Open file dialog for JSON
-      const result = await window.electronAPI.openFileDialog({
+      const result = await getPlatform().file.openFileDialog({
         filters: [{ name: "JSON Files", extensions: ["json"] }],
         title: "Import Annotations",
       });
@@ -1298,7 +1368,7 @@ export const Toolbar: React.FC = () => {
           if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
             // Try to use .engine file if it exists
             const enginePath = modelPath.replace(/\.pt$/i, '.engine');
-            const engineExists = await window.electronAPI.fileExists(enginePath);
+            const engineExists = await getPlatform().file.fileExists(enginePath);
             if (engineExists) {
               modelPath = enginePath;
               console.log('Using TensorRT engine:', enginePath);
@@ -1309,7 +1379,7 @@ export const Toolbar: React.FC = () => {
             // PyTorch backend - ensure we use .pt file
             if (modelPath.endsWith('.engine')) {
               const ptPath = modelPath.replace(/\.engine$/i, '.pt');
-              const ptExists = await window.electronAPI.fileExists(ptPath);
+              const ptExists = await getPlatform().file.fileExists(ptPath);
               if (ptExists) {
                 modelPath = ptPath;
                 console.log('Using PyTorch model:', ptPath);
@@ -1414,7 +1484,7 @@ export const Toolbar: React.FC = () => {
           if (useTensorRT) {
             const enginePath = modelPath.replace(/\.pt$/i, '.engine');
             try {
-              const engineExists = await window.electronAPI.fileExists(enginePath);
+              const engineExists = await getPlatform().file.fileExists(enginePath);
               if (engineExists) {
                 modelPath = enginePath;
               }
@@ -1568,7 +1638,7 @@ export const Toolbar: React.FC = () => {
           if (detectionSettings.yoloInferenceBackend === 'tensorrt') {
             // Try to use .engine file if it exists
             const enginePath = modelPath.replace(/\.pt$/i, '.engine');
-            const engineExists = await window.electronAPI.fileExists(enginePath);
+            const engineExists = await getPlatform().file.fileExists(enginePath);
             if (engineExists) {
               modelPath = enginePath;
               console.log('Using TensorRT engine:', enginePath);
@@ -1579,7 +1649,7 @@ export const Toolbar: React.FC = () => {
             // PyTorch backend - ensure we use .pt file
             if (modelPath.endsWith('.engine')) {
               const ptPath = modelPath.replace(/\.engine$/i, '.pt');
-              const ptExists = await window.electronAPI.fileExists(ptPath);
+              const ptExists = await getPlatform().file.fileExists(ptPath);
               if (ptExists) {
                 modelPath = ptPath;
                 console.log('Using PyTorch model:', ptPath);
@@ -2055,21 +2125,22 @@ export const Toolbar: React.FC = () => {
 
   // Register menu event listeners
   useEffect(() => {
+    const menu = getPlatform().menu;
     const cleanups = [
-      window.electronAPI.onMenuOpenImage(handleOpenImage),
-      window.electronAPI.onMenuLoadProject(handleLoad),
-      window.electronAPI.onMenuSaveProject(handleSave),
-      window.electronAPI.onMenuSaveProjectAs(handleSaveAs),
-      window.electronAPI.onMenuCloseProject(handleCloseProject),
-      window.electronAPI.onMenuUndo(handleUndo),
-      window.electronAPI.onMenuRedo(handleRedo),
-      window.electronAPI.onMenuClearAll(clearAll),
-      window.electronAPI.onMenuToggleShapes(toggleShapes),
-      window.electronAPI.onMenuToggleLabels(toggleLabels),
-      window.electronAPI.onMenuZoomIn(handleZoomIn),
-      window.electronAPI.onMenuZoomOut(handleZoomOut),
-      window.electronAPI.onMenuResetZoom(resetZoom),
-      window.electronAPI.onMenuShowHelp(toggleHelp),
+      menu.onMenuOpenImage(handleOpenImage),
+      menu.onMenuLoadProject(handleLoad),
+      menu.onMenuSaveProject(handleSave),
+      menu.onMenuSaveProjectAs(handleSaveAs),
+      menu.onMenuCloseProject(handleCloseProject),
+      menu.onMenuUndo(handleUndo),
+      menu.onMenuRedo(handleRedo),
+      menu.onMenuClearAll(clearAll),
+      menu.onMenuToggleShapes(toggleShapes),
+      menu.onMenuToggleLabels(toggleLabels),
+      menu.onMenuZoomIn(handleZoomIn),
+      menu.onMenuZoomOut(handleZoomOut),
+      menu.onMenuResetZoom(resetZoom),
+      menu.onMenuShowHelp(toggleHelp),
     ];
 
     return () => cleanups.forEach((cleanup) => cleanup());
@@ -2095,7 +2166,7 @@ export const Toolbar: React.FC = () => {
     const loadFromPath = async (filePath: string) => {
       const controller = startLoading("Loading project...", true);
       try {
-        const result = await window.electronAPI.loadProjectFromPath(filePath);
+        const result = await getPlatform().file.loadProjectFromPath(filePath);
         if (controller?.signal.aborted) return;
         await loadProjectFromResult(result);
       } catch (error) {
@@ -2107,29 +2178,29 @@ export const Toolbar: React.FC = () => {
       }
     };
 
-    // Check for file to open on startup
-    window.electronAPI.getFileToOpen().then((filePath) => {
+    // Check for file to open on startup (Electron only)
+    getPlatform().menu.getFileToOpen().then((filePath) => {
       if (filePath) {
         loadFromPath(filePath);
       }
     });
 
-    // Listen for file open while app is running
-    const cleanup = window.electronAPI.onFileOpen((filePath) => {
+    // Listen for file open while app is running (Electron only)
+    const cleanup = getPlatform().menu.onFileOpen((filePath) => {
       loadFromPath(filePath);
     });
 
     return cleanup;
   }, [loadProjectFromResult, startLoading, stopLoading]);
 
-  // Handle app close - check for unsaved changes
+  // Handle app close - check for unsaved changes (Electron only)
   useEffect(() => {
     const handleCheckUnsavedChanges = async () => {
       const canClose = await checkUnsavedChanges();
-      window.electronAPI.confirmClose(canClose);
+      getPlatform().menu.confirmClose(canClose);
     };
 
-    const cleanup = window.electronAPI.onCheckUnsavedChanges(
+    const cleanup = getPlatform().menu.onCheckUnsavedChanges(
       handleCheckUnsavedChanges,
     );
     return cleanup;
@@ -2154,7 +2225,7 @@ export const Toolbar: React.FC = () => {
             getImageOverridesForExport(),
           );
 
-          const result = await window.electronAPI.saveProjectV2ToPath(
+          const result = await getPlatform().file.saveProjectV2ToPath(
             currentProjectPath,
             imageList,
             JSON.stringify(manifest, null, 2),
@@ -2171,7 +2242,7 @@ export const Toolbar: React.FC = () => {
       }
     };
 
-    const cleanup = window.electronAPI.onSystemSuspend(handleSystemSuspend);
+    const cleanup = getPlatform().menu.onSystemSuspend(handleSystemSuspend);
     return cleanup;
   }, [isDirty, currentProjectPath, images, follicles, markClean, getGlobalSettingsForExport, getImageOverridesForExport]);
 
@@ -2528,7 +2599,18 @@ export const Toolbar: React.FC = () => {
 
       <div className="toolbar-status">
         {serverStarting && setupStatus ? (
-          <span className="setup-status">{setupStatus}</span>
+          <div className="setup-status-container">
+            <Loader2 size={14} className="setup-spinner" />
+            <span className="setup-status">{setupStatus}</span>
+            {downloadPercent !== undefined && downloadPercent < 100 && (
+              <div className="download-progress-bar">
+                <div
+                  className="download-progress-fill"
+                  style={{ width: `${downloadPercent}%` }}
+                />
+              </div>
+            )}
+          </div>
         ) : imageLoaded && activeImage ? (
           <>
             {images.size > 1 && (
@@ -2561,10 +2643,13 @@ export const Toolbar: React.FC = () => {
           onDetectionExportStateChange={setDetectionExportState}
           keypointExportState={keypointExportState}
           onKeypointExportStateChange={setKeypointExportState}
-          // Live settings updates (changes apply immediately and mark file dirty)
+          // Live settings updates (changes apply immediately and mark file dirty if project is open)
           onSettingsChange={(newSettings) => {
             setGlobalDetectionSettings(newSettings);
-            setDirty(true);
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
           }}
           // Per-image settings support
           activeImageId={activeImageId}
@@ -2625,7 +2710,10 @@ export const Toolbar: React.FC = () => {
                 keypointModelSource: modelId ? 'custom' : 'pretrained',
               });
             }
-            setDirty(true);
+            // Only mark dirty if a project is actually open
+            if (images.size > 0) {
+              setDirty(true);
+            }
             setShowUnifiedYOLOModelManager(false);
             setModelLibraryInitialTab(undefined);
           }}
@@ -2647,6 +2735,16 @@ export const Toolbar: React.FC = () => {
           report={duplicateReport}
           onAction={handleDuplicateAction}
           detectionMethod={detectionMethodName}
+        />
+      )}
+
+      {/* Server Error Dialog */}
+      {serverError && (
+        <ServerErrorDialog
+          error={serverError.error}
+          errorDetails={serverError.errorDetails}
+          onRetry={handleRetryServerStart}
+          onClose={() => setServerError(null)}
         />
       )}
     </div>

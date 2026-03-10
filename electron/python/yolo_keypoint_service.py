@@ -177,13 +177,17 @@ class YOLOKeypointService:
         Initialize the YOLO keypoint service.
 
         Args:
-            models_dir: Directory to store trained models. If None, uses
-                       a 'models/keypoint' subdirectory next to this script.
+            models_dir: Directory to store trained models. If None, checks
+                       MODELS_BASE_DIR env var, then falls back to a
+                       'models/keypoint' subdirectory next to this script.
         """
         if models_dir:
             self.models_dir = Path(models_dir)
+        elif os.environ.get('MODELS_BASE_DIR'):
+            # Use environment variable (set by Electron to persist models across updates)
+            self.models_dir = Path(os.environ['MODELS_BASE_DIR']) / 'keypoint'
         else:
-            # Default to models/keypoint next to script
+            # Default to models/keypoint next to script (dev mode)
             self.models_dir = Path(__file__).parent / 'models' / 'keypoint'
 
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +196,7 @@ class YOLOKeypointService:
         self._loaded_model: Optional['YOLO'] = None
         self._loaded_model_path: Optional[str] = None
         self._loaded_model_backend: str = 'pytorch'  # 'pytorch' or 'tensorrt'
+        self._loaded_model_imgsz: int = 640  # Training image size for inference
 
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
@@ -320,6 +325,7 @@ class YOLOKeypointService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
                 # Aggressive cleanup
                 for _ in range(3):
@@ -776,9 +782,23 @@ class YOLOKeypointService:
             return True
         return False
 
+    def _get_inference_device(self):
+        """Get the best available device for inference."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return 0  # CUDA device
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return 'mps'  # Apple Silicon
+        except ImportError:
+            pass
+        return 'cpu'
+
     def load_model(self, model_path: str) -> bool:
         """
         Load a trained model for inference.
+
+        Supports cross-device loading (e.g. CUDA-trained models on MPS/CPU).
 
         Args:
             model_path: Path to model .pt or .engine file
@@ -814,6 +834,7 @@ class YOLOKeypointService:
                 self._loaded_model = None
                 self._loaded_model_path = None
                 self._loaded_model_backend = 'pytorch'
+                self._loaded_model_imgsz = 640
 
             # Detect backend from file extension
             model_ext = model_file.suffix.lower()
@@ -829,12 +850,43 @@ class YOLOKeypointService:
             # so that keypoint outputs are properly parsed
             if backend == 'tensorrt':
                 self._loaded_model = YOLO(model_path, task='pose')
+            elif backend == 'pytorch':
+                # For PyTorch models, ensure CUDA-trained models can load on CPU/MPS
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        # Force-remap CUDA tensors to CPU before YOLO loads them
+                        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                            if hasattr(checkpoint['model'], 'float'):
+                                checkpoint['model'] = checkpoint['model'].float()
+                        # Save remapped checkpoint to a temp file and load via YOLO
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as tmp:
+                            torch.save(checkpoint, tmp.name)
+                            self._loaded_model = YOLO(tmp.name)
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                        logger.info(f"Loaded CUDA-trained model on {self._get_inference_device()} via CPU remapping")
+                    else:
+                        self._loaded_model = YOLO(model_path)
+                except Exception as e:
+                    logger.warning(f"Cross-device load failed, trying direct load: {e}")
+                    self._loaded_model = YOLO(model_path)
             else:
                 self._loaded_model = YOLO(model_path)
+
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
-            logger.info(f"Successfully loaded model: {model_path} (backend: {backend})")
+            # Store the model's training imgsz to ensure consistent inference
+            # This is critical for imported models where ultralytics may not
+            # correctly read imgsz from the checkpoint in all versions
+            self._loaded_model_imgsz = self._loaded_model.overrides.get('imgsz', 640)
+
+            logger.info(f"Successfully loaded model: {model_path} (backend: {backend}, imgsz: {self._loaded_model_imgsz})")
             return True
 
         except Exception as e:
@@ -869,16 +921,22 @@ class YOLOKeypointService:
             t1 = time.time()
 
             # Run inference
+            # Explicitly pass imgsz and device to ensure correct resolution and GPU usage.
+            # Without imgsz, some ultralytics versions default to 640px which produces
+            # wrong keypoint coordinates for models trained at different sizes (e.g. 320px).
+            imgsz = self._loaded_model_imgsz
+            device = self._get_inference_device()
+
             # TensorRT engines require fixed batch size, so we pad to batch=16
             if self._loaded_model_backend == 'tensorrt':
                 TENSORRT_BATCH_SIZE = 16
                 # Create a batch of 16 copies of the same image
                 batch = [img_array] * TENSORRT_BATCH_SIZE
-                batch_results = self._loaded_model.predict(batch, verbose=False)
+                batch_results = self._loaded_model.predict(batch, verbose=False, imgsz=imgsz, device=device)
                 # Take only the first result
                 results = batch_results[:1] if batch_results else []
             else:
-                results = self._loaded_model.predict(img_array, verbose=False)
+                results = self._loaded_model.predict(img_array, verbose=False, imgsz=imgsz, device=device)
 
             t2 = time.time()
 
@@ -993,6 +1051,9 @@ class YOLOKeypointService:
             else:
                 device = 'cpu'
 
+            # Explicitly pass imgsz to ensure the model's training resolution is used
+            imgsz = self._loaded_model_imgsz
+
             # TensorRT engines are compiled with fixed batch size
             # Our engines are exported with batch=16 for efficient multi-follicle inference
             if self._loaded_model_backend == 'tensorrt':
@@ -1011,7 +1072,7 @@ class YOLOKeypointService:
                         batch = batch + [batch[-1]] * padding_needed
 
                     try:
-                        batch_results = self._loaded_model.predict(batch, verbose=False, device=device)
+                        batch_results = self._loaded_model.predict(batch, verbose=False, device=device, imgsz=imgsz)
                         # Only take results for actual images (not padding)
                         results.extend(batch_results[:actual_batch_size])
                     except Exception as e:
@@ -1020,7 +1081,7 @@ class YOLOKeypointService:
                         results.extend([None] * actual_batch_size)
             else:
                 # PyTorch supports true batch inference with dynamic batch size
-                results = self._loaded_model.predict(valid_images, verbose=False, device=device)
+                results = self._loaded_model.predict(valid_images, verbose=False, device=device, imgsz=imgsz)
 
             t2 = time.time()
 

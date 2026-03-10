@@ -1,0 +1,57 @@
+# Backend Dockerfile for CPU-only testing
+# Use this for local development without GPU
+
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip install --upgrade pip wheel setuptools
+
+# Install dependencies (CPU versions)
+RUN pip install \
+    torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip install \
+    ultralytics>=8.0.0 \
+    opencv-python-headless>=4.8.0 \
+    numpy>=1.24.0 \
+    pillow>=10.0.0 \
+    fastapi>=0.100.0 \
+    uvicorn[standard]>=0.23.0 \
+    sse-starlette>=1.6.0 \
+    python-multipart>=0.0.6 \
+    pydantic>=2.0.0 \
+    psutil>=5.9.0
+
+# Create app directory
+WORKDIR /app
+
+# Copy Python backend code
+COPY electron/python/ /app/
+
+# Create directories for models and projects
+RUN mkdir -p /app/models/keypoint /app/models/detection /root/.follicle-labeller/projects
+
+# Expose port
+EXPOSE 5555
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:5555/health || exit 1
+
+# Run the server
+CMD ["python", "blob_server.py", "--host", "0.0.0.0", "--port", "5555"]

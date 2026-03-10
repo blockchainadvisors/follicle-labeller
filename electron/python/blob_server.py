@@ -1255,12 +1255,12 @@ try:
         TrainingProgress,
         YOLO_AVAILABLE as YOLO_KEYPOINT_AVAILABLE
     )
-except ImportError:
+except Exception as e:
     YOLO_KEYPOINT_AVAILABLE = False
     get_yolo_keypoint_service = None
     TrainingConfig = None
     TrainingProgress = None
-    logger.warning("YOLO keypoint service not available")
+    logger.warning(f"YOLO keypoint service not available: {type(e).__name__}: {e}")
 
 # Import YOLO detection service
 try:
@@ -1270,12 +1270,12 @@ try:
         DetectionTrainingProgress,
         YOLO_AVAILABLE as YOLO_DETECTION_AVAILABLE
     )
-except ImportError:
+except Exception as e:
     YOLO_DETECTION_AVAILABLE = False
     get_yolo_detection_service = None
     DetectionTrainingConfig = None
     DetectionTrainingProgress = None
-    logger.warning("YOLO detection service not available")
+    logger.warning(f"YOLO detection service not available: {type(e).__name__}: {e}")
 
 # SSE support for training progress
 try:
@@ -1457,16 +1457,35 @@ async def yolo_stop_training(job_id: str):
 async def yolo_list_models():
     """
     List all trained YOLO keypoint models.
+    Works even when YOLO/ultralytics isn't available (just lists files on disk).
     """
-    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
-        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+    if YOLO_KEYPOINT_AVAILABLE and get_yolo_keypoint_service:
+        service = get_yolo_keypoint_service()
+        models = service.list_models()
+        return {
+            'models': [m.to_dict() for m in models],
+        }
 
-    service = get_yolo_keypoint_service()
-    models = service.list_models()
-
-    return {
-        'models': [m.to_dict() for m in models],
-    }
+    # Fallback: list models from disk without requiring ultralytics
+    try:
+        models_dir = Path(os.environ.get('MODELS_BASE_DIR', Path(__file__).parent / 'models')) / 'keypoint'
+        models = []
+        if models_dir.exists():
+            for model_dir in sorted(models_dir.iterdir()):
+                if not model_dir.is_dir():
+                    continue
+                info_path = model_dir / 'model_info.json'
+                if info_path.exists():
+                    import json as json_mod
+                    try:
+                        info = json_mod.loads(info_path.read_text())
+                        models.append(info)
+                    except Exception:
+                        pass
+        return {'models': models}
+    except Exception as e:
+        logger.warning(f"Failed to list keypoint models from disk: {e}")
+        return {'models': []}
 
 
 @app.post('/yolo-keypoint/load-model')
@@ -1732,7 +1751,8 @@ async def yolo_keypoint_check_tensorrt():
         Dict with 'available' bool and 'version' string (or None)
     """
     if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
-        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+        # TensorRT is definitely not available if YOLO service isn't available
+        return {'available': False, 'version': None, 'reason': 'YOLO service not available'}
 
     service = get_yolo_keypoint_service()
     return service.check_tensorrt_available()
@@ -1962,16 +1982,35 @@ async def yolo_detect_stop_training(job_id: str):
 async def yolo_detect_list_models():
     """
     List all trained YOLO detection models.
+    Works even when YOLO/ultralytics isn't available (just lists files on disk).
     """
-    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
-        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+    if YOLO_DETECTION_AVAILABLE and get_yolo_detection_service:
+        service = get_yolo_detection_service()
+        models = service.list_models()
+        return {
+            'models': [m.to_dict() for m in models]
+        }
 
-    service = get_yolo_detection_service()
-    models = service.list_models()
-
-    return {
-        'models': [m.to_dict() for m in models]
-    }
+    # Fallback: list models from disk without requiring ultralytics
+    try:
+        models_dir = Path(os.environ.get('MODELS_BASE_DIR', Path(__file__).parent / 'models')) / 'detection'
+        models = []
+        if models_dir.exists():
+            for model_dir in sorted(models_dir.iterdir()):
+                if not model_dir.is_dir():
+                    continue
+                info_path = model_dir / 'model_info.json'
+                if info_path.exists():
+                    import json as json_mod
+                    try:
+                        info = json_mod.loads(info_path.read_text())
+                        models.append(info)
+                    except Exception:
+                        pass
+        return {'models': models}
+    except Exception as e:
+        logger.warning(f"Failed to list detection models from disk: {e}")
+        return {'models': []}
 
 
 @app.post('/yolo-detect/load-model')
@@ -2132,7 +2171,8 @@ async def yolo_detect_check_tensorrt():
         Dict with 'available' bool and 'version' string (or None)
     """
     if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
-        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+        # TensorRT is definitely not available if YOLO service isn't available
+        return {'available': False, 'version': None, 'reason': 'YOLO service not available'}
 
     service = get_yolo_detection_service()
     return service.check_tensorrt_available()
@@ -2195,6 +2235,637 @@ async def yolo_detect_clear_gpu_memory():
     service = get_yolo_detection_service()
     result = service.clear_gpu_memory()
     return result
+
+
+# ============================================
+# Web Project Storage Endpoints
+# ============================================
+
+from pathlib import Path
+import shutil
+import zipfile
+from datetime import datetime
+from fastapi import UploadFile, File, Form
+
+# Project storage directory (server-side)
+PROJECTS_DIR = Path.home() / '.follicle-labeller' / 'projects'
+
+
+def ensure_projects_dir():
+    """Ensure the projects directory exists."""
+    PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    return PROJECTS_DIR
+
+
+class ProjectMetadata(BaseModel):
+    id: str
+    name: str
+    createdAt: str
+    updatedAt: str
+    imageCount: int
+    annotationCount: int
+
+
+@app.get('/projects/list')
+async def list_projects():
+    """
+    List all saved projects on the server.
+
+    Returns:
+        - projects: Array of project metadata
+    """
+    ensure_projects_dir()
+    projects = []
+
+    for project_dir in PROJECTS_DIR.iterdir():
+        if project_dir.is_dir():
+            metadata_file = project_dir / 'metadata.json'
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                        projects.append(metadata)
+                except Exception as e:
+                    logger.warning(f"Failed to read project metadata {project_dir.name}: {e}")
+
+    # Sort by updatedAt descending
+    projects.sort(key=lambda p: p.get('updatedAt', ''), reverse=True)
+
+    return {'projects': projects}
+
+
+@app.post('/projects/upload')
+async def upload_project(
+    manifest: str = Form(...),
+    annotations: str = Form(...),
+    images: List[UploadFile] = File(...)
+):
+    """
+    Upload a new project to server storage.
+
+    Returns:
+        - projectId: Unique project identifier
+        - success: True if upload succeeded
+    """
+    ensure_projects_dir()
+
+    # Generate project ID
+    project_id = str(uuid.uuid4())
+    project_dir = PROJECTS_DIR / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Parse manifest to get project info
+        manifest_data = json.loads(manifest)
+        annotations_data = json.loads(annotations)
+
+        # Save manifest
+        with open(project_dir / 'manifest.json', 'w') as f:
+            f.write(manifest)
+
+        # Save annotations
+        with open(project_dir / 'annotations.json', 'w') as f:
+            f.write(annotations)
+
+        # Save images
+        images_dir = project_dir / 'images'
+        images_dir.mkdir(exist_ok=True)
+
+        for image_file in images:
+            image_path = images_dir / image_file.filename
+            content = await image_file.read()
+            with open(image_path, 'wb') as f:
+                f.write(content)
+
+        # Create metadata
+        metadata = {
+            'id': project_id,
+            'name': manifest_data.get('metadata', {}).get('exportedAt', project_id)[:20],
+            'createdAt': datetime.now().isoformat(),
+            'updatedAt': datetime.now().isoformat(),
+            'imageCount': len(manifest_data.get('images', [])),
+            'annotationCount': len(annotations_data.get('annotations', []))
+        }
+
+        with open(project_dir / 'metadata.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        logger.info(f"Project uploaded: {project_id} ({metadata['imageCount']} images, {metadata['annotationCount']} annotations)")
+
+        return {
+            'success': True,
+            'projectId': project_id
+        }
+
+    except Exception as e:
+        # Cleanup on error
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        logger.error(f"Failed to upload project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/projects/import')
+async def import_project(file: UploadFile = File(...)):
+    """
+    Import a .fol project file (ZIP format) to server storage.
+
+    The .fol file should contain:
+    - manifest.json
+    - annotations.json
+    - images/ folder with image files
+
+    Returns:
+        - projectId: Unique project identifier
+        - success: True if import succeeded
+    """
+    import zipfile
+    import io
+
+    ensure_projects_dir()
+
+    # Generate project ID
+    project_id = str(uuid.uuid4())
+    project_dir = PROJECTS_DIR / project_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Read the uploaded file
+        content = await file.read()
+
+        # Open as ZIP
+        with zipfile.ZipFile(io.BytesIO(content), 'r') as zip_ref:
+            # Check for required files
+            file_list = zip_ref.namelist()
+            if 'manifest.json' not in file_list:
+                raise HTTPException(status_code=400, detail='Invalid project file: missing manifest.json')
+            if 'annotations.json' not in file_list:
+                raise HTTPException(status_code=400, detail='Invalid project file: missing annotations.json')
+
+            # Extract manifest
+            manifest = zip_ref.read('manifest.json').decode('utf-8')
+            manifest_data = json.loads(manifest)
+
+            # Extract annotations
+            annotations = zip_ref.read('annotations.json').decode('utf-8')
+            annotations_data = json.loads(annotations)
+
+            # Save manifest
+            with open(project_dir / 'manifest.json', 'w') as f:
+                f.write(manifest)
+
+            # Save annotations
+            with open(project_dir / 'annotations.json', 'w') as f:
+                f.write(annotations)
+
+            # Extract images
+            images_dir = project_dir / 'images'
+            images_dir.mkdir(exist_ok=True)
+
+            for file_info in zip_ref.filelist:
+                if file_info.filename.startswith('images/') and not file_info.is_dir():
+                    # Get just the filename, not the full path
+                    image_name = file_info.filename.split('/')[-1]
+                    if image_name:
+                        image_data = zip_ref.read(file_info.filename)
+                        with open(images_dir / image_name, 'wb') as f:
+                            f.write(image_data)
+
+        # Create metadata
+        metadata = {
+            'id': project_id,
+            'name': file.filename or project_id[:20],
+            'createdAt': datetime.now().isoformat(),
+            'updatedAt': datetime.now().isoformat(),
+            'imageCount': len(manifest_data.get('images', [])),
+            'annotationCount': len(annotations_data.get('annotations', []))
+        }
+
+        with open(project_dir / 'metadata.json', 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        logger.info(f"Project imported: {project_id} from {file.filename} ({metadata['imageCount']} images, {metadata['annotationCount']} annotations)")
+
+        return {
+            'success': True,
+            'projectId': project_id
+        }
+
+    except zipfile.BadZipFile:
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        raise HTTPException(status_code=400, detail='Invalid file: not a valid ZIP/FOL file')
+    except Exception as e:
+        # Cleanup on error
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+        logger.error(f"Failed to import project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put('/projects/{project_id}')
+async def update_project(
+    project_id: str,
+    manifest: str = Form(...),
+    annotations: str = Form(...),
+    images: List[UploadFile] = File(...)
+):
+    """
+    Update an existing project on server storage.
+
+    Returns:
+        - success: True if update succeeded
+    """
+    project_dir = PROJECTS_DIR / project_id
+
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    try:
+        # Parse manifest to get project info
+        manifest_data = json.loads(manifest)
+        annotations_data = json.loads(annotations)
+
+        # Save manifest
+        with open(project_dir / 'manifest.json', 'w') as f:
+            f.write(manifest)
+
+        # Save annotations
+        with open(project_dir / 'annotations.json', 'w') as f:
+            f.write(annotations)
+
+        # Clear and save images
+        images_dir = project_dir / 'images'
+        if images_dir.exists():
+            shutil.rmtree(images_dir)
+        images_dir.mkdir(exist_ok=True)
+
+        for image_file in images:
+            image_path = images_dir / image_file.filename
+            content = await image_file.read()
+            with open(image_path, 'wb') as f:
+                f.write(content)
+
+        # Update metadata
+        metadata_file = project_dir / 'metadata.json'
+        metadata = {}
+        if metadata_file.exists():
+            with open(metadata_file, 'r') as f:
+                metadata = json.load(f)
+
+        metadata.update({
+            'updatedAt': datetime.now().isoformat(),
+            'imageCount': len(manifest_data.get('images', [])),
+            'annotationCount': len(annotations_data.get('annotations', []))
+        })
+
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        logger.info(f"Project updated: {project_id}")
+
+        return {'success': True}
+
+    except Exception as e:
+        logger.error(f"Failed to update project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/projects/{project_id}/download')
+async def download_project(project_id: str):
+    """
+    Download a project from server storage.
+
+    Returns:
+        - manifest: Project manifest JSON
+        - annotations: Annotations JSON
+        - images: Array of {id, fileName, data} for each image
+    """
+    project_dir = PROJECTS_DIR / project_id
+
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    try:
+        # Load manifest
+        with open(project_dir / 'manifest.json', 'r') as f:
+            manifest = f.read()
+
+        # Load annotations
+        with open(project_dir / 'annotations.json', 'r') as f:
+            annotations = f.read()
+
+        # Load images
+        images_dir = project_dir / 'images'
+        images = []
+
+        if images_dir.exists():
+            for image_file in images_dir.iterdir():
+                if image_file.is_file():
+                    # Parse ID and fileName from archive format: {id}-{fileName}
+                    parts = image_file.name.split('-', 1)
+                    if len(parts) == 2:
+                        img_id, file_name = parts
+                    else:
+                        img_id = parts[0]
+                        file_name = image_file.name
+
+                    with open(image_file, 'rb') as f:
+                        data = base64.b64encode(f.read()).decode('utf-8')
+
+                    images.append({
+                        'id': img_id,
+                        'fileName': file_name,
+                        'data': data  # Base64 encoded
+                    })
+
+        return {
+            'manifest': manifest,
+            'annotations': annotations,
+            'images': images
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to download project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete('/projects/{project_id}')
+async def delete_project(project_id: str):
+    """
+    Delete a project from server storage.
+
+    Returns:
+        - success: True if deletion succeeded
+    """
+    project_dir = PROJECTS_DIR / project_id
+
+    if not project_dir.exists():
+        raise HTTPException(status_code=404, detail='Project not found')
+
+    try:
+        shutil.rmtree(project_dir)
+        logger.info(f"Project deleted: {project_id}")
+        return {'success': True}
+
+    except Exception as e:
+        logger.error(f"Failed to delete project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get('/files/exists')
+async def file_exists(path: str):
+    """
+    Check if a file exists on the server.
+
+    Query params:
+        - path: File path to check
+
+    Returns:
+        - exists: True if file exists
+    """
+    try:
+        file_path = Path(path)
+        return {'exists': file_path.exists()}
+    except Exception:
+        return {'exists': False}
+
+
+# ============================================
+# YOLO Dataset Write Endpoints (for Web)
+# ============================================
+
+# Temp directory for datasets
+TEMP_DATASETS_DIR = Path.home() / '.follicle-labeller' / 'temp_datasets'
+
+
+def ensure_temp_datasets_dir():
+    """Ensure the temp datasets directory exists."""
+    TEMP_DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+    return TEMP_DATASETS_DIR
+
+
+@app.post('/yolo-keypoint/write-dataset')
+async def yolo_keypoint_write_dataset(files: List[UploadFile] = File(...)):
+    """
+    Write dataset files to a temporary directory on the server.
+    Used for web clients that cannot write to local filesystem.
+
+    Returns:
+        - success: True if write succeeded
+        - dataset_path: Path to the dataset root directory
+    """
+    ensure_temp_datasets_dir()
+
+    # Create unique dataset directory
+    dataset_id = str(uuid.uuid4())
+    dataset_dir = TEMP_DATASETS_DIR / dataset_id
+
+    try:
+        for file in files:
+            # file.filename contains the relative path (e.g., "train/images/img001.jpg")
+            file_path = dataset_dir / file.filename
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            content = await file.read()
+            with open(file_path, 'wb') as f:
+                f.write(content)
+
+        logger.info(f"Dataset written to {dataset_dir} ({len(files)} files)")
+
+        return {
+            'success': True,
+            'dataset_path': str(dataset_dir)
+        }
+
+    except Exception as e:
+        # Cleanup on error
+        if dataset_dir.exists():
+            shutil.rmtree(dataset_dir)
+        logger.error(f"Failed to write dataset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/yolo-detect/write-dataset')
+async def yolo_detect_write_dataset(files: List[UploadFile] = File(...)):
+    """
+    Write detection dataset files to a temporary directory on the server.
+    Used for web clients that cannot write to local filesystem.
+
+    Returns:
+        - success: True if write succeeded
+        - dataset_path: Path to the dataset root directory
+    """
+    ensure_temp_datasets_dir()
+
+    # Create unique dataset directory
+    dataset_id = str(uuid.uuid4())
+    dataset_dir = TEMP_DATASETS_DIR / dataset_id
+
+    try:
+        for file in files:
+            file_path = dataset_dir / file.filename
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+
+            content = await file.read()
+            with open(file_path, 'wb') as f:
+                f.write(content)
+
+        logger.info(f"Detection dataset written to {dataset_dir} ({len(files)} files)")
+
+        return {
+            'success': True,
+            'dataset_path': str(dataset_dir)
+        }
+
+    except Exception as e:
+        if dataset_dir.exists():
+            shutil.rmtree(dataset_dir)
+        logger.error(f"Failed to write detection dataset: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Model Export/Import Endpoints (for Web)
+# ============================================
+
+@app.post('/model/export-package')
+async def model_export_package(request: Request):
+    """
+    Export a model package for download.
+
+    Body:
+        - model_id: Model ID
+        - model_path: Path to the model
+        - config: Model configuration
+        - suggested_filename: Suggested filename for download
+
+    Returns:
+        Binary model package file
+    """
+    body = await request.json()
+    model_id = body.get('model_id')
+    model_path = body.get('model_path')
+    config = body.get('config', {})
+    suggested_filename = body.get('suggested_filename', f'model-{model_id}.fmp')
+
+    if not model_path:
+        raise HTTPException(status_code=400, detail='model_path is required')
+
+    model_file = Path(model_path)
+    if not model_file.exists():
+        raise HTTPException(status_code=404, detail='Model file not found')
+
+    try:
+        # Create package in memory
+        import io
+        buffer = io.BytesIO()
+
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Add model file
+            zf.write(model_file, 'model.pt')
+
+            # Add config
+            config['model_id'] = model_id
+            config['exported_at'] = datetime.now().isoformat()
+            zf.writestr('config.json', json.dumps(config, indent=2))
+
+            # Check for TensorRT engine
+            engine_path = model_file.parent / (model_file.stem + '.engine')
+            if engine_path.exists():
+                zf.write(engine_path, 'model.engine')
+
+        buffer.seek(0)
+
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            buffer,
+            media_type='application/zip',
+            headers={'Content-Disposition': f'attachment; filename="{suggested_filename}"'}
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to export model package: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post('/model/preview-package')
+async def model_preview_package(
+    file: UploadFile = File(...),
+    expected_type: Optional[str] = Form(None)
+):
+    """
+    Preview a model package before import.
+
+    Returns:
+        - valid: True if package is valid
+        - config: Model configuration
+        - model_type: 'detection' or 'keypoint'
+        - has_engine: True if package includes TensorRT engine
+    """
+    try:
+        content = await file.read()
+        buffer = io.BytesIO(content)
+
+        with zipfile.ZipFile(buffer, 'r') as zf:
+            # Check required files
+            if 'model.pt' not in zf.namelist() and 'config.json' not in zf.namelist():
+                return {'valid': False, 'error': 'Invalid package: missing model.pt or config.json'}
+
+            # Read config
+            config = json.loads(zf.read('config.json'))
+
+            # Determine model type
+            model_type = config.get('model_type', 'detection')
+
+            # Check for engine
+            has_engine = 'model.engine' in zf.namelist()
+
+            # Validate expected type
+            if expected_type and model_type != expected_type:
+                return {
+                    'valid': False,
+                    'error': f'Model type mismatch: expected {expected_type}, got {model_type}'
+                }
+
+            return {
+                'valid': True,
+                'config': config,
+                'model_type': model_type,
+                'has_engine': has_engine
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to preview model package: {e}")
+        return {'valid': False, 'error': str(e)}
+
+
+@app.post('/model/import-package')
+async def model_import_package(request: Request):
+    """
+    Import a model package.
+
+    Body:
+        - file_path: Path to uploaded package (from preview)
+        - new_model_name: Optional new name for the model
+
+    Returns:
+        - success: True if import succeeded
+        - model_id: New model ID
+        - model_path: Path to imported model
+        - model_name: Model name
+        - model_type: 'detection' or 'keypoint'
+    """
+    # Note: In a full implementation, this would handle file upload
+    # For now, this is a placeholder that would be called after preview
+    body = await request.json()
+    file_path = body.get('file_path')
+    new_model_name = body.get('new_model_name')
+
+    raise HTTPException(
+        status_code=501,
+        detail='Model import via HTTP not fully implemented. Use Electron app for model import.'
+    )
 
 
 # ============================================

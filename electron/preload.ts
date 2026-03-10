@@ -248,7 +248,7 @@ const electronAPI = {
   // BLOB Detection Server API
   blob: {
     // Start the BLOB detection server
-    startServer: (): Promise<{ success: boolean; error?: string }> =>
+    startServer: (): Promise<{ success: boolean; error?: string; errorDetails?: string }> =>
       ipcRenderer.invoke("blob:startServer"),
 
     // Stop the BLOB detection server
@@ -276,10 +276,10 @@ const electronAPI = {
     getSetupStatus: (): Promise<string> =>
       ipcRenderer.invoke("blob:getSetupStatus"),
 
-    // Listen for setup progress events
-    onSetupProgress: (callback: (status: string) => void) => {
-      const handler = (_event: IpcRendererEvent, status: string) =>
-        callback(status);
+    // Listen for setup progress events (includes download percentage when downloading Python)
+    onSetupProgress: (callback: (status: string, percent?: number) => void) => {
+      const handler = (_event: IpcRendererEvent, status: string, percent?: number) =>
+        callback(status, percent);
       ipcRenderer.on("blob:setupProgress", handler);
       return () => ipcRenderer.removeListener("blob:setupProgress", handler);
     },
@@ -293,7 +293,7 @@ const electronAPI = {
     }> => ipcRenderer.invoke("blob:getGPUInfo"),
 
     // Restart the BLOB server (after GPU package installation)
-    restartServer: (): Promise<{ success: boolean; error?: string }> =>
+    restartServer: (): Promise<{ success: boolean; error?: string; errorDetails?: string }> =>
       ipcRenderer.invoke("blob:restartServer"),
   },
 

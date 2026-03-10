@@ -300,6 +300,48 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   font-weight: var(--font-medium);
 }
 
+/* Server Setup Status with Download Progress */
+.setup-status-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.setup-spinner {
+  animation: spin 1s linear infinite;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.setup-status {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.download-progress-bar {
+  width: 80px;
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.download-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
 /* TensorRT Export Status in Toolbar */
 .toolbar-export-status {
   display: flex;

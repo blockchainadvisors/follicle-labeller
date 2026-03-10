@@ -51,9 +51,18 @@ def detect_apple_silicon():
 def check_packages_installed():
     """Check if GPU packages are installed (without importing them)."""
     import importlib.util
+    has_torch = importlib.util.find_spec('torch') is not None
+    torch_cuda = False
+    if has_torch:
+        try:
+            import torch
+            torch_cuda = torch.cuda.is_available()
+        except Exception:
+            pass
     return {
         'cupy': importlib.util.find_spec('cupy') is not None,
-        'torch': importlib.util.find_spec('torch') is not None,
+        'torch': has_torch,
+        'torch_cuda': torch_cuda,
     }
 
 
