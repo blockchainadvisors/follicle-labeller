@@ -782,9 +782,23 @@ class YOLOKeypointService:
             return True
         return False
 
+    def _get_inference_device(self):
+        """Get the best available device for inference."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return 0  # CUDA device
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return 'mps'  # Apple Silicon
+        except ImportError:
+            pass
+        return 'cpu'
+
     def load_model(self, model_path: str) -> bool:
         """
         Load a trained model for inference.
+
+        Supports cross-device loading (e.g. CUDA-trained models on MPS/CPU).
 
         Args:
             model_path: Path to model .pt or .engine file
@@ -836,8 +850,34 @@ class YOLOKeypointService:
             # so that keypoint outputs are properly parsed
             if backend == 'tensorrt':
                 self._loaded_model = YOLO(model_path, task='pose')
+            elif backend == 'pytorch':
+                # For PyTorch models, ensure CUDA-trained models can load on CPU/MPS
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        # Force-remap CUDA tensors to CPU before YOLO loads them
+                        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                            if hasattr(checkpoint['model'], 'float'):
+                                checkpoint['model'] = checkpoint['model'].float()
+                        # Save remapped checkpoint to a temp file and load via YOLO
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as tmp:
+                            torch.save(checkpoint, tmp.name)
+                            self._loaded_model = YOLO(tmp.name)
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                        logger.info(f"Loaded CUDA-trained model on {self._get_inference_device()} via CPU remapping")
+                    else:
+                        self._loaded_model = YOLO(model_path)
+                except Exception as e:
+                    logger.warning(f"Cross-device load failed, trying direct load: {e}")
+                    self._loaded_model = YOLO(model_path)
             else:
                 self._loaded_model = YOLO(model_path)
+
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
@@ -881,21 +921,22 @@ class YOLOKeypointService:
             t1 = time.time()
 
             # Run inference
-            # Explicitly pass imgsz to ensure the model's training resolution is used.
-            # Without this, some ultralytics versions default to 640px which produces
+            # Explicitly pass imgsz and device to ensure correct resolution and GPU usage.
+            # Without imgsz, some ultralytics versions default to 640px which produces
             # wrong keypoint coordinates for models trained at different sizes (e.g. 320px).
             imgsz = self._loaded_model_imgsz
+            device = self._get_inference_device()
 
             # TensorRT engines require fixed batch size, so we pad to batch=16
             if self._loaded_model_backend == 'tensorrt':
                 TENSORRT_BATCH_SIZE = 16
                 # Create a batch of 16 copies of the same image
                 batch = [img_array] * TENSORRT_BATCH_SIZE
-                batch_results = self._loaded_model.predict(batch, verbose=False, imgsz=imgsz)
+                batch_results = self._loaded_model.predict(batch, verbose=False, imgsz=imgsz, device=device)
                 # Take only the first result
                 results = batch_results[:1] if batch_results else []
             else:
-                results = self._loaded_model.predict(img_array, verbose=False, imgsz=imgsz)
+                results = self._loaded_model.predict(img_array, verbose=False, imgsz=imgsz, device=device)
 
             t2 = time.time()
 

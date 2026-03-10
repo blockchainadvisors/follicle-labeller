@@ -762,12 +762,25 @@ class YOLODetectionService:
             return True
         return False
 
+    def _get_inference_device(self):
+        """Get the best available device for inference."""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                return 0  # CUDA device
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                return 'mps'  # Apple Silicon
+        except ImportError:
+            pass
+        return 'cpu'
+
     def load_model(self, model_path: str) -> bool:
         """
         Load a trained model for inference.
 
         Supports both PyTorch (.pt) and TensorRT (.engine) formats.
         Ultralytics handles TensorRT engines directly.
+        Handles cross-device loading (e.g. CUDA-trained models on MPS/CPU).
 
         Args:
             model_path: Path to model file (.pt or .engine)
@@ -795,8 +808,38 @@ class YOLODetectionService:
             else:
                 backend = 'pytorch'
 
-            # Load new model (Ultralytics handles both .pt and .engine)
-            self._loaded_model = YOLO(model_path)
+            # For PyTorch models, ensure CUDA-trained models can load on CPU/MPS
+            # by pre-loading with map_location='cpu' if CUDA is not available
+            if backend == 'pytorch':
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        # Force-remap CUDA tensors to CPU before YOLO loads them
+                        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+                        if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                            # Ensure model tensors are on CPU
+                            if hasattr(checkpoint['model'], 'float'):
+                                checkpoint['model'] = checkpoint['model'].float()
+                        # Save remapped checkpoint to a temp file and load via YOLO
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix='.pt', delete=False) as tmp:
+                            torch.save(checkpoint, tmp.name)
+                            self._loaded_model = YOLO(tmp.name)
+                        # Clean up temp file
+                        try:
+                            os.unlink(tmp.name)
+                        except Exception:
+                            pass
+                        logger.info(f"Loaded CUDA-trained model on {self._get_inference_device()} via CPU remapping")
+                    else:
+                        self._loaded_model = YOLO(model_path)
+                except Exception as e:
+                    logger.warning(f"Cross-device load failed, trying direct load: {e}")
+                    self._loaded_model = YOLO(model_path)
+            else:
+                # TensorRT engines - load directly (GPU-architecture specific)
+                self._loaded_model = YOLO(model_path)
+
             self._loaded_model_path = model_path
             self._loaded_model_backend = backend
 
@@ -873,12 +916,14 @@ class YOLODetectionService:
             img_array = np.array(image)
             img_height, img_width = img_array.shape[:2]
 
-            # Run inference with explicit imgsz to ensure consistent results
+            # Run inference with explicit device and imgsz to ensure consistent results
+            device = self._get_inference_device()
             results = self._loaded_model.predict(
                 img_array,
                 conf=confidence_threshold,
                 verbose=False,
-                imgsz=self._loaded_model_imgsz
+                imgsz=self._loaded_model_imgsz,
+                device=device
             )
 
             if not results or len(results) == 0:
@@ -1015,6 +1060,9 @@ class YOLODetectionService:
                 logger.info("Image smaller than tile size, using regular prediction")
                 return self.predict(image_data, confidence_threshold)
 
+            # Determine inference device
+            device = self._get_inference_device()
+
             # Calculate tile positions
             step = tile_size - overlap
             all_predictions = []
@@ -1037,12 +1085,13 @@ class YOLODetectionService:
 
                     tile_count += 1
 
-                    # Run inference on tile with explicit imgsz
+                    # Run inference on tile with explicit device and imgsz
                     results = self._loaded_model.predict(
                         tile,
                         conf=confidence_threshold,
                         verbose=False,
-                        imgsz=self._loaded_model_imgsz
+                        imgsz=self._loaded_model_imgsz,
+                        device=device
                     )
 
                     if results and len(results) > 0:

@@ -1255,12 +1255,12 @@ try:
         TrainingProgress,
         YOLO_AVAILABLE as YOLO_KEYPOINT_AVAILABLE
     )
-except ImportError:
+except Exception as e:
     YOLO_KEYPOINT_AVAILABLE = False
     get_yolo_keypoint_service = None
     TrainingConfig = None
     TrainingProgress = None
-    logger.warning("YOLO keypoint service not available")
+    logger.warning(f"YOLO keypoint service not available: {type(e).__name__}: {e}")
 
 # Import YOLO detection service
 try:
@@ -1270,12 +1270,12 @@ try:
         DetectionTrainingProgress,
         YOLO_AVAILABLE as YOLO_DETECTION_AVAILABLE
     )
-except ImportError:
+except Exception as e:
     YOLO_DETECTION_AVAILABLE = False
     get_yolo_detection_service = None
     DetectionTrainingConfig = None
     DetectionTrainingProgress = None
-    logger.warning("YOLO detection service not available")
+    logger.warning(f"YOLO detection service not available: {type(e).__name__}: {e}")
 
 # SSE support for training progress
 try:
@@ -1457,16 +1457,35 @@ async def yolo_stop_training(job_id: str):
 async def yolo_list_models():
     """
     List all trained YOLO keypoint models.
+    Works even when YOLO/ultralytics isn't available (just lists files on disk).
     """
-    if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
-        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+    if YOLO_KEYPOINT_AVAILABLE and get_yolo_keypoint_service:
+        service = get_yolo_keypoint_service()
+        models = service.list_models()
+        return {
+            'models': [m.to_dict() for m in models],
+        }
 
-    service = get_yolo_keypoint_service()
-    models = service.list_models()
-
-    return {
-        'models': [m.to_dict() for m in models],
-    }
+    # Fallback: list models from disk without requiring ultralytics
+    try:
+        models_dir = Path(os.environ.get('MODELS_BASE_DIR', Path(__file__).parent / 'models')) / 'keypoint'
+        models = []
+        if models_dir.exists():
+            for model_dir in sorted(models_dir.iterdir()):
+                if not model_dir.is_dir():
+                    continue
+                info_path = model_dir / 'model_info.json'
+                if info_path.exists():
+                    import json as json_mod
+                    try:
+                        info = json_mod.loads(info_path.read_text())
+                        models.append(info)
+                    except Exception:
+                        pass
+        return {'models': models}
+    except Exception as e:
+        logger.warning(f"Failed to list keypoint models from disk: {e}")
+        return {'models': []}
 
 
 @app.post('/yolo-keypoint/load-model')
@@ -1732,7 +1751,8 @@ async def yolo_keypoint_check_tensorrt():
         Dict with 'available' bool and 'version' string (or None)
     """
     if not YOLO_KEYPOINT_AVAILABLE or not get_yolo_keypoint_service:
-        raise HTTPException(status_code=503, detail='YOLO keypoint service not available')
+        # TensorRT is definitely not available if YOLO service isn't available
+        return {'available': False, 'version': None, 'reason': 'YOLO service not available'}
 
     service = get_yolo_keypoint_service()
     return service.check_tensorrt_available()
@@ -1962,16 +1982,35 @@ async def yolo_detect_stop_training(job_id: str):
 async def yolo_detect_list_models():
     """
     List all trained YOLO detection models.
+    Works even when YOLO/ultralytics isn't available (just lists files on disk).
     """
-    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
-        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+    if YOLO_DETECTION_AVAILABLE and get_yolo_detection_service:
+        service = get_yolo_detection_service()
+        models = service.list_models()
+        return {
+            'models': [m.to_dict() for m in models]
+        }
 
-    service = get_yolo_detection_service()
-    models = service.list_models()
-
-    return {
-        'models': [m.to_dict() for m in models]
-    }
+    # Fallback: list models from disk without requiring ultralytics
+    try:
+        models_dir = Path(os.environ.get('MODELS_BASE_DIR', Path(__file__).parent / 'models')) / 'detection'
+        models = []
+        if models_dir.exists():
+            for model_dir in sorted(models_dir.iterdir()):
+                if not model_dir.is_dir():
+                    continue
+                info_path = model_dir / 'model_info.json'
+                if info_path.exists():
+                    import json as json_mod
+                    try:
+                        info = json_mod.loads(info_path.read_text())
+                        models.append(info)
+                    except Exception:
+                        pass
+        return {'models': models}
+    except Exception as e:
+        logger.warning(f"Failed to list detection models from disk: {e}")
+        return {'models': []}
 
 
 @app.post('/yolo-detect/load-model')
@@ -2132,7 +2171,8 @@ async def yolo_detect_check_tensorrt():
         Dict with 'available' bool and 'version' string (or None)
     """
     if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
-        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+        # TensorRT is definitely not available if YOLO service isn't available
+        return {'available': False, 'version': None, 'reason': 'YOLO service not available'}
 
     service = get_yolo_detection_service()
     return service.check_tensorrt_available()
