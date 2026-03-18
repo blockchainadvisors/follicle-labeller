@@ -24,6 +24,8 @@ import {
   Brain,
   Database,
   FileUp,
+  Crosshair,
+  Route,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -79,9 +81,12 @@ import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction 
 import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
+import { follicleTrackingService } from "../../services/follicleTrackingService";
 import { generateId } from "../../utils/id-generator";
 import { getPlatform } from "../../platform";
 import type { LoadProjectResult } from "../../platform/types";
+import { useTrackingStore } from "../../store/trackingStore";
+import type { FollicleCorrespondence, TrackingSession } from "../../types";
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -1933,6 +1938,179 @@ export const Toolbar: React.FC = () => {
     }
   }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
+  // Track follicles across two images
+  const [isTracking, setIsTracking] = useState(false);
+  const addTrackingSession = useTrackingStore((s) => s.addSession);
+  const openComparisonView = useTrackingStore((s) => s.openComparisonView);
+
+  const handleTrackFollicles = useCallback(async (method: 'homography' | 'track') => {
+    if (!activeImage || !activeImageId || isTracking) return;
+
+    // Open file picker for second image
+    const platform = getPlatform();
+    const fileResult = await platform.file.openImageDialog();
+    if (!fileResult) return;
+
+    setIsTracking(true);
+    const methodLabel = method === 'homography' ? 'Homography' : 'BoT-SORT';
+    startLoading(`Tracking follicles via ${methodLabel}...`, false);
+
+    try {
+      // Add the new image to the project (permanent)
+      const newImageId = generateImageId();
+      const blob = new Blob([fileResult.data]);
+      const imageBitmap = await createImageBitmap(blob);
+      const imageSrc = URL.createObjectURL(blob);
+
+      addImage({
+        id: newImageId,
+        fileName: fileResult.fileName,
+        width: imageBitmap.width,
+        height: imageBitmap.height,
+        imageData: fileResult.data,
+        imageBitmap,
+        imageSrc,
+        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+        createdAt: Date.now(),
+        sortOrder: images.size,
+      });
+
+      // Convert both images to base64
+      const sourceBase64 = await getImageBase64(activeImage);
+
+      // Convert target image to base64 from its ArrayBuffer
+      const targetBytes = new Uint8Array(fileResult.data);
+      let targetBinary = "";
+      for (let i = 0; i < targetBytes.byteLength; i++) {
+        targetBinary += String.fromCharCode(targetBytes[i]);
+      }
+      const targetBase64Raw = btoa(targetBinary);
+      const targetExt = fileResult.fileName.toLowerCase().split(".").pop();
+      let targetMime = "image/png";
+      if (targetExt === "jpg" || targetExt === "jpeg") targetMime = "image/jpeg";
+      const targetBase64 = `data:${targetMime};base64,${targetBase64Raw}`;
+
+      // Run cross-image tracking with the selected method
+      const result = await follicleTrackingService.trackAcrossImages(
+        sourceBase64,
+        targetBase64,
+        detectionSettings.yoloConfidenceThreshold || 0.5,
+        50.0,
+        method
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Tracking failed");
+      }
+
+      // Create annotations from BOTH source and target detection results.
+      // The backend runs model.predict() independently on both images,
+      // so we use those fresh detections rather than relying on existing store annotations.
+      const now = Date.now();
+
+      // Source annotations from the tracking detection
+      const sourceAnnotations: RectangleAnnotation[] = result.sourceDetections.map(
+        (det, i) => ({
+          id: generateId(),
+          imageId: activeImageId,
+          shape: "rectangle" as const,
+          x: det.x,
+          y: det.y,
+          width: det.width,
+          height: det.height,
+          label: `Track S${i + 1}`,
+          notes: `Tracked detection (conf: ${(det.confidence * 100).toFixed(0)}%)`,
+          color: ANNOTATION_COLORS[i % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      // Target annotations from the tracking detection
+      const targetAnnotations: RectangleAnnotation[] = result.targetDetections.map(
+        (det, i) => ({
+          id: generateId(),
+          imageId: newImageId,
+          shape: "rectangle" as const,
+          x: det.x,
+          y: det.y,
+          width: det.width,
+          height: det.height,
+          label: `Track T${i + 1}`,
+          notes: `Tracked detection (conf: ${(det.confidence * 100).toFixed(0)}%)`,
+          color: ANNOTATION_COLORS[i % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      // Import all new annotations at once
+      const allNewAnnotations = [...sourceAnnotations, ...targetAnnotations];
+      if (allNewAnnotations.length > 0) {
+        importFollicles(allNewAnnotations);
+      }
+
+      // Build correspondence entries using direct index mapping
+      const correspondences: FollicleCorrespondence[] = result.matches.map((match) => {
+        const sourceAnnotation = sourceAnnotations[match.sourceDetectionIndex];
+        const targetAnnotation = targetAnnotations[match.targetDetectionIndex];
+
+        return {
+          id: generateId(),
+          sourceAnnotationId: sourceAnnotation?.id || "",
+          targetAnnotationId: targetAnnotation?.id || "",
+          sourceImageId: activeImageId,
+          targetImageId: newImageId,
+          confidence: match.confidence,
+          transformedPosition: {
+            x: match.transformedX,
+            y: match.transformedY,
+          },
+        };
+      }).filter((c) => c.sourceAnnotationId && c.targetAnnotationId);
+
+      // Create tracking session
+      const session: TrackingSession = {
+        id: generateId(),
+        sourceImageId: activeImageId,
+        targetImageId: newImageId,
+        correspondences,
+        homographyMatrix: result.homographyMatrix,
+        method: result.method as "homography" | "track",
+        createdAt: Date.now(),
+      };
+
+      addTrackingSession(session);
+      openComparisonView(session.id);
+
+      console.log(
+        `Tracking complete: ${result.matches.length} matches via ${result.method}, ` +
+        `${correspondences.length} correspondences linked`
+      );
+    } catch (error) {
+      console.error("Track follicles failed:", error);
+      alert(
+        `Tracking failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    } finally {
+      setIsTracking(false);
+      stopLoading();
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isTracking,
+    detectionSettings.yoloConfidenceThreshold,
+    addImage,
+    images.size,
+    importFollicles,
+    startLoading,
+    stopLoading,
+    addTrackingSession,
+    openComparisonView,
+    getImageBase64,
+  ]);
+
   // Handle learned detection (from annotations)
   const handleLearnedDetect = useCallback(
     async (settings: LearnedDetectionSettings) => {
@@ -2398,6 +2576,50 @@ export const Toolbar: React.FC = () => {
             serverStarting ||
             !blobServerConnected ||
             !(detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0)
+          }
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Crosshair size={18} />
+            )
+          }
+          tooltip={
+            !blobServerConnected
+              ? "Starting detection server..."
+              : "Track via Homography"
+          }
+          onClick={() => handleTrackFollicles('homography')}
+          disabled={
+            !imageLoaded ||
+            isTracking ||
+            isDetecting ||
+            serverStarting ||
+            !blobServerConnected
+          }
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Route size={18} />
+            )
+          }
+          tooltip={
+            !blobServerConnected
+              ? "Starting detection server..."
+              : "Track via BoT-SORT"
+          }
+          onClick={() => handleTrackFollicles('track')}
+          disabled={
+            !imageLoaded ||
+            isTracking ||
+            isDetecting ||
+            serverStarting ||
+            !blobServerConnected
           }
         />
         <IconButton
