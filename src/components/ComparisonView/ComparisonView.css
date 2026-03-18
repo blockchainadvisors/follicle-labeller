@@ -1,0 +1,149 @@
+.comparison-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.comparison-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.comparison-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.comparison-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comparison-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.comparison-stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.comparison-stat-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comparison-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.comparison-close-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.comparison-panels {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.comparison-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.comparison-panel + .comparison-panel {
+  border-left: 2px solid var(--border);
+}
+
+.comparison-panel-header {
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.comparison-panel-header span {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.comparison-canvas-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.comparison-canvas-wrapper canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+/* Arrow overlay between panels */
+.comparison-arrows-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Match legend */
+.comparison-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.comparison-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.comparison-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
