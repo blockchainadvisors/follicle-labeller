@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult } from '../../types';
 import { config } from '../config';
 
 export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
@@ -314,5 +314,49 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     }
 
     return response.json();
+  }
+
+  async trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-across-images`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImageData,
+          targetImageData,
+          confidenceThreshold: confidenceThreshold ?? 0.5,
+          matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+          method: method ?? 'auto',
+        }),
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          sourceDetections: [],
+          targetDetections: [],
+          matches: [],
+          method: method ?? 'auto',
+          error: `Server returned ${response.status}`,
+        };
+      }
+
+      return response.json();
+    } catch (error) {
+      return {
+        success: false,
+        sourceDetections: [],
+        targetDetections: [],
+        matches: [],
+        method: method ?? 'auto',
+        error: String(error),
+      };
+    }
   }
 }

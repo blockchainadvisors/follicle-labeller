@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult } from '../../types';
 
 export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
   async getStatus(): Promise<YoloDetectionStatus> {
@@ -113,5 +113,17 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     imgsz?: number
   ): Promise<ExportTensorRTResult> {
     return window.electronAPI.yoloDetection.exportToTensorRT(modelPath, outputPath, half, imgsz);
+  }
+
+  async trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult> {
+    return window.electronAPI.yoloDetection.trackAcrossImages(
+      sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method
+    ) as Promise<TrackAcrossImagesResult>;
   }
 }
