@@ -16,6 +16,7 @@ import type {
   ModelInfo,
   KeypointPrediction,
   DetectionPrediction,
+  TrackAcrossImagesResult,
 } from '../types';
 
 // ============================================
@@ -422,6 +423,15 @@ export interface YoloDetectionAdapter {
     half?: boolean,
     imgsz?: number
   ): Promise<ExportTensorRTResult>;
+
+  /** Track follicles across two images from different angles */
+  trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult>;
 }
 
 // ============================================
