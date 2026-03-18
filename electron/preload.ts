@@ -871,6 +871,16 @@ const electronAPI = {
       imgsz?: number
     ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
       ipcRenderer.invoke("yolo-detection:exportTensorRT", modelPath, outputPath, half, imgsz),
+
+    // Track follicles across two images from different angles
+    trackAcrossImages: (
+      sourceImageData: string,
+      targetImageData: string,
+      confidenceThreshold?: number,
+      matchDistanceThreshold?: number,
+      method?: string
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackAcrossImages", sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method),
   },
 };
 
