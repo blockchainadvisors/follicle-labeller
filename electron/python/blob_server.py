@@ -1824,6 +1824,14 @@ class DetectionPredictTiledRequest(BaseModel):
     scaleFactor: Optional[float] = 1.0  # Upscale factor for smaller objects
 
 
+class DetectionTrackAcrossImagesRequest(BaseModel):
+    sourceImageData: str  # base64 encoded
+    targetImageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+    matchDistanceThreshold: Optional[float] = 50.0  # pixels
+    method: Optional[str] = 'auto'  # 'auto', 'homography', 'track'
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2091,6 +2099,28 @@ async def yolo_detect_predict_tiled(req: DetectionPredictTiledRequest):
         'scaleFactor': req.scaleFactor or 1.0,
         'backend': service.get_loaded_model_backend()
     }
+
+
+@app.post('/yolo-detect/track-across-images')
+async def yolo_detect_track_across_images(req: DetectionTrackAcrossImagesRequest):
+    """
+    Track follicles across two images of the same scalp from different angles.
+    Uses homography-based feature matching with model.track() fallback.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+
+    result = service.track_across_images_base64(
+        source_image_base64=req.sourceImageData,
+        target_image_base64=req.targetImageData,
+        confidence_threshold=req.confidenceThreshold or 0.5,
+        match_distance_threshold=req.matchDistanceThreshold or 50.0,
+        method=req.method or 'auto'
+    )
+
+    return result
 
 
 @app.post('/yolo-detect/export-onnx')
