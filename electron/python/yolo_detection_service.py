@@ -1240,6 +1240,503 @@ class YOLODetectionService:
 
         return [predictions[i] for i in keep]
 
+    def track_across_images(
+        self,
+        source_image_data: bytes,
+        target_image_data: bytes,
+        confidence_threshold: float = 0.5,
+        match_distance_threshold: float = 50.0,
+        method: str = 'auto'
+    ) -> Dict[str, Any]:
+        """
+        Track follicles across two images of the same scalp from different angles.
+
+        Uses homography-based feature matching to find corresponding follicles
+        between two images. Falls back to model.track() for near-identical views.
+
+        Args:
+            source_image_data: Source image bytes (JPEG or PNG)
+            target_image_data: Target image bytes (JPEG or PNG)
+            confidence_threshold: Minimum confidence to include detection
+            match_distance_threshold: Maximum pixel distance for matching (after homography transform)
+            method: Matching method - 'auto', 'homography', or 'track'
+
+        Returns:
+            Dict with sourceDetections, targetDetections, matches, homographyMatrix, method
+        """
+        if self._loaded_model is None:
+            logger.info("No model loaded, auto-loading pretrained yolo11n.pt...")
+            if not self._load_default_model():
+                logger.error("Failed to auto-load default model")
+                return {
+                    'success': False,
+                    'error': 'No model loaded and failed to auto-load default model',
+                    'sourceDetections': [],
+                    'targetDetections': [],
+                    'matches': [],
+                    'method': method,
+                }
+
+        try:
+            # Decode and preprocess both images
+            source_img = Image.open(io.BytesIO(source_image_data))
+            target_img = Image.open(io.BytesIO(target_image_data))
+
+            # Apply EXIF orientation
+            try:
+                source_img = ImageOps.exif_transpose(source_img)
+            except Exception:
+                pass
+            try:
+                target_img = ImageOps.exif_transpose(target_img)
+            except Exception:
+                pass
+
+            if source_img.mode != 'RGB':
+                source_img = source_img.convert('RGB')
+            if target_img.mode != 'RGB':
+                target_img = target_img.convert('RGB')
+
+            source_array = np.array(source_img)
+            target_array = np.array(target_img)
+
+            # Run detection on both images independently.
+            # Use tiled inference for large images to match the main detection pipeline.
+            source_h, source_w = source_array.shape[:2]
+            target_h, target_w = target_array.shape[:2]
+            tile_size = 1024
+            use_tiled = max(source_w, source_h, target_w, target_h) > tile_size
+
+            if use_tiled:
+                logger.info(f"Using tiled inference for tracking (source: {source_w}x{source_h}, target: {target_w}x{target_h})")
+                source_detections = self.predict_tiled(
+                    source_image_data, confidence_threshold,
+                    tile_size=tile_size, overlap=128, nms_threshold=0.5
+                )
+                target_detections = self.predict_tiled(
+                    target_image_data, confidence_threshold,
+                    tile_size=tile_size, overlap=128, nms_threshold=0.5
+                )
+            else:
+                device = self._get_inference_device()
+                source_results = self._loaded_model.predict(
+                    source_array, conf=confidence_threshold, verbose=False,
+                    imgsz=self._loaded_model_imgsz, device=device
+                )
+                target_results = self._loaded_model.predict(
+                    target_array, conf=confidence_threshold, verbose=False,
+                    imgsz=self._loaded_model_imgsz, device=device
+                )
+                source_detections = self._extract_detections(source_results, source_array.shape)
+                target_detections = self._extract_detections(target_results, target_array.shape)
+
+            logger.info(f"Cross-image tracking: {len(source_detections)} source, {len(target_detections)} target detections")
+
+            if not source_detections or not target_detections:
+                return {
+                    'success': True,
+                    'sourceDetections': [d.to_dict() for d in source_detections],
+                    'targetDetections': [d.to_dict() for d in target_detections],
+                    'matches': [],
+                    'homographyMatrix': None,
+                    'method': method if method != 'auto' else 'homography',
+                }
+
+            # Try homography-based matching
+            used_method = method
+            matches = []
+            homography_matrix = None
+
+            if method in ('auto', 'homography'):
+                matches, homography_matrix = self._match_via_homography(
+                    source_array, target_array,
+                    source_detections, target_detections,
+                    match_distance_threshold
+                )
+                used_method = 'homography'
+
+                # Fall back to track if homography failed and method is auto
+                if not matches and method == 'auto':
+                    logger.info("Homography matching failed, falling back to model.track()")
+                    track_result = self._match_via_track(
+                        source_array, target_array,
+                        confidence_threshold
+                    )
+                    matches = track_result['matches']
+                    source_detections = track_result['source_detections']
+                    target_detections = track_result['target_detections']
+                    used_method = 'track'
+                    homography_matrix = None
+
+            elif method == 'track':
+                # BoT-SORT: model.track() runs its own detection, so use its
+                # detections directly instead of the tiled inference ones.
+                track_result = self._match_via_track(
+                    source_array, target_array,
+                    confidence_threshold
+                )
+                matches = track_result['matches']
+                source_detections = track_result['source_detections']
+                target_detections = track_result['target_detections']
+                used_method = 'track'
+
+            logger.info(f"Cross-image tracking complete: {len(matches)} matches via {used_method}")
+
+            return {
+                'success': True,
+                'sourceDetections': [d.to_dict() for d in source_detections],
+                'targetDetections': [d.to_dict() for d in target_detections],
+                'matches': matches,
+                'homographyMatrix': homography_matrix,
+                'method': used_method,
+            }
+
+        except Exception as e:
+            logger.exception("Cross-image tracking failed")
+            return {
+                'success': False,
+                'error': str(e),
+                'sourceDetections': [],
+                'targetDetections': [],
+                'matches': [],
+                'method': method,
+            }
+
+    def _extract_detections(
+        self,
+        results: list,
+        img_shape: tuple
+    ) -> List[DetectionPrediction]:
+        """Extract DetectionPrediction list from YOLO results."""
+        detections = []
+        if not results or len(results) == 0:
+            return detections
+
+        result = results[0]
+        img_height, img_width = img_shape[:2]
+
+        if result.boxes is not None and len(result.boxes) > 0:
+            boxes = result.boxes.xyxy.cpu().numpy()
+            confidences = result.boxes.conf.cpu().numpy()
+            class_ids = result.boxes.cls.cpu().numpy().astype(int)
+
+            for box, conf, cls_id in zip(boxes, confidences, class_ids):
+                x1, y1, x2, y2 = box
+                x1 = max(0, min(float(x1), img_width))
+                y1 = max(0, min(float(y1), img_height))
+                x2 = max(0, min(float(x2), img_width))
+                y2 = max(0, min(float(y2), img_height))
+
+                w = x2 - x1
+                h = y2 - y1
+                if w <= 0 or h <= 0:
+                    continue
+
+                detections.append(DetectionPrediction(
+                    x=x1, y=y1, width=w, height=h,
+                    confidence=float(conf),
+                    class_id=int(cls_id),
+                    class_name='follicle'
+                ))
+
+        return detections
+
+    def _match_via_homography(
+        self,
+        source_array: np.ndarray,
+        target_array: np.ndarray,
+        source_detections: List[DetectionPrediction],
+        target_detections: List[DetectionPrediction],
+        match_distance_threshold: float
+    ) -> Tuple[List[Dict], Optional[List[List[float]]]]:
+        """
+        Match follicles across images using ORB feature matching + homography.
+        Downscales large images for better feature detection.
+
+        Returns:
+            Tuple of (matches list, homography matrix as nested list or None)
+        """
+        try:
+            # Convert to grayscale for feature detection
+            source_gray = cv2.cvtColor(source_array, cv2.COLOR_RGB2GRAY)
+            target_gray = cv2.cvtColor(target_array, cv2.COLOR_RGB2GRAY)
+
+            # Downscale large images for better ORB feature detection.
+            # ORB at full resolution on huge images (12000+ px) gives noisy features.
+            max_dim = 2000
+            source_h, source_w = source_gray.shape[:2]
+            target_h, target_w = target_gray.shape[:2]
+
+            source_scale = 1.0
+            if max(source_w, source_h) > max_dim:
+                source_scale = max_dim / max(source_w, source_h)
+                source_gray_small = cv2.resize(source_gray, None, fx=source_scale, fy=source_scale, interpolation=cv2.INTER_AREA)
+            else:
+                source_gray_small = source_gray
+
+            target_scale = 1.0
+            if max(target_w, target_h) > max_dim:
+                target_scale = max_dim / max(target_w, target_h)
+                target_gray_small = cv2.resize(target_gray, None, fx=target_scale, fy=target_scale, interpolation=cv2.INTER_AREA)
+            else:
+                target_gray_small = target_gray
+
+            logger.info(f"Homography feature detection: source scale={source_scale:.3f}, target scale={target_scale:.3f}")
+
+            # Detect ORB features on downscaled images
+            orb = cv2.ORB_create(nfeatures=10000)
+            kp1, des1 = orb.detectAndCompute(source_gray_small, None)
+            kp2, des2 = orb.detectAndCompute(target_gray_small, None)
+
+            if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+                logger.warning("Insufficient features for homography matching")
+                return [], None
+
+            # Use KNN matching with ratio test instead of crossCheck
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+            raw_matches = bf.knnMatch(des1, des2, k=2)
+
+            # Apply ratio test to filter ambiguous matches
+            good_matches = []
+            for m_pair in raw_matches:
+                if len(m_pair) == 2:
+                    m, n = m_pair
+                    if m.distance < 0.8 * n.distance:
+                        good_matches.append(m)
+
+            logger.info(f"ORB matching: {len(kp1)} source, {len(kp2)} target keypoints, {len(good_matches)} good matches after ratio test")
+
+            if len(good_matches) < 4:
+                logger.warning(f"Only {len(good_matches)} good matches, need at least 4 for homography")
+                return [], None
+
+            # Extract matched keypoints and scale back to original image coordinates
+            src_pts = np.float32([
+                [kp1[m.queryIdx].pt[0] / source_scale, kp1[m.queryIdx].pt[1] / source_scale]
+                for m in good_matches
+            ]).reshape(-1, 1, 2)
+            dst_pts = np.float32([
+                [kp2[m.trainIdx].pt[0] / target_scale, kp2[m.trainIdx].pt[1] / target_scale]
+                for m in good_matches
+            ]).reshape(-1, 1, 2)
+
+            # Compute homography with RANSAC — use higher threshold for large images
+            ransac_threshold = max(5.0, min(source_w, source_h) * 0.001)
+            H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_threshold, maxIters=5000)
+
+            if H is None:
+                logger.warning("Homography computation failed")
+                return [], None
+
+            inlier_count = int(mask.sum()) if mask is not None else 0
+            logger.info(f"Homography computed: {inlier_count}/{len(good_matches)} inlier feature matches")
+
+            if inlier_count < 4:
+                logger.warning("Too few inlier matches for reliable homography")
+                return [], None
+
+            # Scale match distance threshold proportional to image size.
+            # The user-provided threshold (default 50px) is a base for ~1000px images.
+            # For a 12000px image, scale it up proportionally.
+            img_diagonal = np.sqrt(source_w ** 2 + source_h ** 2)
+            scaled_threshold = match_distance_threshold * max(1.0, img_diagonal / 1414.0)  # 1414 = sqrt(1000^2+1000^2)
+            logger.info(f"Match distance threshold: {match_distance_threshold} -> {scaled_threshold:.1f} (image diagonal: {img_diagonal:.0f})")
+
+            # Transform source detection centers through the homography
+            source_centers = np.float32([
+                [d.x + d.width / 2, d.y + d.height / 2] for d in source_detections
+            ]).reshape(-1, 1, 2)
+
+            transformed_centers = cv2.perspectiveTransform(source_centers, H).reshape(-1, 2)
+
+            # Build target centers array
+            target_centers = np.array([
+                [d.x + d.width / 2, d.y + d.height / 2] for d in target_detections
+            ])
+
+            # Vectorized nearest-neighbor matching using distance matrix
+            # Compute all pairwise distances at once
+            diff = transformed_centers[:, np.newaxis, :] - target_centers[np.newaxis, :, :]
+            dist_matrix = np.sqrt((diff ** 2).sum(axis=2))  # shape: (n_source, n_target)
+
+            matches = []
+            used_targets = set()
+
+            # For each source, find best available target
+            # Sort sources by their best distance to prioritize confident matches
+            best_dists = dist_matrix.min(axis=1)
+            source_order = np.argsort(best_dists)
+
+            for src_idx in source_order:
+                row = dist_matrix[src_idx]
+                # Mask out used targets
+                for used in used_targets:
+                    row[used] = float('inf')
+
+                best_target_idx = int(row.argmin())
+                best_dist = float(row[best_target_idx])
+
+                if best_dist <= scaled_threshold:
+                    match_confidence = max(0.0, 1.0 - (best_dist / scaled_threshold))
+                    tx, ty = transformed_centers[src_idx]
+                    matches.append({
+                        'sourceDetectionIndex': int(src_idx),
+                        'targetDetectionIndex': best_target_idx,
+                        'confidence': round(match_confidence, 4),
+                        'transformedX': round(float(tx), 2),
+                        'transformedY': round(float(ty), 2),
+                    })
+                    used_targets.add(best_target_idx)
+
+            # Convert homography to serializable format
+            homography_list = H.tolist()
+
+            return matches, homography_list
+
+        except Exception as e:
+            logger.exception("Homography matching failed")
+            return [], None
+
+    def _match_via_track(
+        self,
+        source_array: np.ndarray,
+        target_array: np.ndarray,
+        confidence_threshold: float
+    ) -> Dict[str, Any]:
+        """
+        Match follicles by running model.track() on a 2-frame sequence.
+        BoT-SORT assigns track IDs — shared IDs across frames = same object.
+
+        Returns:
+            Dict with 'matches', 'source_detections', 'target_detections'
+        """
+        empty_result = {
+            'matches': [],
+            'source_detections': [],
+            'target_detections': [],
+        }
+
+        try:
+            device = self._get_inference_device()
+
+            # Reset tracker state
+            self._loaded_model.predictor = None
+
+            # Run tracking on frame 1 (source)
+            results1 = self._loaded_model.track(
+                source_array, conf=confidence_threshold, verbose=False,
+                imgsz=self._loaded_model_imgsz, device=device,
+                persist=True, tracker='botsort.yaml'
+            )
+
+            # Run tracking on frame 2 (target) - tracker state persists
+            results2 = self._loaded_model.track(
+                target_array, conf=confidence_threshold, verbose=False,
+                imgsz=self._loaded_model_imgsz, device=device,
+                persist=True, tracker='botsort.yaml'
+            )
+
+            # Extract detections and track IDs from both frames
+            source_detections = self._extract_detections(results1, source_array.shape)
+            target_detections = self._extract_detections(results2, target_array.shape)
+
+            frame1_tracks = {}  # track_id -> detection_index
+            frame2_tracks = {}  # track_id -> detection_index
+
+            if results1 and len(results1) > 0 and results1[0].boxes is not None:
+                boxes = results1[0].boxes
+                if boxes.id is not None:
+                    track_ids = boxes.id.cpu().numpy().astype(int)
+                    for idx, tid in enumerate(track_ids):
+                        frame1_tracks[int(tid)] = idx
+
+            if results2 and len(results2) > 0 and results2[0].boxes is not None:
+                boxes = results2[0].boxes
+                if boxes.id is not None:
+                    track_ids = boxes.id.cpu().numpy().astype(int)
+                    for idx, tid in enumerate(track_ids):
+                        frame2_tracks[int(tid)] = idx
+
+            # Match by shared track IDs
+            matches = []
+            common_ids = set(frame1_tracks.keys()) & set(frame2_tracks.keys())
+
+            for tid in common_ids:
+                src_idx = frame1_tracks[tid]
+                tgt_idx = frame2_tracks[tid]
+                matches.append({
+                    'sourceDetectionIndex': src_idx,
+                    'targetDetectionIndex': tgt_idx,
+                    'confidence': 1.0,  # Track-based match — ID confirmed
+                    'transformedX': 0.0,
+                    'transformedY': 0.0,
+                })
+
+            logger.info(f"BoT-SORT tracking: {len(common_ids)} shared track IDs from {len(frame1_tracks)} source, {len(frame2_tracks)} target tracks")
+
+            # Reset tracker state after use
+            self._loaded_model.predictor = None
+
+            return {
+                'matches': matches,
+                'source_detections': source_detections,
+                'target_detections': target_detections,
+            }
+
+        except Exception as e:
+            logger.exception("BoT-SORT tracking failed")
+            try:
+                self._loaded_model.predictor = None
+            except Exception:
+                pass
+            return empty_result
+
+    def track_across_images_base64(
+        self,
+        source_image_base64: str,
+        target_image_base64: str,
+        confidence_threshold: float = 0.5,
+        match_distance_threshold: float = 50.0,
+        method: str = 'auto'
+    ) -> Dict[str, Any]:
+        """
+        Track follicles across two base64-encoded images.
+
+        Args:
+            source_image_base64: Base64-encoded source image
+            target_image_base64: Base64-encoded target image
+            confidence_threshold: Minimum detection confidence
+            match_distance_threshold: Maximum pixel distance for matching
+            method: 'auto', 'homography', or 'track'
+
+        Returns:
+            Tracking result dict
+        """
+        try:
+            # Remove data URL prefix if present
+            if ',' in source_image_base64:
+                source_image_base64 = source_image_base64.split(',', 1)[1]
+            if ',' in target_image_base64:
+                target_image_base64 = target_image_base64.split(',', 1)[1]
+
+            source_data = base64.b64decode(source_image_base64)
+            target_data = base64.b64decode(target_image_base64)
+
+            return self.track_across_images(
+                source_data, target_data,
+                confidence_threshold, match_distance_threshold, method
+            )
+        except Exception as e:
+            logger.exception("Failed to decode base64 images for tracking")
+            return {
+                'success': False,
+                'error': str(e),
+                'sourceDetections': [],
+                'targetDetections': [],
+                'matches': [],
+                'method': method,
+            }
+
     def predict_tiled_base64(
         self,
         image_base64: str,
