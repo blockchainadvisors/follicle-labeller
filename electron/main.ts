@@ -1946,6 +1946,32 @@ ipcMain.handle(
   }
 );
 
+// Track follicles across two images from different angles
+ipcMain.handle(
+  "yolo-detection:trackAcrossImages",
+  async (
+    _,
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: string
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-across-images",
+      "POST",
+      {
+        sourceImageData,
+        targetImageData,
+        confidenceThreshold: confidenceThreshold ?? 0.5,
+        matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+        method: method ?? "auto",
+      },
+      600000 // 10 minute timeout (tiled inference on two large images)
+    );
+  }
+);
+
 // Write detection dataset files to temp directory
 ipcMain.handle(
   "yolo-detection:writeDatasetToTemp",
