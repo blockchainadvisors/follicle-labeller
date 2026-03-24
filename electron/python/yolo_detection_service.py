@@ -1554,39 +1554,110 @@ class YOLODetectionService:
                 [d.x + d.width / 2, d.y + d.height / 2] for d in target_detections
             ])
 
-            # Vectorized nearest-neighbor matching using distance matrix
-            # Compute all pairwise distances at once
+            # Vectorized distance matrix
             diff = transformed_centers[:, np.newaxis, :] - target_centers[np.newaxis, :, :]
             dist_matrix = np.sqrt((diff ** 2).sum(axis=2))  # shape: (n_source, n_target)
 
-            matches = []
-            used_targets = set()
+            # NCC patch verification setup
+            PATCH_SIZE = 32
+            PATCH_EXPAND = 1.5
+            NCC_FLOOR = 0.4
 
-            # For each source, find best available target
-            # Sort sources by their best distance to prioritize confident matches
+            source_gray = cv2.cvtColor(source_array, cv2.COLOR_RGB2GRAY)
+            target_gray = cv2.cvtColor(target_array, cv2.COLOR_RGB2GRAY)
+
+            def _extract_patch(gray_img, det):
+                img_h, img_w = gray_img.shape[:2]
+                cx = det.x + det.width / 2.0
+                cy = det.y + det.height / 2.0
+                half_w = det.width * PATCH_EXPAND / 2.0
+                half_h = det.height * PATCH_EXPAND / 2.0
+                x1 = max(0, int(cx - half_w))
+                y1 = max(0, int(cy - half_h))
+                x2 = min(img_w, int(cx + half_w))
+                y2 = min(img_h, int(cy + half_h))
+                if x2 <= x1 or y2 <= y1:
+                    return None
+                crop = gray_img[y1:y2, x1:x2]
+                interp = cv2.INTER_AREA if crop.shape[0] > PATCH_SIZE else cv2.INTER_LINEAR
+                return cv2.resize(crop, (PATCH_SIZE, PATCH_SIZE), interpolation=interp)
+
+            # Pre-extract all patches
+            source_patches = [_extract_patch(source_gray, d) for d in source_detections]
+            target_patches = [_extract_patch(target_gray, d) for d in target_detections]
+
+            # Pre-compute source areas and target areas
+            source_areas = np.array([d.width * d.height for d in source_detections])
+            target_areas = np.array([d.width * d.height for d in target_detections])
+
+            # For each source, find best candidate using distance + NCC + size
+            candidates = []  # (combined_score, src_idx, tgt_idx)
+
             best_dists = dist_matrix.min(axis=1)
             source_order = np.argsort(best_dists)
 
             for src_idx in source_order:
-                row = dist_matrix[src_idx]
-                # Mask out used targets
-                for used in used_targets:
-                    row[used] = float('inf')
+                src_patch = source_patches[int(src_idx)]
+                if src_patch is None:
+                    continue
 
-                best_target_idx = int(row.argmin())
-                best_dist = float(row[best_target_idx])
+                row = dist_matrix[int(src_idx)]
+                src_area = float(source_areas[int(src_idx)])
 
-                if best_dist <= scaled_threshold:
-                    match_confidence = max(0.0, 1.0 - (best_dist / scaled_threshold))
-                    tx, ty = transformed_centers[src_idx]
-                    matches.append({
-                        'sourceDetectionIndex': int(src_idx),
-                        'targetDetectionIndex': best_target_idx,
-                        'confidence': round(match_confidence, 4),
-                        'transformedX': round(float(tx), 2),
-                        'transformedY': round(float(ty), 2),
-                    })
-                    used_targets.add(best_target_idx)
+                # Find all targets within threshold
+                candidate_indices = np.where(row <= scaled_threshold)[0]
+                if len(candidate_indices) == 0:
+                    continue
+
+                best_score = -1.0
+                best_tgt = -1
+
+                for tgt_idx in candidate_indices:
+                    tgt_idx = int(tgt_idx)
+                    tgt_patch = target_patches[tgt_idx]
+                    if tgt_patch is None:
+                        continue
+
+                    # NCC comparison
+                    ncc = float(cv2.matchTemplate(
+                        src_patch, tgt_patch, cv2.TM_CCOEFF_NORMED
+                    )[0][0])
+
+                    if ncc < NCC_FLOOR:
+                        continue
+
+                    dist = float(row[tgt_idx])
+                    distance_score = max(0.0, 1.0 - dist / scaled_threshold)
+                    tgt_area = float(target_areas[tgt_idx])
+                    size_score = min(src_area, tgt_area) / max(src_area, tgt_area + 1e-6)
+                    combined = distance_score * max(ncc, 0.0) * (0.5 + 0.5 * size_score)
+
+                    if combined > best_score:
+                        best_score = combined
+                        best_tgt = tgt_idx
+
+                if best_tgt >= 0:
+                    candidates.append((best_score, int(src_idx), best_tgt))
+
+            # Greedy one-to-one assignment sorted by combined score (best first)
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            used_targets = set()
+            matches = []
+
+            for (score, src_idx, tgt_idx) in candidates:
+                if tgt_idx in used_targets:
+                    continue
+                tx, ty = transformed_centers[src_idx]
+                matches.append({
+                    'sourceDetectionIndex': int(src_idx),
+                    'targetDetectionIndex': tgt_idx,
+                    'confidence': round(score, 4),
+                    'transformedX': round(float(tx), 2),
+                    'transformedY': round(float(ty), 2),
+                })
+                used_targets.add(tgt_idx)
+
+            logger.info(f"Homography+NCC matching: {len(matches)} matches ({len(candidates)} candidates)")
 
             # Convert homography to serializable format
             homography_list = H.tolist()
