@@ -881,6 +881,22 @@ const electronAPI = {
       method?: string
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke("yolo-detection:trackAcrossImages", sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method),
+
+    // Prepare a tracking session (compute homography, cache images)
+    trackPrepare: (
+      sourceImageData: string,
+      targetImageData: string,
+      confidenceThreshold?: number,
+      matchDistanceThreshold?: number
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackPrepare", sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold),
+
+    // Match a single follicle against a prepared session
+    trackMatchSingle: (
+      sessionId: string,
+      sourceBbox: { x: number; y: number; width: number; height: number }
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackMatchSingle", sessionId, sourceBbox),
   },
 };
 

@@ -718,6 +718,16 @@ declare global {
           matchDistanceThreshold?: number,
           method?: 'auto' | 'homography' | 'track'
         ) => Promise<TrackAcrossImagesResult>;
+        trackPrepare: (
+          sourceImageData: string,
+          targetImageData: string,
+          confidenceThreshold?: number,
+          matchDistanceThreshold?: number
+        ) => Promise<TrackPrepareResult>;
+        trackMatchSingle: (
+          sessionId: string,
+          sourceBbox: { x: number; y: number; width: number; height: number }
+        ) => Promise<TrackMatchSingleResult>;
       };
     };
   }
@@ -1086,6 +1096,30 @@ export interface TrackAcrossImagesResult {
   matches: TrackingMatch[];
   homographyMatrix?: number[][];
   method: string;
+  error?: string;
+}
+
+/**
+ * Result from the track-prepare endpoint.
+ */
+export interface TrackPrepareResult {
+  success: boolean;
+  sessionId: string;
+  homographyMatrix?: number[][];
+  error?: string;
+}
+
+/**
+ * Result from the track-match-single endpoint.
+ */
+export interface TrackMatchSingleResult {
+  success: boolean;
+  match: {
+    targetDetection: DetectionPrediction;
+    confidence: number;
+    transformedX: number;
+    transformedY: number;
+  } | null;
   error?: string;
 }
 

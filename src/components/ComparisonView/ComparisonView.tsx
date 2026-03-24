@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useCallback, useState, useMemo } from "react"
 import { useTrackingStore } from "../../store/trackingStore";
 import { useProjectStore } from "../../store/projectStore";
 import { useFollicleStore } from "../../store/follicleStore";
+import { follicleTrackingService } from "../../services/follicleTrackingService";
 import { CanvasRenderer } from "../Canvas/CanvasRenderer";
 import type { Viewport, Follicle, RectangleAnnotation, FollicleCorrespondence } from "../../types";
+import { generateId } from "../../utils/id-generator";
 import "./ComparisonView.css";
 
 const HIGHLIGHT_COLOR = "#FFD700";
@@ -14,8 +16,12 @@ const MATCHED_COLOR = "#4ECDC4";
 export const ComparisonView: React.FC = () => {
   const activeSession = useTrackingStore((s) => s.getActiveSession());
   const closeComparisonView = useTrackingStore((s) => s.closeComparisonView);
+  const backendSessionId = useTrackingStore((s) => s.backendSessionId);
+  const addCorrespondence = useTrackingStore((s) => s.addCorrespondence);
   const images = useProjectStore((s) => s.images);
   const follicles = useFollicleStore((s) => s.follicles);
+  const appendFollicles = useFollicleStore((s) => s.appendFollicles);
+  const [matchingFollicleIds, setMatchingFollicleIds] = useState<Set<string>>(new Set());
 
   // Canvas refs
   const sourceCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -31,8 +37,9 @@ export const ComparisonView: React.FC = () => {
   const [sourceViewport, setSourceViewport] = useState<Viewport>({ offsetX: 0, offsetY: 0, scale: 1 });
   const [targetViewport, setTargetViewport] = useState<Viewport>({ offsetX: 0, offsetY: 0, scale: 1 });
 
-  // Pan state
+  // Pan state — use ref for isPanning to avoid stale closure issues in mouseUp
   const [isPanning, setIsPanning] = useState<"source" | "target" | null>(null);
+  const isPanningRef = useRef<"source" | "target" | null>(null);
   const panStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number }>({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
   const panMovedRef = useRef(false);
 
@@ -213,6 +220,7 @@ export const ComparisonView: React.FC = () => {
   const handleMouseDown = useCallback(
     (e: React.MouseEvent, panel: "source" | "target") => {
       const viewport = panel === "source" ? sourceViewport : targetViewport;
+      isPanningRef.current = panel;
       setIsPanning(panel);
       panMovedRef.current = false;
       panStartRef.current = {
@@ -225,24 +233,27 @@ export const ComparisonView: React.FC = () => {
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!isPanning) return;
+      const panPanel = isPanningRef.current;
+      if (!panPanel) return;
       const dx = e.clientX - panStartRef.current.x;
       const dy = e.clientY - panStartRef.current.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panMovedRef.current = true;
 
-      const setViewport = isPanning === "source" ? setSourceViewport : setTargetViewport;
+      const setViewport = panPanel === "source" ? setSourceViewport : setTargetViewport;
       setViewport({
         offsetX: panStartRef.current.offsetX + dx,
         offsetY: panStartRef.current.offsetY + dy,
-        scale: (isPanning === "source" ? sourceViewport : targetViewport).scale,
+        scale: (panPanel === "source" ? sourceViewport : targetViewport).scale,
       });
     },
-    [isPanning, sourceViewport, targetViewport]
+    [sourceViewport, targetViewport]
   );
 
   const handleMouseUp = useCallback(
     (e: React.MouseEvent, panel: "source" | "target") => {
-      const wasPanning = isPanning;
+      // Read from ref to avoid stale closure — always reflects latest mouseDown
+      const wasPanning = isPanningRef.current;
+      isPanningRef.current = null;
       setIsPanning(null);
 
       // If it was a click (not a drag), try to select a follicle
@@ -275,13 +286,94 @@ export const ComparisonView: React.FC = () => {
             setSelectedFollicleId(null);
           } else {
             setSelectedFollicleId(clicked.id);
+
+            // If clicking a source follicle that isn't matched yet and
+            // not already being matched, trigger single-follicle matching
+            if (
+              panel === "source" &&
+              activeSession &&
+              backendSessionId &&
+              !matchedSourceIds.has(clicked.id) &&
+              !matchingFollicleIds.has(clicked.id) &&
+              clicked.shape === "rectangle"
+            ) {
+              const clickedRect = clicked as RectangleAnnotation;
+              const clickedId = clicked.id;
+              const sessionId = activeSession.id;
+              const targetImageId = activeSession.targetImageId;
+              const sourceImageId = activeSession.sourceImageId;
+
+              setMatchingFollicleIds((prev) => new Set(prev).add(clickedId));
+
+              follicleTrackingService
+                .trackMatchSingle(backendSessionId, {
+                  x: clickedRect.x,
+                  y: clickedRect.y,
+                  width: clickedRect.width,
+                  height: clickedRect.height,
+                })
+                .then((result) => {
+                  if (result.success && result.match) {
+                    // Create target annotation from the matched detection
+                    const det = result.match.targetDetection;
+                    const now = Date.now();
+                    const targetAnnotation: RectangleAnnotation = {
+                      id: generateId(),
+                      imageId: targetImageId,
+                      shape: "rectangle",
+                      x: det.x,
+                      y: det.y,
+                      width: det.width,
+                      height: det.height,
+                      label: `Match`,
+                      notes: `Matched (conf: ${(result.match.confidence * 100).toFixed(0)}%)`,
+                      color: "#4ECDC4",
+                      createdAt: now,
+                      updatedAt: now,
+                    };
+
+                    appendFollicles([targetAnnotation]);
+
+                    const correspondence: FollicleCorrespondence = {
+                      id: generateId(),
+                      sourceAnnotationId: clickedId,
+                      targetAnnotationId: targetAnnotation.id,
+                      sourceImageId: sourceImageId,
+                      targetImageId: targetImageId,
+                      confidence: result.match.confidence,
+                      transformedPosition: {
+                        x: result.match.transformedX,
+                        y: result.match.transformedY,
+                      },
+                    };
+
+                    addCorrespondence(sessionId, correspondence);
+                    console.log(
+                      `Single follicle matched: confidence=${result.match.confidence.toFixed(2)}`
+                    );
+                  } else if (result.success && !result.match) {
+                    console.log("No match found for selected follicle");
+                  } else {
+                    console.error("Match failed:", result.error);
+                  }
+                })
+                .catch((err) => console.error("Match request failed:", err))
+                .finally(() => {
+                  setMatchingFollicleIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(clickedId);
+                    return next;
+                  });
+                });
+            }
           }
         } else {
           setSelectedFollicleId(null);
         }
       }
     },
-    [isPanning, sourceViewport, targetViewport, sourceFollicles, targetFollicles, selectedFollicleId]
+    [sourceViewport, targetViewport, sourceFollicles, targetFollicles, selectedFollicleId,
+     activeSession, backendSessionId, matchedSourceIds, matchingFollicleIds, appendFollicles, addCorrespondence]
   );
 
   // Compute arrow for selected correspondence only

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ImageId, TrackingSession } from '../types';
+import type { ImageId, TrackingSession, FollicleCorrespondence } from '../types';
 
 interface TrackingState {
   /** All tracking sessions */
@@ -8,6 +8,8 @@ interface TrackingState {
   activeSessionId: string | null;
   /** Whether the comparison view is open */
   isComparisonViewOpen: boolean;
+  /** Backend session ID for single-follicle matching */
+  backendSessionId: string | null;
 
   // Actions
   addSession: (session: TrackingSession) => void;
@@ -15,6 +17,8 @@ interface TrackingState {
   setActiveSession: (sessionId: string | null) => void;
   openComparisonView: (sessionId: string) => void;
   closeComparisonView: () => void;
+  setBackendSessionId: (id: string | null) => void;
+  addCorrespondence: (sessionId: string, correspondence: FollicleCorrespondence) => void;
   clearAll: () => void;
 
   // Selectors
@@ -26,6 +30,7 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   isComparisonViewOpen: false,
+  backendSessionId: null,
 
   addSession: (session) =>
     set((state) => ({
@@ -57,11 +62,24 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       isComparisonViewOpen: false,
     }),
 
+  setBackendSessionId: (id) =>
+    set({ backendSessionId: id }),
+
+  addCorrespondence: (sessionId, correspondence) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId
+          ? { ...s, correspondences: [...s.correspondences, correspondence] }
+          : s
+      ),
+    })),
+
   clearAll: () =>
     set({
       sessions: [],
       activeSessionId: null,
       isComparisonViewOpen: false,
+      backendSessionId: null,
     }),
 
   getActiveSession: () => {

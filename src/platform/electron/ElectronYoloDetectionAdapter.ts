@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../../types';
 
 export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
   async getStatus(): Promise<YoloDetectionStatus> {
@@ -125,5 +125,25 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     return window.electronAPI.yoloDetection.trackAcrossImages(
       sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method
     ) as Promise<TrackAcrossImagesResult>;
+  }
+
+  async trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult> {
+    return window.electronAPI.yoloDetection.trackPrepare(
+      sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold
+    ) as Promise<TrackPrepareResult>;
+  }
+
+  async trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult> {
+    return window.electronAPI.yoloDetection.trackMatchSingle(
+      sessionId, sourceBbox
+    ) as Promise<TrackMatchSingleResult>;
   }
 }

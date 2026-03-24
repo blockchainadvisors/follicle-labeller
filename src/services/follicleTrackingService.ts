@@ -7,7 +7,7 @@
  * Uses the platform adapter to work in both Electron and Web modes.
  */
 
-import { TrackAcrossImagesResult } from '../types';
+import { TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../types';
 import { getPlatform } from '../platform';
 
 /**
@@ -133,6 +133,42 @@ export class FollicleTrackingService {
         method,
         error: error instanceof Error ? error.message : 'Tracking failed',
       };
+    }
+  }
+
+  async trackPrepare(
+    sourceImageBase64: string,
+    targetImageBase64: string,
+    confidenceThreshold: number = 0.5,
+    matchDistanceThreshold: number = 50.0
+  ): Promise<TrackPrepareResult> {
+    try {
+      return await withRetry(
+        () =>
+          getPlatform().yoloDetection.trackPrepare(
+            sourceImageBase64, targetImageBase64,
+            confidenceThreshold, matchDistanceThreshold
+          ),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Track prepare failed:', error);
+      return { success: false, sessionId: '', error: error instanceof Error ? error.message : 'Prepare failed' };
+    }
+  }
+
+  async trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.trackMatchSingle(sessionId, sourceBbox),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Track match single failed:', error);
+      return { success: false, match: null, error: error instanceof Error ? error.message : 'Match failed' };
     }
   }
 }

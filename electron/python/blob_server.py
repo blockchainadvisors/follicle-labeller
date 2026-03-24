@@ -1832,6 +1832,18 @@ class DetectionTrackAcrossImagesRequest(BaseModel):
     method: Optional[str] = 'auto'  # 'auto', 'homography', 'track'
 
 
+class TrackPrepareRequest(BaseModel):
+    sourceImageData: str  # base64 encoded
+    targetImageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+    matchDistanceThreshold: Optional[float] = 50.0
+
+
+class TrackMatchSingleRequest(BaseModel):
+    sessionId: str
+    sourceBbox: Dict[str, float]  # {x, y, width, height}
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2121,6 +2133,40 @@ async def yolo_detect_track_across_images(req: DetectionTrackAcrossImagesRequest
     )
 
     return result
+
+
+@app.post('/yolo-detect/track-prepare')
+async def yolo_detect_track_prepare(req: TrackPrepareRequest):
+    """
+    Prepare a tracking session: compute homography between two images.
+    Returns a session ID for subsequent single-follicle match requests.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.prepare_tracking_session_base64(
+        source_image_base64=req.sourceImageData,
+        target_image_base64=req.targetImageData,
+        confidence_threshold=req.confidenceThreshold or 0.5,
+        match_distance_threshold=req.matchDistanceThreshold or 50.0
+    )
+
+
+@app.post('/yolo-detect/track-match-single')
+async def yolo_detect_track_match_single(req: TrackMatchSingleRequest):
+    """
+    Match a single source follicle against the target image using
+    a previously prepared tracking session.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.match_single_follicle(
+        session_id=req.sessionId,
+        source_bbox=req.sourceBbox
+    )
 
 
 @app.post('/yolo-detect/export-onnx')

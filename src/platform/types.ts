@@ -17,6 +17,8 @@ import type {
   KeypointPrediction,
   DetectionPrediction,
   TrackAcrossImagesResult,
+  TrackPrepareResult,
+  TrackMatchSingleResult,
 } from '../types';
 
 // ============================================
@@ -432,6 +434,20 @@ export interface YoloDetectionAdapter {
     matchDistanceThreshold?: number,
     method?: 'auto' | 'homography' | 'track'
   ): Promise<TrackAcrossImagesResult>;
+
+  /** Prepare a tracking session (compute homography, cache images) */
+  trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult>;
+
+  /** Match a single follicle against a prepared tracking session */
+  trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult>;
 }
 
 // ============================================

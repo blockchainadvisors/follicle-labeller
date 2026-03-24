@@ -1972,6 +1972,47 @@ ipcMain.handle(
   }
 );
 
+// Prepare a tracking session (compute homography, cache images)
+ipcMain.handle(
+  "yolo-detection:trackPrepare",
+  async (
+    _,
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-prepare",
+      "POST",
+      {
+        sourceImageData,
+        targetImageData,
+        confidenceThreshold: confidenceThreshold ?? 0.5,
+        matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+      },
+      600000
+    );
+  }
+);
+
+// Match a single follicle against a prepared tracking session
+ipcMain.handle(
+  "yolo-detection:trackMatchSingle",
+  async (
+    _,
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-match-single",
+      "POST",
+      { sessionId, sourceBbox },
+      30000 // 30 second timeout (single follicle = fast)
+    );
+  }
+);
+
 // Write detection dataset files to temp directory
 ipcMain.handle(
   "yolo-detection:writeDatasetToTemp",

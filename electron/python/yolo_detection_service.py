@@ -205,6 +205,9 @@ class YOLODetectionService:
         # Active training jobs
         self._training_jobs: Dict[str, dict] = {}
 
+        # Cached tracking sessions for interactive single-follicle matching
+        self._tracking_sessions: Dict[str, dict] = {}
+
         logger.info(f"YOLODetectionService initialized. Models dir: {self.models_dir}")
 
     def clear_gpu_memory(self) -> Dict[str, Any]:
@@ -1807,6 +1810,314 @@ class YOLODetectionService:
                 'matches': [],
                 'method': method,
             }
+
+    def prepare_tracking_session(
+        self,
+        source_image_data: bytes,
+        target_image_data: bytes,
+        confidence_threshold: float = 0.5,
+        match_distance_threshold: float = 50.0
+    ) -> Dict[str, Any]:
+        """
+        Prepare a tracking session: compute homography between two images
+        and cache everything for fast per-follicle matching later.
+
+        Returns:
+            Dict with success, sessionId, homographyMatrix
+        """
+        try:
+            # Decode and preprocess both images
+            source_img = Image.open(io.BytesIO(source_image_data))
+            target_img = Image.open(io.BytesIO(target_image_data))
+
+            try:
+                source_img = ImageOps.exif_transpose(source_img)
+            except Exception:
+                pass
+            try:
+                target_img = ImageOps.exif_transpose(target_img)
+            except Exception:
+                pass
+
+            if source_img.mode != 'RGB':
+                source_img = source_img.convert('RGB')
+            if target_img.mode != 'RGB':
+                target_img = target_img.convert('RGB')
+
+            source_array = np.array(source_img)
+            target_array = np.array(target_img)
+
+            # Compute homography via ORB features
+            source_gray = cv2.cvtColor(source_array, cv2.COLOR_RGB2GRAY)
+            target_gray = cv2.cvtColor(target_array, cv2.COLOR_RGB2GRAY)
+
+            max_dim = 2000
+            source_h, source_w = source_gray.shape[:2]
+            target_h, target_w = target_gray.shape[:2]
+
+            source_scale = 1.0
+            if max(source_w, source_h) > max_dim:
+                source_scale = max_dim / max(source_w, source_h)
+                source_gray_small = cv2.resize(source_gray, None, fx=source_scale, fy=source_scale, interpolation=cv2.INTER_AREA)
+            else:
+                source_gray_small = source_gray
+
+            target_scale = 1.0
+            if max(target_w, target_h) > max_dim:
+                target_scale = max_dim / max(target_w, target_h)
+                target_gray_small = cv2.resize(target_gray, None, fx=target_scale, fy=target_scale, interpolation=cv2.INTER_AREA)
+            else:
+                target_gray_small = target_gray
+
+            orb = cv2.ORB_create(nfeatures=10000)
+            kp1, des1 = orb.detectAndCompute(source_gray_small, None)
+            kp2, des2 = orb.detectAndCompute(target_gray_small, None)
+
+            if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
+                return {'success': False, 'error': 'Insufficient features for homography', 'sessionId': '', 'homographyMatrix': None}
+
+            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+            raw_matches = bf.knnMatch(des1, des2, k=2)
+
+            good_matches = []
+            for m_pair in raw_matches:
+                if len(m_pair) == 2:
+                    m, n = m_pair
+                    if m.distance < 0.8 * n.distance:
+                        good_matches.append(m)
+
+            if len(good_matches) < 4:
+                return {'success': False, 'error': f'Only {len(good_matches)} feature matches, need 4+', 'sessionId': '', 'homographyMatrix': None}
+
+            src_pts = np.float32([
+                [kp1[m.queryIdx].pt[0] / source_scale, kp1[m.queryIdx].pt[1] / source_scale]
+                for m in good_matches
+            ]).reshape(-1, 1, 2)
+            dst_pts = np.float32([
+                [kp2[m.trainIdx].pt[0] / target_scale, kp2[m.trainIdx].pt[1] / target_scale]
+                for m in good_matches
+            ]).reshape(-1, 1, 2)
+
+            ransac_threshold = max(5.0, min(source_w, source_h) * 0.001)
+            H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, ransac_threshold, maxIters=5000)
+
+            if H is None:
+                return {'success': False, 'error': 'Homography computation failed', 'sessionId': '', 'homographyMatrix': None}
+
+            inlier_count = int(mask.sum()) if mask is not None else 0
+            if inlier_count < 4:
+                return {'success': False, 'error': 'Too few inlier matches', 'sessionId': '', 'homographyMatrix': None}
+
+            # Compute scaled threshold
+            img_diagonal = np.sqrt(source_w ** 2 + source_h ** 2)
+            scaled_threshold = match_distance_threshold * max(1.0, img_diagonal / 1414.0)
+
+            # Cache session
+            session_id = str(uuid.uuid4())
+            self._tracking_sessions[session_id] = {
+                'source_array': source_array,
+                'target_array': target_array,
+                'source_gray': source_gray,
+                'target_gray': target_gray,
+                'H': H,
+                'scaled_threshold': scaled_threshold,
+                'confidence_threshold': confidence_threshold,
+            }
+
+            logger.info(f"Tracking session {session_id} prepared: {inlier_count} inliers, threshold={scaled_threshold:.0f}")
+
+            return {
+                'success': True,
+                'sessionId': session_id,
+                'homographyMatrix': H.tolist(),
+            }
+
+        except Exception as e:
+            logger.exception("Failed to prepare tracking session")
+            return {'success': False, 'error': str(e), 'sessionId': '', 'homographyMatrix': None}
+
+    def prepare_tracking_session_base64(
+        self,
+        source_image_base64: str,
+        target_image_base64: str,
+        confidence_threshold: float = 0.5,
+        match_distance_threshold: float = 50.0
+    ) -> Dict[str, Any]:
+        """Base64 wrapper for prepare_tracking_session."""
+        try:
+            if ',' in source_image_base64:
+                source_image_base64 = source_image_base64.split(',', 1)[1]
+            if ',' in target_image_base64:
+                target_image_base64 = target_image_base64.split(',', 1)[1]
+
+            source_data = base64.b64decode(source_image_base64)
+            target_data = base64.b64decode(target_image_base64)
+
+            return self.prepare_tracking_session(
+                source_data, target_data,
+                confidence_threshold, match_distance_threshold
+            )
+        except Exception as e:
+            logger.exception("Failed to decode base64 for tracking prepare")
+            return {'success': False, 'error': str(e), 'sessionId': '', 'homographyMatrix': None}
+
+    def match_single_follicle(
+        self,
+        session_id: str,
+        source_bbox: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        Match a single source follicle against the target image using
+        a cached tracking session. Projects the source center through
+        the homography, crops a local area in the target, runs YOLO
+        detection on the crop, and NCC-verifies to find the best match.
+
+        Args:
+            session_id: ID of a prepared tracking session
+            source_bbox: {x, y, width, height} of the source follicle
+
+        Returns:
+            Dict with success, match (or null)
+        """
+        session = self._tracking_sessions.get(session_id)
+        if session is None:
+            return {'success': False, 'error': f'Session {session_id} not found', 'match': None}
+
+        if self._loaded_model is None:
+            return {'success': False, 'error': 'No model loaded', 'match': None}
+
+        try:
+            H = session['H']
+            target_array = session['target_array']
+            source_gray = session['source_gray']
+            target_gray = session['target_gray']
+            scaled_threshold = session['scaled_threshold']
+            confidence_threshold = session['confidence_threshold']
+
+            PATCH_SIZE = 32
+            PATCH_EXPAND = 1.5
+            NCC_FLOOR = 0.4
+
+            # Create source detection
+            src_x = source_bbox['x']
+            src_y = source_bbox['y']
+            src_w = source_bbox['width']
+            src_h = source_bbox['height']
+            src_cx = src_x + src_w / 2.0
+            src_cy = src_y + src_h / 2.0
+            src_area = src_w * src_h
+
+            # Extract source patch
+            def _extract_patch(gray_img, x, y, w, h):
+                img_h, img_w = gray_img.shape[:2]
+                cx, cy = x + w / 2.0, y + h / 2.0
+                half_w = w * PATCH_EXPAND / 2.0
+                half_h = h * PATCH_EXPAND / 2.0
+                x1 = max(0, int(cx - half_w))
+                y1 = max(0, int(cy - half_h))
+                x2 = min(img_w, int(cx + half_w))
+                y2 = min(img_h, int(cy + half_h))
+                if x2 <= x1 or y2 <= y1:
+                    return None
+                crop = gray_img[y1:y2, x1:x2]
+                interp = cv2.INTER_AREA if crop.shape[0] > PATCH_SIZE else cv2.INTER_LINEAR
+                return cv2.resize(crop, (PATCH_SIZE, PATCH_SIZE), interpolation=interp)
+
+            src_patch = _extract_patch(source_gray, src_x, src_y, src_w, src_h)
+            if src_patch is None:
+                return {'success': True, 'match': None}
+
+            # Project source center through homography
+            src_center = np.float32([[src_cx, src_cy]]).reshape(-1, 1, 2)
+            transformed = cv2.perspectiveTransform(src_center, H).reshape(-1, 2)
+            proj_x, proj_y = float(transformed[0][0]), float(transformed[0][1])
+
+            # Crop a region around the projected point in target for YOLO detection
+            target_h_px, target_w_px = target_array.shape[:2]
+            crop_radius = max(int(scaled_threshold), int(max(src_w, src_h) * 5))
+            crop_x1 = max(0, int(proj_x - crop_radius))
+            crop_y1 = max(0, int(proj_y - crop_radius))
+            crop_x2 = min(target_w_px, int(proj_x + crop_radius))
+            crop_y2 = min(target_h_px, int(proj_y + crop_radius))
+
+            if crop_x2 <= crop_x1 or crop_y2 <= crop_y1:
+                logger.info(f"Projected point ({proj_x:.0f},{proj_y:.0f}) outside target image")
+                return {'success': True, 'match': None}
+
+            target_crop = target_array[crop_y1:crop_y2, crop_x1:crop_x2]
+
+            # Run YOLO on the crop
+            device = self._get_inference_device()
+            results = self._loaded_model.predict(
+                target_crop, conf=confidence_threshold, verbose=False,
+                imgsz=self._loaded_model_imgsz, device=device
+            )
+
+            # Extract detections and adjust coordinates to full image space
+            crop_detections = self._extract_detections(results, target_crop.shape)
+            target_detections = []
+            for d in crop_detections:
+                target_detections.append(DetectionPrediction(
+                    x=d.x + crop_x1,
+                    y=d.y + crop_y1,
+                    width=d.width,
+                    height=d.height,
+                    confidence=d.confidence,
+                    class_id=d.class_id,
+                    class_name=d.class_name
+                ))
+
+            if not target_detections:
+                logger.info(f"No detections in crop around ({proj_x:.0f},{proj_y:.0f})")
+                return {'success': True, 'match': None}
+
+            # NCC-verify each target detection against source patch
+            best_score = -1.0
+            best_det = None
+
+            for det in target_detections:
+                tgt_cx = det.x + det.width / 2.0
+                tgt_cy = det.y + det.height / 2.0
+                dist = np.sqrt((proj_x - tgt_cx) ** 2 + (proj_y - tgt_cy) ** 2)
+
+                if dist > scaled_threshold:
+                    continue
+
+                tgt_patch = _extract_patch(target_gray, det.x, det.y, det.width, det.height)
+                if tgt_patch is None:
+                    continue
+
+                ncc = float(cv2.matchTemplate(src_patch, tgt_patch, cv2.TM_CCOEFF_NORMED)[0][0])
+                if ncc < NCC_FLOOR:
+                    continue
+
+                distance_score = max(0.0, 1.0 - dist / scaled_threshold)
+                tgt_area = det.width * det.height
+                size_score = min(src_area, tgt_area) / max(src_area, tgt_area + 1e-6)
+                combined = distance_score * max(ncc, 0.0) * (0.5 + 0.5 * size_score)
+
+                if combined > best_score:
+                    best_score = combined
+                    best_det = det
+
+            if best_det is None:
+                logger.info(f"No NCC-verified match near ({proj_x:.0f},{proj_y:.0f})")
+                return {'success': True, 'match': None}
+
+            logger.info(f"Single follicle matched: confidence={best_score:.3f}")
+            return {
+                'success': True,
+                'match': {
+                    'targetDetection': best_det.to_dict(),
+                    'confidence': round(best_score, 4),
+                    'transformedX': round(proj_x, 2),
+                    'transformedY': round(proj_y, 2),
+                }
+            }
+
+        except Exception as e:
+            logger.exception("Failed to match single follicle")
+            return {'success': False, 'error': str(e), 'match': None}
 
     def predict_tiled_base64(
         self,

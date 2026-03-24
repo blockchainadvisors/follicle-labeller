@@ -1942,6 +1942,99 @@ export const Toolbar: React.FC = () => {
   const [isTracking, setIsTracking] = useState(false);
   const addTrackingSession = useTrackingStore((s) => s.addSession);
   const openComparisonView = useTrackingStore((s) => s.openComparisonView);
+  const setBackendSessionId = useTrackingStore((s) => s.setBackendSessionId);
+
+  // Interactive single-follicle tracking: prepare session then match on click
+  const handleTrackPrepare = useCallback(async () => {
+    if (!activeImage || !activeImageId || isTracking) return;
+
+    const platform = getPlatform();
+    const fileResult = await platform.file.openImageDialog();
+    if (!fileResult) return;
+
+    setIsTracking(true);
+    startLoading("Preparing tracking session (computing homography)...", false);
+
+    try {
+      // Add the new image to the project
+      const newImageId = generateImageId();
+      const blob = new Blob([fileResult.data]);
+      const imageBitmap = await createImageBitmap(blob);
+      const imageSrc = URL.createObjectURL(blob);
+
+      addImage({
+        id: newImageId,
+        fileName: fileResult.fileName,
+        width: imageBitmap.width,
+        height: imageBitmap.height,
+        imageData: fileResult.data,
+        imageBitmap,
+        imageSrc,
+        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+        createdAt: Date.now(),
+        sortOrder: images.size,
+      });
+
+      // Convert both images to base64
+      const sourceBase64 = await getImageBase64(activeImage);
+
+      const targetBytes = new Uint8Array(fileResult.data);
+      let targetBinary = "";
+      for (let i = 0; i < targetBytes.byteLength; i++) {
+        targetBinary += String.fromCharCode(targetBytes[i]);
+      }
+      const targetBase64Raw = btoa(targetBinary);
+      const targetExt = fileResult.fileName.toLowerCase().split(".").pop();
+      let targetMime = "image/png";
+      if (targetExt === "jpg" || targetExt === "jpeg") targetMime = "image/jpeg";
+      const targetBase64 = `data:${targetMime};base64,${targetBase64Raw}`;
+
+      // Prepare tracking session (compute homography, cache images)
+      const result = await follicleTrackingService.trackPrepare(
+        sourceBase64,
+        targetBase64,
+        detectionSettings.yoloConfidenceThreshold || 0.5,
+        50.0
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to prepare tracking session");
+      }
+
+      // Store backend session ID for per-click matching
+      setBackendSessionId(result.sessionId);
+
+      // Create tracking session with empty correspondences
+      const session: TrackingSession = {
+        id: generateId(),
+        sourceImageId: activeImageId,
+        targetImageId: newImageId,
+        correspondences: [],
+        homographyMatrix: result.homographyMatrix,
+        method: "homography",
+        createdAt: Date.now(),
+      };
+
+      addTrackingSession(session);
+      openComparisonView(session.id);
+
+      console.log(
+        `Tracking session prepared: homography computed, ready for single-follicle matching`
+      );
+    } catch (error) {
+      console.error("Track prepare failed:", error);
+      alert(
+        `Tracking preparation failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    } finally {
+      setIsTracking(false);
+      stopLoading();
+    }
+  }, [
+    activeImage, activeImageId, isTracking, images.size,
+    addImage, getImageBase64, addTrackingSession, openComparisonView,
+    setBackendSessionId, startLoading, stopLoading, detectionSettings.yoloConfidenceThreshold,
+  ]);
 
   const handleTrackFollicles = useCallback(async (method: 'homography' | 'track') => {
     if (!activeImage || !activeImageId || isTracking) return;
@@ -2589,9 +2682,9 @@ export const Toolbar: React.FC = () => {
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
-              : "Track via Homography"
+              : "Track single follicle via Homography"
           }
-          onClick={() => handleTrackFollicles('homography')}
+          onClick={() => handleTrackPrepare()}
           disabled={
             !imageLoaded ||
             isTracking ||

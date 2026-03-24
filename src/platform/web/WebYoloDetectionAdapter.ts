@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../../types';
 import { config } from '../config';
 
 export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
@@ -357,6 +357,51 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
         method: method ?? 'auto',
         error: String(error),
       };
+    }
+  }
+
+  async trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImageData,
+          targetImageData,
+          confidenceThreshold: confidenceThreshold ?? 0.5,
+          matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+        }),
+      });
+      if (!response.ok) {
+        return { success: false, sessionId: '', error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, sessionId: '', error: String(error) };
+    }
+  }
+
+  async trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-match-single`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, sourceBbox }),
+      });
+      if (!response.ok) {
+        return { success: false, match: null, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, match: null, error: String(error) };
     }
   }
 }
