@@ -897,6 +897,23 @@ const electronAPI = {
       sourceBbox: { x: number; y: number; width: number; height: number }
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke("yolo-detection:trackMatchSingle", sessionId, sourceBbox),
+
+    // Prepare a template-matching session (target only, read from disk)
+    templatePrepare: (
+      targetFilePath: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:templatePrepare", targetFilePath),
+
+    // Match a single follicle via template matching (small context patch)
+    templateMatchSingle: (
+      sessionId: string,
+      sourcePatchData: string,
+      follicleOffsetX: number,
+      follicleOffsetY: number,
+      follicleWidth: number,
+      follicleHeight: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight),
   },
 };
 

@@ -171,6 +171,41 @@ export class FollicleTrackingService {
       return { success: false, match: null, error: error instanceof Error ? error.message : 'Match failed' };
     }
   }
+
+  async templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.templatePrepare(targetFilePath),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Template prepare failed:', error);
+      return { success: false, sessionId: '', error: error instanceof Error ? error.message : 'Prepare failed' };
+    }
+  }
+
+  async templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.templateMatchSingle(
+          sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight
+        ),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Template match single failed:', error);
+      return { success: false, match: null, error: error instanceof Error ? error.message : 'Match failed' };
+    }
+  }
 }
 
 // Export singleton instance

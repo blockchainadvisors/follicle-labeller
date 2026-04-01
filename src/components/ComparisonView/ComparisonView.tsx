@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useTrackingStore } from "../../store/trackingStore";
-import { useProjectStore } from "../../store/projectStore";
+import { useProjectStore, generateImageId } from "../../store/projectStore";
 import { useFollicleStore } from "../../store/follicleStore";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
+import { getPlatform } from "../../platform";
 import { CanvasRenderer } from "../Canvas/CanvasRenderer";
 import type { Viewport, Follicle, RectangleAnnotation, FollicleCorrespondence } from "../../types";
 import { generateId } from "../../utils/id-generator";
@@ -17,11 +18,16 @@ export const ComparisonView: React.FC = () => {
   const activeSession = useTrackingStore((s) => s.getActiveSession());
   const closeComparisonView = useTrackingStore((s) => s.closeComparisonView);
   const backendSessionId = useTrackingStore((s) => s.backendSessionId);
+  const setBackendSessionId = useTrackingStore((s) => s.setBackendSessionId);
   const addCorrespondence = useTrackingStore((s) => s.addCorrespondence);
+  const updateSession = useTrackingStore((s) => s.updateSession);
   const images = useProjectStore((s) => s.images);
+  const addImage = useProjectStore((s) => s.addImage);
   const follicles = useFollicleStore((s) => s.follicles);
   const appendFollicles = useFollicleStore((s) => s.appendFollicles);
+  const deleteFolliclesForImage = useFollicleStore((s) => s.deleteFolliclesForImage);
   const [matchingFollicleIds, setMatchingFollicleIds] = useState<Set<string>>(new Set());
+  const [isSwapping, setIsSwapping] = useState(false);
 
   // Canvas refs
   const sourceCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -305,13 +311,51 @@ export const ComparisonView: React.FC = () => {
 
               setMatchingFollicleIds((prev) => new Set(prev).add(clickedId));
 
-              follicleTrackingService
-                .trackMatchSingle(backendSessionId, {
-                  x: clickedRect.x,
-                  y: clickedRect.y,
-                  width: clickedRect.width,
-                  height: clickedRect.height,
-                })
+              const matchPromise = (async () => {
+                if (activeSession.method === 'template') {
+                  // Crop a 5x context patch from the source image and send only that
+                  const CONTEXT_MULT = 5.0;
+                  const srcCx = clickedRect.x + clickedRect.width / 2;
+                  const srcCy = clickedRect.y + clickedRect.height / 2;
+                  const halfW = (clickedRect.width * CONTEXT_MULT) / 2;
+                  const halfH = (clickedRect.height * CONTEXT_MULT) / 2;
+                  const imgW = sourceImage!.width;
+                  const imgH = sourceImage!.height;
+                  const cropX = Math.max(0, Math.floor(srcCx - halfW));
+                  const cropY = Math.max(0, Math.floor(srcCy - halfH));
+                  const cropX2 = Math.min(imgW, Math.ceil(srcCx + halfW));
+                  const cropY2 = Math.min(imgH, Math.ceil(srcCy + halfH));
+                  const cropW = cropX2 - cropX;
+                  const cropH = cropY2 - cropY;
+
+                  // Follicle center offset within the cropped patch
+                  const offsetX = srcCx - cropX;
+                  const offsetY = srcCy - cropY;
+
+                  // Crop using OffscreenCanvas
+                  const canvas = new OffscreenCanvas(cropW, cropH);
+                  const ctx = canvas.getContext("2d")!;
+                  ctx.drawImage(sourceImage!.imageBitmap, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                  const blob = await canvas.convertToBlob({ type: "image/png" });
+                  const arrayBuf = await blob.arrayBuffer();
+                  const bytes = new Uint8Array(arrayBuf);
+                  const chunks: string[] = [];
+                  for (let i = 0; i < bytes.length; i += 0x8000) {
+                    chunks.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))));
+                  }
+                  const patchBase64 = `data:image/png;base64,${btoa(chunks.join(""))}`;
+
+                  return follicleTrackingService.templateMatchSingle(
+                    backendSessionId!, patchBase64, offsetX, offsetY, clickedRect.width, clickedRect.height
+                  );
+                } else {
+                  return follicleTrackingService.trackMatchSingle(backendSessionId!, {
+                    x: clickedRect.x, y: clickedRect.y, width: clickedRect.width, height: clickedRect.height,
+                  });
+                }
+              })();
+
+              matchPromise
                 .then((result) => {
                   if (result.success && result.match) {
                     // Create target annotation from the matched detection
@@ -376,6 +420,64 @@ export const ComparisonView: React.FC = () => {
      activeSession, backendSessionId, matchedSourceIds, matchingFollicleIds, appendFollicles, addCorrespondence]
   );
 
+  // Swap target image with a new subsequent image
+  const handleSwapTarget = useCallback(async () => {
+    if (!activeSession || isSwapping) return;
+
+    const platform = getPlatform();
+    const fileResult = await platform.file.openImageDialog();
+    if (!fileResult) return;
+
+    setIsSwapping(true);
+    try {
+      // Remove old target follicles (matched annotations)
+      deleteFolliclesForImage(activeSession.targetImageId);
+
+      // Add the new image to the project
+      const newImageId = generateImageId();
+      const blob = new Blob([fileResult.data]);
+      const imageBitmap = await createImageBitmap(blob);
+      const imageSrc = URL.createObjectURL(blob);
+
+      addImage({
+        id: newImageId,
+        fileName: fileResult.fileName,
+        width: imageBitmap.width,
+        height: imageBitmap.height,
+        imageData: fileResult.data,
+        imageBitmap,
+        imageSrc,
+        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+        createdAt: Date.now(),
+        sortOrder: images.size,
+      });
+
+      // Prepare new template session for the new target
+      const result = await follicleTrackingService.templatePrepare(
+        fileResult.filePath,
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to prepare session for new target");
+      }
+
+      // Update the session: new target, clear correspondences, new backend session
+      setBackendSessionId(result.sessionId);
+      updateSession(activeSession.id, {
+        targetImageId: newImageId,
+        correspondences: [],
+      });
+
+      setSelectedFollicleId(null);
+      setTargetViewport({ offsetX: 0, offsetY: 0, scale: 1 });
+    } catch (error) {
+      console.error("Swap target failed:", error);
+      alert(`Failed to swap target: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setIsSwapping(false);
+    }
+  }, [activeSession, isSwapping, images.size, addImage, deleteFolliclesForImage, updateSession, setBackendSessionId]);
+
   // Compute arrow for selected correspondence only
   const arrow = useMemo(() => {
     if (!selectedFollicleId || !pairedFollicleId) return null;
@@ -425,7 +527,7 @@ export const ComparisonView: React.FC = () => {
               Matches: <span className="comparison-stat-value">{activeSession.correspondences.length}</span>
             </div>
             <div className="comparison-stat">
-              Method: <span className="comparison-stat-value">{activeSession.method}</span>
+              Method: <span className="comparison-stat-value">{activeSession.method === 'template' ? 'Template Match' : activeSession.method}</span>
             </div>
             <div className="comparison-stat">
               Avg Confidence: <span className="comparison-stat-value">{(avgConfidence * 100).toFixed(0)}%</span>
@@ -437,9 +539,20 @@ export const ComparisonView: React.FC = () => {
             )}
           </div>
         </div>
-        <button className="comparison-close-btn" onClick={closeComparisonView} title="Close comparison">
-          ✕
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            className="comparison-close-btn"
+            onClick={handleSwapTarget}
+            disabled={isSwapping}
+            title="Replace target with a new subsequent image"
+            style={{ fontSize: 12, padding: "4px 10px", width: "auto" }}
+          >
+            {isSwapping ? "Swapping..." : "Swap Target"}
+          </button>
+          <button className="comparison-close-btn" onClick={closeComparisonView} title="Close comparison">
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* Side-by-side panels */}

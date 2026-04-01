@@ -448,6 +448,21 @@ export interface YoloDetectionAdapter {
     sessionId: string,
     sourceBbox: { x: number; y: number; width: number; height: number }
   ): Promise<TrackMatchSingleResult>;
+
+  /** Prepare a template-matching session (target only, read from disk) */
+  templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult>;
+
+  /** Match a single follicle via multi-scale NCC template matching */
+  templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+  ): Promise<TrackMatchSingleResult>;
 }
 
 // ============================================

@@ -1335,13 +1335,14 @@ export const Toolbar: React.FC = () => {
 
   // Helper to get image as base64
   const getImageBase64 = useCallback(async (image: ProjectImage): Promise<string> => {
-    // Convert ArrayBuffer to base64
+    // Convert ArrayBuffer to base64 using chunked approach (avoids O(n²) string concat)
     const bytes = new Uint8Array(image.imageData);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const chunks: string[] = [];
+    const chunkSize = 0x8000; // 32KB chunks — fits in call stack for apply()
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      chunks.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize))));
     }
-    const base64 = btoa(binary);
+    const base64 = btoa(chunks.join(''));
 
     // Determine mime type from filename
     const ext = image.fileName.toLowerCase().split('.').pop();
@@ -1953,7 +1954,7 @@ export const Toolbar: React.FC = () => {
     if (!fileResult) return;
 
     setIsTracking(true);
-    startLoading("Preparing tracking session (computing homography)...", false);
+    startLoading("Preparing tracking session...", false);
 
     try {
       // Add the new image to the project
@@ -1975,26 +1976,9 @@ export const Toolbar: React.FC = () => {
         sortOrder: images.size,
       });
 
-      // Convert both images to base64
-      const sourceBase64 = await getImageBase64(activeImage);
-
-      const targetBytes = new Uint8Array(fileResult.data);
-      let targetBinary = "";
-      for (let i = 0; i < targetBytes.byteLength; i++) {
-        targetBinary += String.fromCharCode(targetBytes[i]);
-      }
-      const targetBase64Raw = btoa(targetBinary);
-      const targetExt = fileResult.fileName.toLowerCase().split(".").pop();
-      let targetMime = "image/png";
-      if (targetExt === "jpg" || targetExt === "jpeg") targetMime = "image/jpeg";
-      const targetBase64 = `data:${targetMime};base64,${targetBase64Raw}`;
-
-      // Prepare tracking session (compute homography, cache images)
-      const result = await follicleTrackingService.trackPrepare(
-        sourceBase64,
-        targetBase64,
-        detectionSettings.yoloConfidenceThreshold || 0.5,
-        50.0
+      // Prepare template-matching session — only the target file path (read from disk)
+      const result = await follicleTrackingService.templatePrepare(
+        fileResult.filePath,
       );
 
       if (!result.success) {
@@ -2010,8 +1994,7 @@ export const Toolbar: React.FC = () => {
         sourceImageId: activeImageId,
         targetImageId: newImageId,
         correspondences: [],
-        homographyMatrix: result.homographyMatrix,
-        method: "homography",
+        method: "template",
         createdAt: Date.now(),
       };
 
@@ -2019,7 +2002,7 @@ export const Toolbar: React.FC = () => {
       openComparisonView(session.id);
 
       console.log(
-        `Tracking session prepared: homography computed, ready for single-follicle matching`
+        `Tracking session prepared: template matching ready for single-follicle matching`
       );
     } catch (error) {
       console.error("Track prepare failed:", error);
@@ -2032,8 +2015,8 @@ export const Toolbar: React.FC = () => {
     }
   }, [
     activeImage, activeImageId, isTracking, images.size,
-    addImage, getImageBase64, addTrackingSession, openComparisonView,
-    setBackendSessionId, startLoading, stopLoading, detectionSettings.yoloConfidenceThreshold,
+    addImage, addTrackingSession, openComparisonView,
+    setBackendSessionId, startLoading, stopLoading,
   ]);
 
   const handleTrackFollicles = useCallback(async (method: 'homography' | 'track') => {
@@ -2073,11 +2056,11 @@ export const Toolbar: React.FC = () => {
 
       // Convert target image to base64 from its ArrayBuffer
       const targetBytes = new Uint8Array(fileResult.data);
-      let targetBinary = "";
-      for (let i = 0; i < targetBytes.byteLength; i++) {
-        targetBinary += String.fromCharCode(targetBytes[i]);
+      const targetChunks: string[] = [];
+      for (let i = 0; i < targetBytes.length; i += 0x8000) {
+        targetChunks.push(String.fromCharCode.apply(null, Array.from(targetBytes.subarray(i, i + 0x8000))));
       }
-      const targetBase64Raw = btoa(targetBinary);
+      const targetBase64Raw = btoa(targetChunks.join(''));
       const targetExt = fileResult.fileName.toLowerCase().split(".").pop();
       let targetMime = "image/png";
       if (targetExt === "jpg" || targetExt === "jpeg") targetMime = "image/jpeg";
@@ -2682,7 +2665,7 @@ export const Toolbar: React.FC = () => {
           tooltip={
             !blobServerConnected
               ? "Starting detection server..."
-              : "Track single follicle via Homography"
+              : "Track single follicle via Template Match"
           }
           onClick={() => handleTrackPrepare()}
           disabled={

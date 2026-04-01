@@ -146,4 +146,25 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
       sessionId, sourceBbox
     ) as Promise<TrackMatchSingleResult>;
   }
+
+  async templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult> {
+    return window.electronAPI.yoloDetection.templatePrepare(
+      targetFilePath
+    ) as Promise<TrackPrepareResult>;
+  }
+
+  async templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+  ): Promise<TrackMatchSingleResult> {
+    return window.electronAPI.yoloDetection.templateMatchSingle(
+      sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight
+    ) as Promise<TrackMatchSingleResult>;
+  }
 }

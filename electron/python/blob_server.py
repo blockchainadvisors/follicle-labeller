@@ -1844,6 +1844,19 @@ class TrackMatchSingleRequest(BaseModel):
     sourceBbox: Dict[str, float]  # {x, y, width, height}
 
 
+class TemplatePrepareRequest(BaseModel):
+    targetFilePath: str
+
+
+class TemplateMatchSingleRequest(BaseModel):
+    sessionId: str
+    sourcePatchData: str  # base64-encoded PNG of the context patch
+    follicleOffsetX: float
+    follicleOffsetY: float
+    follicleWidth: float
+    follicleHeight: float
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2166,6 +2179,49 @@ async def yolo_detect_track_match_single(req: TrackMatchSingleRequest):
     return service.match_single_follicle(
         session_id=req.sessionId,
         source_bbox=req.sourceBbox
+    )
+
+
+@app.post('/yolo-detect/template-prepare')
+async def yolo_detect_template_prepare(req: TemplatePrepareRequest):
+    """
+    Prepare a template-matching session: read target image from disk
+    and build a Gaussian pyramid.  Only the target is needed here —
+    the source patch is sent per-click.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.prepare_template_session(
+        target_file_path=req.targetFilePath,
+    )
+
+
+@app.post('/yolo-detect/template-match-single')
+async def yolo_detect_template_match_single(req: TemplateMatchSingleRequest):
+    """
+    Match a single source follicle using multi-scale pyramid NCC
+    template matching.  Receives just the small context patch around
+    the follicle, not the full source image.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    # Decode the small base64 patch (typically a few KB)
+    patch_b64 = req.sourcePatchData
+    if ',' in patch_b64:
+        patch_b64 = patch_b64.split(',', 1)[1]
+    patch_bytes = base64.b64decode(patch_b64)
+
+    service = get_yolo_detection_service()
+    return service.template_match_single(
+        session_id=req.sessionId,
+        source_patch_data=patch_bytes,
+        follicle_offset_x=req.follicleOffsetX,
+        follicle_offset_y=req.follicleOffsetY,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
     )
 
 

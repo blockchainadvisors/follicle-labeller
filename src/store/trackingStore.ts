@@ -19,6 +19,7 @@ interface TrackingState {
   closeComparisonView: () => void;
   setBackendSessionId: (id: string | null) => void;
   addCorrespondence: (sessionId: string, correspondence: FollicleCorrespondence) => void;
+  updateSession: (sessionId: string, updates: Partial<Pick<TrackingSession, 'targetImageId' | 'correspondences' | 'method'>>) => void;
   clearAll: () => void;
 
   // Selectors
@@ -71,6 +72,13 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
         s.id === sessionId
           ? { ...s, correspondences: [...s.correspondences, correspondence] }
           : s
+      ),
+    })),
+
+  updateSession: (sessionId, updates) =>
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === sessionId ? { ...s, ...updates } : s
       ),
     })),
 

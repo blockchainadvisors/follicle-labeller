@@ -728,6 +728,17 @@ declare global {
           sessionId: string,
           sourceBbox: { x: number; y: number; width: number; height: number }
         ) => Promise<TrackMatchSingleResult>;
+        templatePrepare: (
+          targetFilePath: string,
+        ) => Promise<TrackPrepareResult>;
+        templateMatchSingle: (
+          sessionId: string,
+          sourcePatchData: string,
+          follicleOffsetX: number,
+          follicleOffsetY: number,
+          follicleWidth: number,
+          follicleHeight: number,
+        ) => Promise<TrackMatchSingleResult>;
       };
     };
   }
@@ -1158,7 +1169,7 @@ export interface TrackingSession {
   /** 3x3 homography matrix from source to target (if homography method was used) */
   homographyMatrix?: number[][];
   /** Matching method used */
-  method: 'homography' | 'track';
+  method: 'homography' | 'track' | 'template';
   /** When this session was created */
   createdAt: number;
 }

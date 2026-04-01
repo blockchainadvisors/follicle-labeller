@@ -2013,6 +2013,43 @@ ipcMain.handle(
   }
 );
 
+// Prepare a template-matching session (no homography, no YOLO)
+ipcMain.handle(
+  "yolo-detection:templatePrepare",
+  async (
+    _,
+    targetFilePath: string,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/template-prepare",
+      "POST",
+      { targetFilePath },
+      30000
+    );
+  }
+);
+
+// Match a single follicle via template matching (receives small context patch)
+ipcMain.handle(
+  "yolo-detection:templateMatchSingle",
+  async (
+    _,
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/template-match-single",
+      "POST",
+      { sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight },
+      30000
+    );
+  }
+);
+
 // Write detection dataset files to temp directory
 ipcMain.handle(
   "yolo-detection:writeDatasetToTemp",

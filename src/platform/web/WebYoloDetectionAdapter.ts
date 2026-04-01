@@ -404,4 +404,45 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
       return { success: false, match: null, error: String(error) };
     }
   }
+
+  async templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/template-prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetFilePath }),
+      });
+      if (!response.ok) {
+        return { success: false, sessionId: '', error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, sessionId: '', error: String(error) };
+    }
+  }
+
+  async templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/template-match-single`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight }),
+      });
+      if (!response.ok) {
+        return { success: false, match: null, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, match: null, error: String(error) };
+    }
+  }
 }

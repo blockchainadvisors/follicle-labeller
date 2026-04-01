@@ -2119,6 +2119,277 @@ class YOLODetectionService:
             logger.exception("Failed to match single follicle")
             return {'success': False, 'error': str(e), 'match': None}
 
+    # ------------------------------------------------------------------
+    # Template-based single follicle tracking (no homography, no YOLO)
+    # ------------------------------------------------------------------
+
+    def prepare_template_session(
+        self,
+        target_file_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Prepare a template-matching session: read target image from disk
+        and build a Gaussian pyramid.  Only the target is needed at prepare
+        time — the source patch is sent per-click.
+
+        Returns:
+            Dict with success, sessionId
+        """
+        try:
+            # cv2.imread handles EXIF rotation and decodes directly to
+            # the format we need — ~2x faster than PIL → numpy → cvtColor
+            # for 200MP images.
+            target_gray = cv2.imread(target_file_path, cv2.IMREAD_GRAYSCALE)
+            if target_gray is None:
+                return {'success': False, 'error': f'Could not read image: {target_file_path}', 'sessionId': '', 'homographyMatrix': None}
+
+            # Build 5-level Gaussian pyramid (deeper = faster coarse search
+            # on very large images; L3 at 1/8 resolution is the sweet spot
+            # for 200MP images)
+            level_1 = cv2.pyrDown(target_gray)
+            level_2 = cv2.pyrDown(level_1)
+            level_3 = cv2.pyrDown(level_2)
+            level_4 = cv2.pyrDown(level_3)
+            target_pyramid = [target_gray, level_1, level_2, level_3, level_4]
+
+            session_id = str(uuid.uuid4())
+            self._tracking_sessions[session_id] = {
+                'type': 'template',
+                'target_pyramid': target_pyramid,
+                'target_h': target_gray.shape[0],
+                'target_w': target_gray.shape[1],
+            }
+
+            logger.info(
+                f"Template session {session_id} prepared: "
+                f"target={target_gray.shape[1]}x{target_gray.shape[0]}"
+            )
+
+            return {
+                'success': True,
+                'sessionId': session_id,
+                'homographyMatrix': None,
+            }
+
+        except Exception as e:
+            logger.exception("Failed to prepare template session")
+            return {'success': False, 'error': str(e), 'sessionId': '', 'homographyMatrix': None}
+
+    def template_match_single(
+        self,
+        session_id: str,
+        source_patch_data: bytes,
+        follicle_offset_x: float,
+        follicle_offset_y: float,
+        follicle_width: float,
+        follicle_height: float,
+    ) -> Dict[str, Any]:
+        """
+        Match a single source follicle in the target image using
+        multi-scale pyramid NCC template matching.
+
+        The source context patch (cropped in the frontend around the
+        follicle) is received as image bytes — only a small region,
+        not the full source image.
+
+        Args:
+            session_id: Prepared template session ID
+            source_patch_data: PNG/JPEG bytes of the context patch
+            follicle_offset_x: X offset of follicle center within the patch
+            follicle_offset_y: Y offset of follicle center within the patch
+            follicle_width: Original follicle bbox width
+            follicle_height: Original follicle bbox height
+        """
+        session = self._tracking_sessions.get(session_id)
+        if session is None:
+            return {'success': False, 'error': f'Session {session_id} not found', 'match': None}
+
+        if session.get('type') != 'template':
+            return {'success': False, 'error': 'Session is not a template session', 'match': None}
+
+        try:
+            target_pyramid = session['target_pyramid']
+            NCC_FLOOR = 0.3
+
+            src_w = follicle_width
+            src_h = follicle_height
+            fc_ox = follicle_offset_x
+            fc_oy = follicle_offset_y
+
+            # Decode the source context patch sent from the frontend
+            patch_array = np.frombuffer(source_patch_data, dtype=np.uint8)
+            patch_img = cv2.imdecode(patch_array, cv2.IMREAD_GRAYSCALE)
+            if patch_img is None or patch_img.size == 0:
+                return {'success': True, 'match': None}
+
+            context_patch = patch_img
+
+            # --- Helper: run matchTemplate at one scale ---
+            def _match_at_scale(template, search_img, scale):
+                if abs(scale - 1.0) > 0.01:
+                    new_w = max(1, int(template.shape[1] * scale))
+                    new_h = max(1, int(template.shape[0] * scale))
+                    tmpl = cv2.resize(template, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+                else:
+                    tmpl = template
+
+                if tmpl.shape[0] > search_img.shape[0] or tmpl.shape[1] > search_img.shape[1]:
+                    return None, -1.0
+
+                result = cv2.matchTemplate(search_img, tmpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
+                # max_loc is top-left of the match
+                return max_loc, float(max_val)
+
+            # --- Coarse pass (pyramid level 3 = 1/8 resolution) ---
+            # L3 is the sweet spot for 200MP images: 2040x1530 search area,
+            # fast enough for full-image NCC while still resolving patches.
+            COARSE_LEVEL = 3
+            COARSE_DOWN = 2 ** COARSE_LEVEL  # 8
+            coarse_template = cv2.resize(
+                context_patch,
+                (max(1, context_patch.shape[1] // COARSE_DOWN), max(1, context_patch.shape[0] // COARSE_DOWN)),
+                interpolation=cv2.INTER_AREA
+            )
+            target_coarse = target_pyramid[COARSE_LEVEL]
+
+            best_coarse_loc = None
+            best_coarse_score = -1.0
+            best_coarse_scale = 1.0
+
+            for s in [0.85, 1.0, 1.15]:
+                loc, score = _match_at_scale(coarse_template, target_coarse, s)
+                if loc is not None and score > best_coarse_score:
+                    best_coarse_score = score
+                    best_coarse_loc = loc
+                    best_coarse_scale = s
+
+            if best_coarse_loc is None:
+                return {'success': True, 'match': None}
+
+            # Scale coarse match center back to full resolution
+            ct_w = int(coarse_template.shape[1] * best_coarse_scale)
+            ct_h = int(coarse_template.shape[0] * best_coarse_scale)
+            coarse_center_x = (best_coarse_loc[0] + ct_w / 2.0) * COARSE_DOWN
+            coarse_center_y = (best_coarse_loc[1] + ct_h / 2.0) * COARSE_DOWN
+
+            # --- Medium pass (pyramid level 1 = ½ resolution) ---
+            medium_template = cv2.resize(
+                context_patch,
+                (max(1, context_patch.shape[1] // 2), max(1, context_patch.shape[0] // 2)),
+                interpolation=cv2.INTER_AREA
+            )
+            target_medium = target_pyramid[1]
+
+            # Windowed search around coarse match (in half-res coords)
+            win_radius = max(medium_template.shape[0], medium_template.shape[1]) * 2
+            med_cx = coarse_center_x / 2.0
+            med_cy = coarse_center_y / 2.0
+            med_x1 = max(0, int(med_cx - win_radius))
+            med_y1 = max(0, int(med_cy - win_radius))
+            med_x2 = min(target_medium.shape[1], int(med_cx + win_radius))
+            med_y2 = min(target_medium.shape[0], int(med_cy + win_radius))
+            search_medium = target_medium[med_y1:med_y2, med_x1:med_x2]
+
+            best_med_loc = None
+            best_med_score = -1.0
+            best_med_scale = best_coarse_scale
+
+            for s in [0.9, 1.0, 1.1]:
+                loc, score = _match_at_scale(medium_template, search_medium, s)
+                if loc is not None and score > best_med_score:
+                    best_med_score = score
+                    best_med_loc = loc
+                    best_med_scale = s
+
+            if best_med_loc is None:
+                return {'success': True, 'match': None}
+
+            # Scale medium match center back to full resolution
+            mt_w = int(medium_template.shape[1] * best_med_scale)
+            mt_h = int(medium_template.shape[0] * best_med_scale)
+            medium_center_x = (best_med_loc[0] + med_x1 + mt_w / 2.0) * 2.0
+            medium_center_y = (best_med_loc[1] + med_y1 + mt_h / 2.0) * 2.0
+
+            # --- Fine pass (pyramid level 0 = full resolution) ---
+            target_full = target_pyramid[0]
+
+            win_radius_fine = int(max(context_patch.shape[0], context_patch.shape[1]) * 1.5)
+            fine_x1 = max(0, int(medium_center_x - win_radius_fine))
+            fine_y1 = max(0, int(medium_center_y - win_radius_fine))
+            fine_x2 = min(target_full.shape[1], int(medium_center_x + win_radius_fine))
+            fine_y2 = min(target_full.shape[0], int(medium_center_y + win_radius_fine))
+            search_fine = target_full[fine_y1:fine_y2, fine_x1:fine_x2]
+
+            best_fine_loc = None
+            best_fine_score = -1.0
+            best_fine_scale = best_med_scale
+
+            for s in [best_med_scale - 0.05, best_med_scale, best_med_scale + 0.05]:
+                if s <= 0:
+                    continue
+                loc, score = _match_at_scale(context_patch, search_fine, s)
+                if loc is not None and score > best_fine_score:
+                    best_fine_score = score
+                    best_fine_loc = loc
+                    best_fine_scale = s
+
+            # --- Optional rotation if NCC is weak ---
+            if best_fine_score < 0.5:
+                for angle in [-5, 5]:
+                    rot_center = (context_patch.shape[1] // 2, context_patch.shape[0] // 2)
+                    M = cv2.getRotationMatrix2D(rot_center, angle, 1.0)
+                    rotated = cv2.warpAffine(
+                        context_patch, M,
+                        (context_patch.shape[1], context_patch.shape[0]),
+                        borderMode=cv2.BORDER_REPLICATE
+                    )
+                    loc, score = _match_at_scale(rotated, search_fine, best_fine_scale)
+                    if loc is not None and score > best_fine_score:
+                        best_fine_score = score
+                        best_fine_loc = loc
+
+            if best_fine_loc is None or best_fine_score < NCC_FLOOR:
+                logger.info(f"Template match below threshold: ncc={best_fine_score:.3f}")
+                return {'success': True, 'match': None}
+
+            # --- Convert match location to target-image follicle center ---
+            # best_fine_loc is top-left of the template match in the search window
+            scaled_fc_ox = fc_ox * best_fine_scale
+            scaled_fc_oy = fc_oy * best_fine_scale
+            target_cx = fine_x1 + best_fine_loc[0] + scaled_fc_ox
+            target_cy = fine_y1 + best_fine_loc[1] + scaled_fc_oy
+
+            target_w = src_w * best_fine_scale
+            target_h = src_h * best_fine_scale
+
+            logger.info(
+                f"Template match: ncc={best_fine_score:.3f}, "
+                f"target=({target_cx:.0f},{target_cy:.0f}), scale={best_fine_scale:.2f}"
+            )
+
+            return {
+                'success': True,
+                'match': {
+                    'targetDetection': {
+                        'x': round(target_cx - target_w / 2.0, 2),
+                        'y': round(target_cy - target_h / 2.0, 2),
+                        'width': round(target_w, 2),
+                        'height': round(target_h, 2),
+                        'confidence': round(best_fine_score, 4),
+                        'classId': 0,
+                        'className': 'follicle',
+                    },
+                    'confidence': round(best_fine_score, 4),
+                    'transformedX': round(target_cx, 2),
+                    'transformedY': round(target_cy, 2),
+                }
+            }
+
+        except Exception as e:
+            logger.exception("Failed template match for single follicle")
+            return {'success': False, 'error': str(e), 'match': None}
+
     def predict_tiled_base64(
         self,
         image_base64: str,
