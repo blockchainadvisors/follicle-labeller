@@ -738,6 +738,7 @@ declare global {
           follicleOffsetY: number,
           follicleWidth: number,
           follicleHeight: number,
+          expectedScale: number,
         ) => Promise<TrackMatchSingleResult>;
       };
     };

@@ -462,6 +462,7 @@ export interface YoloDetectionAdapter {
     follicleOffsetY: number,
     follicleWidth: number,
     follicleHeight: number,
+    expectedScale: number,
   ): Promise<TrackMatchSingleResult>;
 }
 

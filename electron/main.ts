@@ -2040,11 +2040,12 @@ ipcMain.handle(
     follicleOffsetY: number,
     follicleWidth: number,
     follicleHeight: number,
+    expectedScale: number,
   ) => {
     return makeBlobServerRequest(
       "/yolo-detect/template-match-single",
       "POST",
-      { sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight },
+      { sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale },
       30000
     );
   }

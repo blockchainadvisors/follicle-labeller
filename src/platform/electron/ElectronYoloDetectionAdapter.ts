@@ -162,9 +162,10 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     follicleOffsetY: number,
     follicleWidth: number,
     follicleHeight: number,
+    expectedScale: number,
   ): Promise<TrackMatchSingleResult> {
     return window.electronAPI.yoloDetection.templateMatchSingle(
-      sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight
+      sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
     ) as Promise<TrackMatchSingleResult>;
   }
 }

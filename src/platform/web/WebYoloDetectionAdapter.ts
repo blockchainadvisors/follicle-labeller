@@ -430,12 +430,13 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     follicleOffsetY: number,
     follicleWidth: number,
     follicleHeight: number,
+    expectedScale: number,
   ): Promise<TrackMatchSingleResult> {
     try {
       const response = await fetch(`${config.backendUrl}/yolo-detect/template-match-single`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight }),
+        body: JSON.stringify({ sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale }),
       });
       if (!response.ok) {
         return { success: false, match: null, error: `Server returned ${response.status}` };

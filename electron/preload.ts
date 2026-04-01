@@ -912,8 +912,9 @@ const electronAPI = {
       follicleOffsetY: number,
       follicleWidth: number,
       follicleHeight: number,
+      expectedScale: number,
     ): Promise<Record<string, unknown>> =>
-      ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight),
+      ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
   },
 };
 

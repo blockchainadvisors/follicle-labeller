@@ -1855,6 +1855,7 @@ class TemplateMatchSingleRequest(BaseModel):
     follicleOffsetY: float
     follicleWidth: float
     follicleHeight: float
+    expectedScale: Optional[float] = 1.0
 
 
 class DetectionValidateDatasetRequest(BaseModel):
@@ -2222,6 +2223,7 @@ async def yolo_detect_template_match_single(req: TemplateMatchSingleRequest):
         follicle_offset_y=req.follicleOffsetY,
         follicle_width=req.follicleWidth,
         follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
     )
 
 

@@ -2183,6 +2183,7 @@ class YOLODetectionService:
         follicle_offset_y: float,
         follicle_width: float,
         follicle_height: float,
+        expected_scale: float = 1.0,
     ) -> Dict[str, Any]:
         """
         Match a single source follicle in the target image using
@@ -2257,7 +2258,8 @@ class YOLODetectionService:
             best_coarse_score = -1.0
             best_coarse_scale = 1.0
 
-            for s in [0.85, 1.0, 1.15]:
+            base = expected_scale if expected_scale and expected_scale > 0 else 1.0
+            for s in [base * 0.7, base * 0.85, base, base * 1.15, base * 1.3]:
                 loc, score = _match_at_scale(coarse_template, target_coarse, s)
                 if loc is not None and score > best_coarse_score:
                     best_coarse_score = score

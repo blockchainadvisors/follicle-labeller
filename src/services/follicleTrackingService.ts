@@ -193,11 +193,12 @@ export class FollicleTrackingService {
     follicleOffsetY: number,
     follicleWidth: number,
     follicleHeight: number,
+    expectedScale: number = 1.0,
   ): Promise<TrackMatchSingleResult> {
     try {
       return await withRetry(
         () => getPlatform().yoloDetection.templateMatchSingle(
-          sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight
+          sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
         ),
         { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
       );

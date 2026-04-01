@@ -13,6 +13,7 @@ const HIGHLIGHT_COLOR = "#FFD700";
 const MATCH_ARROW_COLOR = "#FFD700";
 const UNMATCHED_COLOR = "#808080";
 const MATCHED_COLOR = "#4ECDC4";
+const NO_ORIGIN_COLOR = "#555555";
 
 export const ComparisonView: React.FC = () => {
   const activeSession = useTrackingStore((s) => s.getActiveSession());
@@ -96,13 +97,15 @@ export const ComparisonView: React.FC = () => {
 
   // Color follicles based on selection state
   const colorFollicles = useCallback(
-    (list: Follicle[], matchedIds: Set<string>): Follicle[] => {
+    (list: Follicle[], matchedIds: Set<string>, isSource: boolean): Follicle[] => {
       return list.map((f) => {
         let color: string;
         if (f.id === selectedFollicleId || f.id === pairedFollicleId) {
           color = HIGHLIGHT_COLOR;
         } else if (matchedIds.has(f.id)) {
           color = MATCHED_COLOR;
+        } else if (isSource && (f.shape !== "rectangle" || !(f as RectangleAnnotation).origin)) {
+          color = NO_ORIGIN_COLOR;
         } else {
           color = UNMATCHED_COLOR;
         }
@@ -112,8 +115,14 @@ export const ComparisonView: React.FC = () => {
     [selectedFollicleId, pairedFollicleId]
   );
 
-  const coloredSourceFollicles = colorFollicles(sourceFollicles, matchedSourceIds);
-  const coloredTargetFollicles = colorFollicles(targetFollicles, matchedTargetIds);
+  const coloredSourceFollicles = colorFollicles(sourceFollicles, matchedSourceIds, true);
+  const coloredTargetFollicles = colorFollicles(targetFollicles, matchedTargetIds, false);
+
+  // Count trackable source follicles (rectangles with origins)
+  const trackableCount = useMemo(
+    () => sourceFollicles.filter(f => f.shape === "rectangle" && (f as RectangleAnnotation).origin).length,
+    [sourceFollicles]
+  );
 
   // Average confidence
   const avgConfidence =
@@ -301,7 +310,8 @@ export const ComparisonView: React.FC = () => {
               backendSessionId &&
               !matchedSourceIds.has(clicked.id) &&
               !matchingFollicleIds.has(clicked.id) &&
-              clicked.shape === "rectangle"
+              clicked.shape === "rectangle" &&
+              (clicked as RectangleAnnotation).origin
             ) {
               const clickedRect = clicked as RectangleAnnotation;
               const clickedId = clicked.id;
@@ -313,10 +323,11 @@ export const ComparisonView: React.FC = () => {
 
               const matchPromise = (async () => {
                 if (activeSession.method === 'template') {
-                  // Crop a 5x context patch from the source image and send only that
+                  // Crop a 5x context patch centered on the origin point
                   const CONTEXT_MULT = 5.0;
-                  const srcCx = clickedRect.x + clickedRect.width / 2;
-                  const srcCy = clickedRect.y + clickedRect.height / 2;
+                  const srcOrigin = clickedRect.origin!;
+                  const srcCx = srcOrigin.originPoint.x;
+                  const srcCy = srcOrigin.originPoint.y;
                   const halfW = (clickedRect.width * CONTEXT_MULT) / 2;
                   const halfH = (clickedRect.height * CONTEXT_MULT) / 2;
                   const imgW = sourceImage!.width;
@@ -345,8 +356,14 @@ export const ComparisonView: React.FC = () => {
                   }
                   const patchBase64 = `data:image/png;base64,${btoa(chunks.join(""))}`;
 
+                  // Compute expected scale ratio for cross-resolution matching
+                  const expectedScale = Math.sqrt(
+                    (targetImage!.width * targetImage!.height) /
+                    (sourceImage!.width * sourceImage!.height)
+                  );
+
                   return follicleTrackingService.templateMatchSingle(
-                    backendSessionId!, patchBase64, offsetX, offsetY, clickedRect.width, clickedRect.height
+                    backendSessionId!, patchBase64, offsetX, offsetY, clickedRect.width, clickedRect.height, expectedScale
                   );
                 } else {
                   return follicleTrackingService.trackMatchSingle(backendSessionId!, {
@@ -370,10 +387,15 @@ export const ComparisonView: React.FC = () => {
                       width: det.width,
                       height: det.height,
                       label: `Match`,
-                      notes: `Matched (conf: ${(result.match.confidence * 100).toFixed(0)}%)`,
+                      notes: `Origin match (conf: ${(result.match.confidence * 100).toFixed(0)}%)`,
                       color: "#4ECDC4",
                       createdAt: now,
                       updatedAt: now,
+                      origin: {
+                        originPoint: { x: result.match.transformedX, y: result.match.transformedY },
+                        directionAngle: clickedRect.origin!.directionAngle,
+                        directionLength: clickedRect.origin!.directionLength,
+                      },
                     };
 
                     appendFollicles([targetAnnotation]);
@@ -489,6 +511,9 @@ export const ComparisonView: React.FC = () => {
     const getCenter = (f: Follicle) => {
       if (f.shape === "rectangle") {
         const r = f as RectangleAnnotation;
+        if (r.origin) {
+          return { x: r.origin.originPoint.x, y: r.origin.originPoint.y };
+        }
         return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
       }
       return { x: 0, y: 0 };
@@ -625,10 +650,14 @@ export const ComparisonView: React.FC = () => {
           <div className="comparison-legend-swatch" style={{ background: UNMATCHED_COLOR }} />
           Unmatched
         </div>
+        <div className="comparison-legend-item">
+          <div className="comparison-legend-swatch" style={{ background: NO_ORIGIN_COLOR }} />
+          No origin
+        </div>
         <span style={{ marginLeft: "auto" }}>
-          Source: {matchedSourceIds.size}/{sourceFollicles.length} matched |
+          Source: {matchedSourceIds.size}/{trackableCount} tracked ({sourceFollicles.length} total) |
           Target: {matchedTargetIds.size}/{targetFollicles.length} matched
-          {selectedFollicleId ? " | Click another follicle or empty area to change selection" : " | Click a follicle to see its match"}
+          {selectedFollicleId ? " | Click another follicle or empty area to change selection" : " | Click a source follicle with origin to track"}
         </span>
       </div>
     </div>
