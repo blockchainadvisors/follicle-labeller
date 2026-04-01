@@ -2242,11 +2242,24 @@ class YOLODetectionService:
                 # max_loc is top-left of the match
                 return max_loc, float(max_val)
 
-            # --- Coarse pass (pyramid level 3 = 1/8 resolution) ---
-            # L3 is the sweet spot for 200MP images: 2040x1530 search area,
-            # fast enough for full-image NCC while still resolving patches.
-            COARSE_LEVEL = 3
-            COARSE_DOWN = 2 ** COARSE_LEVEL  # 8
+            # --- Coarse pass — dynamically choose pyramid level ---
+            # The template must stay >= MIN_TEMPLATE_DIM pixels after
+            # downsampling + scale adjustment, otherwise NCC is unreliable.
+            # For half-resolution targets (expected_scale=0.5) this means
+            # using L2 instead of L3.
+            MIN_TEMPLATE_DIM = 12
+            base = expected_scale if expected_scale and expected_scale > 0 else 1.0
+            min_patch_dim = min(context_patch.shape[0], context_patch.shape[1])
+
+            COARSE_LEVEL = 3  # default for same-resolution
+            for lvl in range(len(target_pyramid) - 1, -1, -1):
+                down = 2 ** lvl
+                worst_dim = int((min_patch_dim / down) * base * 0.7)
+                if worst_dim >= MIN_TEMPLATE_DIM:
+                    COARSE_LEVEL = lvl
+                    break
+
+            COARSE_DOWN = 2 ** COARSE_LEVEL
             coarse_template = cv2.resize(
                 context_patch,
                 (max(1, context_patch.shape[1] // COARSE_DOWN), max(1, context_patch.shape[0] // COARSE_DOWN)),
@@ -2258,7 +2271,6 @@ class YOLODetectionService:
             best_coarse_score = -1.0
             best_coarse_scale = 1.0
 
-            base = expected_scale if expected_scale and expected_scale > 0 else 1.0
             for s in [base * 0.7, base * 0.85, base, base * 1.15, base * 1.3]:
                 loc, score = _match_at_scale(coarse_template, target_coarse, s)
                 if loc is not None and score > best_coarse_score:
@@ -2297,7 +2309,7 @@ class YOLODetectionService:
             best_med_score = -1.0
             best_med_scale = best_coarse_scale
 
-            for s in [0.9, 1.0, 1.1]:
+            for s in [best_coarse_scale * 0.9, best_coarse_scale, best_coarse_scale * 1.1]:
                 loc, score = _match_at_scale(medium_template, search_medium, s)
                 if loc is not None and score > best_med_score:
                     best_med_score = score
