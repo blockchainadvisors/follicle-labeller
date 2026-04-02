@@ -12,6 +12,14 @@ const electronAPI = {
     data: ArrayBuffer;
   } | null> => ipcRenderer.invoke("dialog:openImage"),
 
+  // Open media file dialog (images + videos)
+  openMediaFileDialog: (): Promise<{
+    filePath: string;
+    fileName: string;
+    data: ArrayBuffer | null;
+    isVideo: boolean;
+  } | null> => ipcRenderer.invoke("dialog:openMediaFile"),
+
   // Open generic file dialog with filters - returns file path and data
   openFileDialog: (options: {
     filters?: Array<{ name: string; extensions: string[] }>;
@@ -915,6 +923,28 @@ const electronAPI = {
       expectedScale: number,
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
+
+    // Video tracking
+    videoPrepare: (
+      videoFilePath: string,
+      sourcePatchData: string,
+      follicleOffsetX: number,
+      follicleOffsetY: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:videoPrepare", videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
+
+    videoMatchFrame: (
+      sessionId: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:videoMatchFrame", sessionId),
+
+    videoStop: (
+      sessionId: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:videoStop", sessionId),
   },
 };
 

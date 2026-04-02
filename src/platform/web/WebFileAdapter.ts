@@ -6,6 +6,7 @@
 import type {
   FileAdapter,
   OpenImageResult,
+  OpenMediaResult,
   OpenFileOptions,
   SaveProjectResult,
   LoadProjectResult,
@@ -39,6 +40,10 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 }
 
 export class WebFileAdapter implements FileAdapter {
+  async openMediaFileDialog(): Promise<OpenMediaResult | null> {
+    return null; // Video tracking not supported in web mode
+  }
+
   async openImageDialog(): Promise<OpenImageResult | null> {
     return new Promise((resolve) => {
       const input = createFileInput('image/*');

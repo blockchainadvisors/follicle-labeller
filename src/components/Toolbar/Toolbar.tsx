@@ -1945,65 +1945,131 @@ export const Toolbar: React.FC = () => {
   const openComparisonView = useTrackingStore((s) => s.openComparisonView);
   const setBackendSessionId = useTrackingStore((s) => s.setBackendSessionId);
 
+  const openVideoTracking = useTrackingStore((s) => s.openVideoTracking);
+
   // Interactive single-follicle tracking: prepare session then match on click
   const handleTrackPrepare = useCallback(async () => {
     if (!activeImage || !activeImageId || isTracking) return;
 
     const platform = getPlatform();
-    const fileResult = await platform.file.openImageDialog();
+    const fileResult = await platform.file.openMediaFileDialog();
     if (!fileResult) return;
 
     setIsTracking(true);
-    startLoading("Preparing tracking session...", false);
 
     try {
-      // Add the new image to the project
-      const newImageId = generateImageId();
-      const blob = new Blob([fileResult.data]);
-      const imageBitmap = await createImageBitmap(blob);
-      const imageSrc = URL.createObjectURL(blob);
+      if (fileResult.isVideo) {
+        // --- Video tracking flow ---
+        startLoading("Preparing video tracking...", false);
 
-      addImage({
-        id: newImageId,
-        fileName: fileResult.fileName,
-        width: imageBitmap.width,
-        height: imageBitmap.height,
-        imageData: fileResult.data,
-        imageBitmap,
-        imageSrc,
-        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
-        createdAt: Date.now(),
-        sortOrder: images.size,
-      });
+        // Require exactly one selected follicle with origin
+        const selectedArr = Array.from(selectedIds);
+        if (selectedArr.length !== 1) {
+          throw new Error("Select exactly one follicle with an origin before tracking a video");
+        }
+        const selectedFollicle = follicles.find((f) => f.id === selectedArr[0]);
+        if (!selectedFollicle || selectedFollicle.shape !== "rectangle" || !(selectedFollicle as RectangleAnnotation).origin) {
+          throw new Error("Selected follicle must be a rectangle with an origin set");
+        }
 
-      // Prepare template-matching session — only the target file path (read from disk)
-      const result = await follicleTrackingService.templatePrepare(
-        fileResult.filePath,
-      );
+        const rect = selectedFollicle as RectangleAnnotation;
+        const origin = rect.origin!;
 
-      if (!result.success) {
-        throw new Error(result.error || "Failed to prepare tracking session");
+        // Crop source patch around origin (same logic as ComparisonView)
+        const CONTEXT_MULT = 5.0;
+        const srcCx = origin.originPoint.x;
+        const srcCy = origin.originPoint.y;
+        const halfW = (rect.width * CONTEXT_MULT) / 2;
+        const halfH = (rect.height * CONTEXT_MULT) / 2;
+        const imgW = activeImage.width;
+        const imgH = activeImage.height;
+        const cropX = Math.max(0, Math.floor(srcCx - halfW));
+        const cropY = Math.max(0, Math.floor(srcCy - halfH));
+        const cropX2 = Math.min(imgW, Math.ceil(srcCx + halfW));
+        const cropY2 = Math.min(imgH, Math.ceil(srcCy + halfH));
+        const cropW = cropX2 - cropX;
+        const cropH = cropY2 - cropY;
+        const offsetX = srcCx - cropX;
+        const offsetY = srcCy - cropY;
+
+        const canvas = new OffscreenCanvas(cropW, cropH);
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(activeImage.imageBitmap, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+        const blob = await canvas.convertToBlob({ type: "image/png" });
+        const arrayBuf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuf);
+        const chunks: string[] = [];
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          chunks.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))));
+        }
+        const patchBase64 = `data:image/png;base64,${btoa(chunks.join(""))}`;
+
+        // Expected scale: assume video has same resolution as source for now
+        // (will be refined when video metadata comes back)
+        const expectedScale = 1.0;
+
+        const result = await follicleTrackingService.videoPrepare(
+          fileResult.filePath, patchBase64, offsetX, offsetY,
+          rect.width, rect.height, expectedScale
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || "Failed to prepare video session");
+        }
+
+        openVideoTracking({
+          sessionId: result.sessionId,
+          videoFilePath: fileResult.filePath,
+          videoFileName: fileResult.fileName,
+          fps: result.fps,
+          frameCount: result.frameCount,
+          videoWidth: result.width,
+          videoHeight: result.height,
+        });
+      } else {
+        // --- Image tracking flow (existing) ---
+        startLoading("Preparing tracking session...", false);
+
+        const newImageId = generateImageId();
+        const imgBlob = new Blob([fileResult.data!]);
+        const imageBitmap = await createImageBitmap(imgBlob);
+        const imageSrc = URL.createObjectURL(imgBlob);
+
+        addImage({
+          id: newImageId,
+          fileName: fileResult.fileName,
+          width: imageBitmap.width,
+          height: imageBitmap.height,
+          imageData: fileResult.data!,
+          imageBitmap,
+          imageSrc,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: images.size,
+        });
+
+        const result = await follicleTrackingService.templatePrepare(
+          fileResult.filePath,
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || "Failed to prepare tracking session");
+        }
+
+        setBackendSessionId(result.sessionId);
+
+        const session: TrackingSession = {
+          id: generateId(),
+          sourceImageId: activeImageId,
+          targetImageId: newImageId,
+          correspondences: [],
+          method: "template",
+          createdAt: Date.now(),
+        };
+
+        addTrackingSession(session);
+        openComparisonView(session.id);
       }
-
-      // Store backend session ID for per-click matching
-      setBackendSessionId(result.sessionId);
-
-      // Create tracking session with empty correspondences
-      const session: TrackingSession = {
-        id: generateId(),
-        sourceImageId: activeImageId,
-        targetImageId: newImageId,
-        correspondences: [],
-        method: "template",
-        createdAt: Date.now(),
-      };
-
-      addTrackingSession(session);
-      openComparisonView(session.id);
-
-      console.log(
-        `Tracking session prepared: template matching ready for single-follicle matching`
-      );
     } catch (error) {
       console.error("Track prepare failed:", error);
       alert(
@@ -2014,8 +2080,8 @@ export const Toolbar: React.FC = () => {
       stopLoading();
     }
   }, [
-    activeImage, activeImageId, isTracking, images.size,
-    addImage, addTrackingSession, openComparisonView,
+    activeImage, activeImageId, isTracking, images.size, selectedIds, follicles,
+    addImage, addTrackingSession, openComparisonView, openVideoTracking,
     setBackendSessionId, startLoading, stopLoading,
   ]);
 

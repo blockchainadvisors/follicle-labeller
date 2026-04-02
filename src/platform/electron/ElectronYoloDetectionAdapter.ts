@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult, VideoPrepareResult, VideoFrameResult } from '../../types';
 
 export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
   async getStatus(): Promise<YoloDetectionStatus> {
@@ -167,5 +167,27 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     return window.electronAPI.yoloDetection.templateMatchSingle(
       sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
     ) as Promise<TrackMatchSingleResult>;
+  }
+
+  async videoPrepare(
+    videoFilePath: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult> {
+    return window.electronAPI.yoloDetection.videoPrepare(
+      videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
+    ) as Promise<VideoPrepareResult>;
+  }
+
+  async videoMatchFrame(sessionId: string): Promise<VideoFrameResult> {
+    return window.electronAPI.yoloDetection.videoMatchFrame(sessionId) as Promise<VideoFrameResult>;
+  }
+
+  async videoStop(sessionId: string): Promise<{ success: boolean }> {
+    return window.electronAPI.yoloDetection.videoStop(sessionId) as Promise<{ success: boolean }>;
   }
 }

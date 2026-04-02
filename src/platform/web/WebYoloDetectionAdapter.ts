@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult, VideoPrepareResult, VideoFrameResult } from '../../types';
 import { config } from '../config';
 
 export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
@@ -445,5 +445,17 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     } catch (error) {
       return { success: false, match: null, error: String(error) };
     }
+  }
+
+  async videoPrepare(): Promise<VideoPrepareResult> {
+    return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: 'Video tracking not supported in web mode' };
+  }
+
+  async videoMatchFrame(): Promise<VideoFrameResult> {
+    return { success: false, frameIndex: 0, match: null, done: true, error: 'Video tracking not supported in web mode' };
+  }
+
+  async videoStop(): Promise<{ success: boolean }> {
+    return { success: true };
   }
 }

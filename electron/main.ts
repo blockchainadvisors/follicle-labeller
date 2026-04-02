@@ -137,6 +137,41 @@ ipcMain.handle("dialog:openImage", async () => {
   };
 });
 
+// Open media file dialog (images + videos)
+ipcMain.handle("dialog:openMediaFile", async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return null;
+
+  const VIDEO_EXTENSIONS = ["mp4", "avi", "mov", "mkv", "wmv", "webm"];
+
+  const result = await dialog.showOpenDialog(window, {
+    properties: ["openFile"],
+    filters: [
+      {
+        name: "Images & Videos",
+        extensions: [
+          "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp",
+          ...VIDEO_EXTENSIONS,
+        ],
+      },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const fileName = path.basename(filePath);
+  const ext = path.extname(filePath).toLowerCase().slice(1);
+  const isVideo = VIDEO_EXTENSIONS.includes(ext);
+
+  if (isVideo) {
+    return { filePath, fileName, data: null, isVideo: true };
+  } else {
+    const data = fs.readFileSync(filePath);
+    return { filePath, fileName, data: data.buffer, isVideo: false };
+  }
+});
+
 // Open generic file dialog with custom filters
 ipcMain.handle("dialog:openFile", async (_, options: {
   filters?: Array<{ name: string; extensions: string[] }>;
@@ -2047,6 +2082,54 @@ ipcMain.handle(
       "POST",
       { sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale },
       30000
+    );
+  }
+);
+
+// Prepare a video tracking session
+ipcMain.handle(
+  "yolo-detection:videoPrepare",
+  async (
+    _,
+    videoFilePath: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/video-prepare",
+      "POST",
+      { videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale },
+      30000
+    );
+  }
+);
+
+// Match next video frame
+ipcMain.handle(
+  "yolo-detection:videoMatchFrame",
+  async (_, sessionId: string) => {
+    return makeBlobServerRequest(
+      `/yolo-detect/video-match-frame/${sessionId}`,
+      "POST",
+      {},
+      30000
+    );
+  }
+);
+
+// Stop video tracking session
+ipcMain.handle(
+  "yolo-detection:videoStop",
+  async (_, sessionId: string) => {
+    return makeBlobServerRequest(
+      `/yolo-detect/video-stop/${sessionId}`,
+      "POST",
+      {},
+      10000
     );
   }
 );

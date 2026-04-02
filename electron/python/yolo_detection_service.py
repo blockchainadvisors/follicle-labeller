@@ -2175,6 +2175,178 @@ class YOLODetectionService:
             logger.exception("Failed to prepare template session")
             return {'success': False, 'error': str(e), 'sessionId': '', 'homographyMatrix': None}
 
+    @staticmethod
+    def _match_at_scale(template, search_img, scale):
+        """Run matchTemplate at a given scale factor."""
+        if abs(scale - 1.0) > 0.01:
+            new_w = max(1, int(template.shape[1] * scale))
+            new_h = max(1, int(template.shape[0] * scale))
+            tmpl = cv2.resize(template, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+        else:
+            tmpl = template
+
+        if tmpl.shape[0] > search_img.shape[0] or tmpl.shape[1] > search_img.shape[1]:
+            return None, -1.0
+
+        result = cv2.matchTemplate(search_img, tmpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        return max_loc, float(max_val)
+
+    def _ncc_match_in_pyramid(
+        self,
+        context_patch: np.ndarray,
+        target_pyramid: list,
+        fc_ox: float,
+        fc_oy: float,
+        src_w: float,
+        src_h: float,
+        expected_scale: float = 1.0,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Core 3-pass NCC matching: coarse → medium → fine.
+        Shared by template_match_single and match_video_frame.
+        Returns match dict or None.
+        """
+        NCC_FLOOR = 0.3
+        MIN_TEMPLATE_DIM = 12
+        base = expected_scale if expected_scale and expected_scale > 0 else 1.0
+        min_patch_dim = min(context_patch.shape[0], context_patch.shape[1])
+
+        # --- Coarse pass — dynamically choose pyramid level ---
+        COARSE_LEVEL = 3
+        for lvl in range(len(target_pyramid) - 1, -1, -1):
+            down = 2 ** lvl
+            worst_dim = int((min_patch_dim / down) * base * 0.7)
+            if worst_dim >= MIN_TEMPLATE_DIM:
+                COARSE_LEVEL = lvl
+                break
+
+        COARSE_DOWN = 2 ** COARSE_LEVEL
+        coarse_template = cv2.resize(
+            context_patch,
+            (max(1, context_patch.shape[1] // COARSE_DOWN), max(1, context_patch.shape[0] // COARSE_DOWN)),
+            interpolation=cv2.INTER_AREA
+        )
+        target_coarse = target_pyramid[COARSE_LEVEL]
+
+        best_coarse_loc = None
+        best_coarse_score = -1.0
+        best_coarse_scale = 1.0
+
+        for s in [base * 0.7, base * 0.85, base, base * 1.15, base * 1.3]:
+            loc, score = self._match_at_scale(coarse_template, target_coarse, s)
+            if loc is not None and score > best_coarse_score:
+                best_coarse_score = score
+                best_coarse_loc = loc
+                best_coarse_scale = s
+
+        if best_coarse_loc is None:
+            return None
+
+        ct_w = int(coarse_template.shape[1] * best_coarse_scale)
+        ct_h = int(coarse_template.shape[0] * best_coarse_scale)
+        coarse_center_x = (best_coarse_loc[0] + ct_w / 2.0) * COARSE_DOWN
+        coarse_center_y = (best_coarse_loc[1] + ct_h / 2.0) * COARSE_DOWN
+
+        # --- Medium pass (pyramid level 1 = ½ resolution) ---
+        medium_template = cv2.resize(
+            context_patch,
+            (max(1, context_patch.shape[1] // 2), max(1, context_patch.shape[0] // 2)),
+            interpolation=cv2.INTER_AREA
+        )
+        target_medium = target_pyramid[1]
+
+        win_radius = max(medium_template.shape[0], medium_template.shape[1]) * 2
+        med_cx = coarse_center_x / 2.0
+        med_cy = coarse_center_y / 2.0
+        med_x1 = max(0, int(med_cx - win_radius))
+        med_y1 = max(0, int(med_cy - win_radius))
+        med_x2 = min(target_medium.shape[1], int(med_cx + win_radius))
+        med_y2 = min(target_medium.shape[0], int(med_cy + win_radius))
+        search_medium = target_medium[med_y1:med_y2, med_x1:med_x2]
+
+        best_med_loc = None
+        best_med_score = -1.0
+        best_med_scale = best_coarse_scale
+
+        for s in [best_coarse_scale * 0.9, best_coarse_scale, best_coarse_scale * 1.1]:
+            loc, score = self._match_at_scale(medium_template, search_medium, s)
+            if loc is not None and score > best_med_score:
+                best_med_score = score
+                best_med_loc = loc
+                best_med_scale = s
+
+        if best_med_loc is None:
+            return None
+
+        mt_w = int(medium_template.shape[1] * best_med_scale)
+        mt_h = int(medium_template.shape[0] * best_med_scale)
+        medium_center_x = (best_med_loc[0] + med_x1 + mt_w / 2.0) * 2.0
+        medium_center_y = (best_med_loc[1] + med_y1 + mt_h / 2.0) * 2.0
+
+        # --- Fine pass (pyramid level 0 = full resolution) ---
+        target_full = target_pyramid[0]
+
+        win_radius_fine = int(max(context_patch.shape[0], context_patch.shape[1]) * 1.5)
+        fine_x1 = max(0, int(medium_center_x - win_radius_fine))
+        fine_y1 = max(0, int(medium_center_y - win_radius_fine))
+        fine_x2 = min(target_full.shape[1], int(medium_center_x + win_radius_fine))
+        fine_y2 = min(target_full.shape[0], int(medium_center_y + win_radius_fine))
+        search_fine = target_full[fine_y1:fine_y2, fine_x1:fine_x2]
+
+        best_fine_loc = None
+        best_fine_score = -1.0
+        best_fine_scale = best_med_scale
+
+        for s in [best_med_scale - 0.05, best_med_scale, best_med_scale + 0.05]:
+            if s <= 0:
+                continue
+            loc, score = self._match_at_scale(context_patch, search_fine, s)
+            if loc is not None and score > best_fine_score:
+                best_fine_score = score
+                best_fine_loc = loc
+                best_fine_scale = s
+
+        # Optional rotation if NCC is weak
+        if best_fine_score < 0.5:
+            for angle in [-5, 5]:
+                rot_center = (context_patch.shape[1] // 2, context_patch.shape[0] // 2)
+                M = cv2.getRotationMatrix2D(rot_center, angle, 1.0)
+                rotated = cv2.warpAffine(
+                    context_patch, M,
+                    (context_patch.shape[1], context_patch.shape[0]),
+                    borderMode=cv2.BORDER_REPLICATE
+                )
+                loc, score = self._match_at_scale(rotated, search_fine, best_fine_scale)
+                if loc is not None and score > best_fine_score:
+                    best_fine_score = score
+                    best_fine_loc = loc
+
+        if best_fine_loc is None or best_fine_score < NCC_FLOOR:
+            return None
+
+        scaled_fc_ox = fc_ox * best_fine_scale
+        scaled_fc_oy = fc_oy * best_fine_scale
+        target_cx = fine_x1 + best_fine_loc[0] + scaled_fc_ox
+        target_cy = fine_y1 + best_fine_loc[1] + scaled_fc_oy
+        target_w = src_w * best_fine_scale
+        target_h = src_h * best_fine_scale
+
+        return {
+            'targetDetection': {
+                'x': round(target_cx - target_w / 2.0, 2),
+                'y': round(target_cy - target_h / 2.0, 2),
+                'width': round(target_w, 2),
+                'height': round(target_h, 2),
+                'confidence': round(best_fine_score, 4),
+                'classId': 0,
+                'className': 'follicle',
+            },
+            'confidence': round(best_fine_score, 4),
+            'transformedX': round(target_cx, 2),
+            'transformedY': round(target_cy, 2),
+        }
+
     def template_match_single(
         self,
         session_id: str,
@@ -2188,18 +2360,6 @@ class YOLODetectionService:
         """
         Match a single source follicle in the target image using
         multi-scale pyramid NCC template matching.
-
-        The source context patch (cropped in the frontend around the
-        follicle) is received as image bytes — only a small region,
-        not the full source image.
-
-        Args:
-            session_id: Prepared template session ID
-            source_patch_data: PNG/JPEG bytes of the context patch
-            follicle_offset_x: X offset of follicle center within the patch
-            follicle_offset_y: Y offset of follicle center within the patch
-            follicle_width: Original follicle bbox width
-            follicle_height: Original follicle bbox height
         """
         session = self._tracking_sessions.get(session_id)
         if session is None:
@@ -2210,199 +2370,370 @@ class YOLODetectionService:
 
         try:
             target_pyramid = session['target_pyramid']
-            NCC_FLOOR = 0.3
 
-            src_w = follicle_width
-            src_h = follicle_height
-            fc_ox = follicle_offset_x
-            fc_oy = follicle_offset_y
-
-            # Decode the source context patch sent from the frontend
             patch_array = np.frombuffer(source_patch_data, dtype=np.uint8)
             patch_img = cv2.imdecode(patch_array, cv2.IMREAD_GRAYSCALE)
             if patch_img is None or patch_img.size == 0:
                 return {'success': True, 'match': None}
 
-            context_patch = patch_img
-
-            # --- Helper: run matchTemplate at one scale ---
-            def _match_at_scale(template, search_img, scale):
-                if abs(scale - 1.0) > 0.01:
-                    new_w = max(1, int(template.shape[1] * scale))
-                    new_h = max(1, int(template.shape[0] * scale))
-                    tmpl = cv2.resize(template, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
-                else:
-                    tmpl = template
-
-                if tmpl.shape[0] > search_img.shape[0] or tmpl.shape[1] > search_img.shape[1]:
-                    return None, -1.0
-
-                result = cv2.matchTemplate(search_img, tmpl, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(result)
-                # max_loc is top-left of the match
-                return max_loc, float(max_val)
-
-            # --- Coarse pass — dynamically choose pyramid level ---
-            # The template must stay >= MIN_TEMPLATE_DIM pixels after
-            # downsampling + scale adjustment, otherwise NCC is unreliable.
-            # For half-resolution targets (expected_scale=0.5) this means
-            # using L2 instead of L3.
-            MIN_TEMPLATE_DIM = 12
-            base = expected_scale if expected_scale and expected_scale > 0 else 1.0
-            min_patch_dim = min(context_patch.shape[0], context_patch.shape[1])
-
-            COARSE_LEVEL = 3  # default for same-resolution
-            for lvl in range(len(target_pyramid) - 1, -1, -1):
-                down = 2 ** lvl
-                worst_dim = int((min_patch_dim / down) * base * 0.7)
-                if worst_dim >= MIN_TEMPLATE_DIM:
-                    COARSE_LEVEL = lvl
-                    break
-
-            COARSE_DOWN = 2 ** COARSE_LEVEL
-            coarse_template = cv2.resize(
-                context_patch,
-                (max(1, context_patch.shape[1] // COARSE_DOWN), max(1, context_patch.shape[0] // COARSE_DOWN)),
-                interpolation=cv2.INTER_AREA
+            match = self._ncc_match_in_pyramid(
+                patch_img, target_pyramid,
+                follicle_offset_x, follicle_offset_y,
+                follicle_width, follicle_height,
+                expected_scale
             )
-            target_coarse = target_pyramid[COARSE_LEVEL]
 
-            best_coarse_loc = None
-            best_coarse_score = -1.0
-            best_coarse_scale = 1.0
-
-            for s in [base * 0.7, base * 0.85, base, base * 1.15, base * 1.3]:
-                loc, score = _match_at_scale(coarse_template, target_coarse, s)
-                if loc is not None and score > best_coarse_score:
-                    best_coarse_score = score
-                    best_coarse_loc = loc
-                    best_coarse_scale = s
-
-            if best_coarse_loc is None:
+            if match is None:
                 return {'success': True, 'match': None}
-
-            # Scale coarse match center back to full resolution
-            ct_w = int(coarse_template.shape[1] * best_coarse_scale)
-            ct_h = int(coarse_template.shape[0] * best_coarse_scale)
-            coarse_center_x = (best_coarse_loc[0] + ct_w / 2.0) * COARSE_DOWN
-            coarse_center_y = (best_coarse_loc[1] + ct_h / 2.0) * COARSE_DOWN
-
-            # --- Medium pass (pyramid level 1 = ½ resolution) ---
-            medium_template = cv2.resize(
-                context_patch,
-                (max(1, context_patch.shape[1] // 2), max(1, context_patch.shape[0] // 2)),
-                interpolation=cv2.INTER_AREA
-            )
-            target_medium = target_pyramid[1]
-
-            # Windowed search around coarse match (in half-res coords)
-            win_radius = max(medium_template.shape[0], medium_template.shape[1]) * 2
-            med_cx = coarse_center_x / 2.0
-            med_cy = coarse_center_y / 2.0
-            med_x1 = max(0, int(med_cx - win_radius))
-            med_y1 = max(0, int(med_cy - win_radius))
-            med_x2 = min(target_medium.shape[1], int(med_cx + win_radius))
-            med_y2 = min(target_medium.shape[0], int(med_cy + win_radius))
-            search_medium = target_medium[med_y1:med_y2, med_x1:med_x2]
-
-            best_med_loc = None
-            best_med_score = -1.0
-            best_med_scale = best_coarse_scale
-
-            for s in [best_coarse_scale * 0.9, best_coarse_scale, best_coarse_scale * 1.1]:
-                loc, score = _match_at_scale(medium_template, search_medium, s)
-                if loc is not None and score > best_med_score:
-                    best_med_score = score
-                    best_med_loc = loc
-                    best_med_scale = s
-
-            if best_med_loc is None:
-                return {'success': True, 'match': None}
-
-            # Scale medium match center back to full resolution
-            mt_w = int(medium_template.shape[1] * best_med_scale)
-            mt_h = int(medium_template.shape[0] * best_med_scale)
-            medium_center_x = (best_med_loc[0] + med_x1 + mt_w / 2.0) * 2.0
-            medium_center_y = (best_med_loc[1] + med_y1 + mt_h / 2.0) * 2.0
-
-            # --- Fine pass (pyramid level 0 = full resolution) ---
-            target_full = target_pyramid[0]
-
-            win_radius_fine = int(max(context_patch.shape[0], context_patch.shape[1]) * 1.5)
-            fine_x1 = max(0, int(medium_center_x - win_radius_fine))
-            fine_y1 = max(0, int(medium_center_y - win_radius_fine))
-            fine_x2 = min(target_full.shape[1], int(medium_center_x + win_radius_fine))
-            fine_y2 = min(target_full.shape[0], int(medium_center_y + win_radius_fine))
-            search_fine = target_full[fine_y1:fine_y2, fine_x1:fine_x2]
-
-            best_fine_loc = None
-            best_fine_score = -1.0
-            best_fine_scale = best_med_scale
-
-            for s in [best_med_scale - 0.05, best_med_scale, best_med_scale + 0.05]:
-                if s <= 0:
-                    continue
-                loc, score = _match_at_scale(context_patch, search_fine, s)
-                if loc is not None and score > best_fine_score:
-                    best_fine_score = score
-                    best_fine_loc = loc
-                    best_fine_scale = s
-
-            # --- Optional rotation if NCC is weak ---
-            if best_fine_score < 0.5:
-                for angle in [-5, 5]:
-                    rot_center = (context_patch.shape[1] // 2, context_patch.shape[0] // 2)
-                    M = cv2.getRotationMatrix2D(rot_center, angle, 1.0)
-                    rotated = cv2.warpAffine(
-                        context_patch, M,
-                        (context_patch.shape[1], context_patch.shape[0]),
-                        borderMode=cv2.BORDER_REPLICATE
-                    )
-                    loc, score = _match_at_scale(rotated, search_fine, best_fine_scale)
-                    if loc is not None and score > best_fine_score:
-                        best_fine_score = score
-                        best_fine_loc = loc
-
-            if best_fine_loc is None or best_fine_score < NCC_FLOOR:
-                logger.info(f"Template match below threshold: ncc={best_fine_score:.3f}")
-                return {'success': True, 'match': None}
-
-            # --- Convert match location to target-image follicle center ---
-            # best_fine_loc is top-left of the template match in the search window
-            scaled_fc_ox = fc_ox * best_fine_scale
-            scaled_fc_oy = fc_oy * best_fine_scale
-            target_cx = fine_x1 + best_fine_loc[0] + scaled_fc_ox
-            target_cy = fine_y1 + best_fine_loc[1] + scaled_fc_oy
-
-            target_w = src_w * best_fine_scale
-            target_h = src_h * best_fine_scale
 
             logger.info(
-                f"Template match: ncc={best_fine_score:.3f}, "
-                f"target=({target_cx:.0f},{target_cy:.0f}), scale={best_fine_scale:.2f}"
+                f"Template match: ncc={match['confidence']:.3f}, "
+                f"target=({match['transformedX']:.0f},{match['transformedY']:.0f})"
             )
-
-            return {
-                'success': True,
-                'match': {
-                    'targetDetection': {
-                        'x': round(target_cx - target_w / 2.0, 2),
-                        'y': round(target_cy - target_h / 2.0, 2),
-                        'width': round(target_w, 2),
-                        'height': round(target_h, 2),
-                        'confidence': round(best_fine_score, 4),
-                        'classId': 0,
-                        'className': 'follicle',
-                    },
-                    'confidence': round(best_fine_score, 4),
-                    'transformedX': round(target_cx, 2),
-                    'transformedY': round(target_cy, 2),
-                }
-            }
+            return {'success': True, 'match': match}
 
         except Exception as e:
             logger.exception("Failed template match for single follicle")
             return {'success': False, 'error': str(e), 'match': None}
+
+    # ------------------------------------------------------------------
+    # Video frame-by-frame tracking
+    # ------------------------------------------------------------------
+
+    def _auto_calibrate_scale(
+        self,
+        patch_gray: np.ndarray,
+        target_gray: np.ndarray,
+    ) -> float:
+        """
+        Scan a wide range of scales to find the true scale relationship
+        between a source patch and a target image. Returns the best scale.
+        Uses a coarse pyramid level for speed.
+        """
+        # Use a pyramid level for fast scanning
+        target_small = cv2.pyrDown(cv2.pyrDown(target_gray))  # 1/4
+        down = 4
+
+        best_score = -1.0
+        best_scale = 1.0
+
+        # Coarse scan: 10% to 95% in 5% steps
+        for s_pct in range(10, 100, 5):
+            s = s_pct / 100.0
+            nw = max(3, int(patch_gray.shape[1] / down * s))
+            nh = max(3, int(patch_gray.shape[0] / down * s))
+            tmpl = cv2.resize(patch_gray, (nw, nh), interpolation=cv2.INTER_AREA)
+            if tmpl.shape[0] >= target_small.shape[0] or tmpl.shape[1] >= target_small.shape[1]:
+                continue
+            result = cv2.matchTemplate(target_small, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > best_score:
+                best_score = max_val
+                best_scale = s
+
+        # Fine refinement: ±10% around best in 2% steps
+        fine_best_score = best_score
+        fine_best_scale = best_scale
+        for s_pct in range(int(best_scale * 100) - 10, int(best_scale * 100) + 11, 2):
+            s = s_pct / 100.0
+            if s <= 0:
+                continue
+            nw = max(3, int(patch_gray.shape[1] / down * s))
+            nh = max(3, int(patch_gray.shape[0] / down * s))
+            tmpl = cv2.resize(patch_gray, (nw, nh), interpolation=cv2.INTER_AREA)
+            if tmpl.shape[0] >= target_small.shape[0] or tmpl.shape[1] >= target_small.shape[1]:
+                continue
+            result = cv2.matchTemplate(target_small, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, _ = cv2.minMaxLoc(result)
+            if max_val > fine_best_score:
+                fine_best_score = max_val
+                fine_best_scale = s
+
+        logger.info(f"Auto-calibrated scale: {fine_best_scale:.2f} (ncc={fine_best_score:.3f})")
+        return fine_best_scale
+
+    def prepare_video_session(
+        self,
+        video_file_path: str,
+        source_patch_data: bytes,
+        follicle_offset_x: float,
+        follicle_offset_y: float,
+        follicle_width: float,
+        follicle_height: float,
+        expected_scale: float = 1.0,
+    ) -> Dict[str, Any]:
+        """
+        Open a video file and cache the source patch for frame-by-frame matching.
+        Auto-calibrates the true scale by matching the source patch against the
+        first video frame across a wide range of scales.
+        """
+        try:
+            cap = cv2.VideoCapture(video_file_path)
+            if not cap.isOpened():
+                return {'success': False, 'error': f'Could not open video: {video_file_path}'}
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Decode source patch
+            patch_array = np.frombuffer(source_patch_data, dtype=np.uint8)
+            patch_gray = cv2.imdecode(patch_array, cv2.IMREAD_GRAYSCALE)
+            if patch_gray is None or patch_gray.size == 0:
+                cap.release()
+                return {'success': False, 'error': 'Invalid source patch data'}
+
+            # Read first frame for auto-calibration
+            ret, first_frame = cap.read()
+            if not ret:
+                cap.release()
+                return {'success': False, 'error': 'Could not read first video frame'}
+
+            first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+
+            # Auto-calibrate: find the true scale by scanning the source patch
+            # against the first frame. This handles different fields of view,
+            # crops, and zoom levels between the source image and video.
+            calibrated_scale = self._auto_calibrate_scale(patch_gray, first_gray)
+
+            # Reset video to start (frame 0 was consumed for calibration)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+            session_id = str(uuid.uuid4())
+            self._tracking_sessions[session_id] = {
+                'type': 'video',
+                'cap': cap,
+                'fps': fps,
+                'frame_count': frame_count,
+                'width': width,
+                'height': height,
+                'source_patch_gray': patch_gray,
+                'follicle_offset_x': follicle_offset_x,
+                'follicle_offset_y': follicle_offset_y,
+                'follicle_width': follicle_width,
+                'follicle_height': follicle_height,
+                'expected_scale': calibrated_scale,
+                'current_frame': 0,
+                # Temporal prediction state
+                'prev_cx': None,   # previous match center X (full-res)
+                'prev_cy': None,   # previous match center Y (full-res)
+                'prev_scale': calibrated_scale,
+                # Pipelined frame reading
+                'next_frame': None,
+                '_executor': None,
+            }
+
+            logger.info(
+                f"Video session {session_id} prepared: "
+                f"{width}x{height} @ {fps:.1f}fps, {frame_count} frames, "
+                f"calibrated_scale={calibrated_scale:.2f}"
+            )
+
+            return {
+                'success': True,
+                'sessionId': session_id,
+                'fps': fps,
+                'frameCount': frame_count,
+                'width': width,
+                'height': height,
+            }
+
+        except Exception as e:
+            logger.exception("Failed to prepare video session")
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def _read_frame_bg(cap):
+        """Read a frame in a background thread for pipelining."""
+        ret, frame = cap.read()
+        return (ret, frame)
+
+    def _local_match(self, patch, frame_gray, prev_cx, prev_cy, prev_scale,
+                     follicle_width, follicle_height, search_radius=300):
+        """
+        Fast local-window NCC match around the previous position.
+        Used for temporal prediction after frame 0.
+        Returns (match_dict_or_None, new_cx, new_cy, new_scale).
+        """
+        fh, fw = frame_gray.shape
+        lx1 = max(0, int(prev_cx - search_radius))
+        ly1 = max(0, int(prev_cy - search_radius))
+        lx2 = min(fw, int(prev_cx + search_radius))
+        ly2 = min(fh, int(prev_cy + search_radius))
+        local = frame_gray[ly1:ly2, lx1:lx2]
+
+        if local.size == 0:
+            return None, prev_cx, prev_cy, prev_scale
+
+        best_loc, best_score, best_s = None, -1.0, prev_scale
+        for s in [prev_scale - 0.02, prev_scale, prev_scale + 0.02]:
+            if s <= 0:
+                continue
+            loc, score = self._match_at_scale(patch, local, s)
+            if loc is not None and score > best_score:
+                best_score = score
+                best_loc = loc
+                best_s = s
+
+        NCC_FLOOR = 0.3
+        if best_loc is None or best_score < NCC_FLOOR:
+            return None, prev_cx, prev_cy, prev_scale
+
+        scaled_w = int(patch.shape[1] * best_s)
+        scaled_h = int(patch.shape[0] * best_s)
+        new_cx = lx1 + best_loc[0] + scaled_w / 2.0
+        new_cy = ly1 + best_loc[1] + scaled_h / 2.0
+
+        target_w = follicle_width * best_s
+        target_h = follicle_height * best_s
+
+        match_result = {
+            'targetDetection': {
+                'x': round(new_cx - target_w / 2.0, 2),
+                'y': round(new_cy - target_h / 2.0, 2),
+                'width': round(target_w, 2),
+                'height': round(target_h, 2),
+                'confidence': round(best_score, 4),
+                'classId': 0,
+                'className': 'follicle',
+            },
+            'confidence': round(best_score, 4),
+            'transformedX': round(new_cx, 2),
+            'transformedY': round(new_cy, 2),
+        }
+        return match_result, new_cx, new_cy, best_s
+
+    def match_video_frame(self, session_id: str) -> Dict[str, Any]:
+        """
+        Read the next frame and match. Uses temporal prediction:
+        - Frame 0: full 3-pass pyramid NCC (coarse→medium→fine)
+        - Frames 1+: fast local-window NCC around previous position
+        If local match fails (NCC < 0.3), falls back to full search.
+        Pipelined frame reading overlaps I/O with matching.
+        """
+        session = self._tracking_sessions.get(session_id)
+        if session is None:
+            return {'success': False, 'error': f'Session {session_id} not found', 'done': True}
+
+        if session.get('type') != 'video':
+            return {'success': False, 'error': 'Session is not a video session', 'done': True}
+
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            cap = session['cap']
+
+            # Use pipelined frame: if we pre-read a frame last iteration, use it
+            if session.get('next_frame') is not None:
+                ret, frame = session['next_frame']
+                session['next_frame'] = None
+            else:
+                ret, frame = cap.read()
+
+            if not ret:
+                return {
+                    'success': True,
+                    'frameIndex': session['current_frame'],
+                    'match': None,
+                    'done': True,
+                }
+
+            frame_index = session['current_frame']
+            session['current_frame'] += 1
+
+            # Start reading next frame in background (pipeline)
+            if session.get('_executor') is None:
+                session['_executor'] = ThreadPoolExecutor(max_workers=1)
+            future = session['_executor'].submit(self._read_frame_bg, cap)
+
+            # Encode frame as JPEG for frontend display
+            display_frame = frame
+            fh, fw = frame.shape[:2]
+            MAX_DISPLAY = 1280
+            if max(fw, fh) > MAX_DISPLAY:
+                scale_down = MAX_DISPLAY / max(fw, fh)
+                display_frame = cv2.resize(frame, None, fx=scale_down, fy=scale_down, interpolation=cv2.INTER_AREA)
+            _, jpeg_buf = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            frame_jpeg_b64 = base64.b64encode(jpeg_buf).decode('ascii')
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            patch = session['source_patch_gray']
+            prev_cx = session.get('prev_cx')
+            prev_cy = session.get('prev_cy')
+            prev_scale = session.get('prev_scale', session['expected_scale'])
+
+            match = None
+
+            if prev_cx is not None and prev_cy is not None:
+                # Temporal prediction: fast local window search
+                match, new_cx, new_cy, new_scale = self._local_match(
+                    patch, gray, prev_cx, prev_cy, prev_scale,
+                    session['follicle_width'], session['follicle_height']
+                )
+
+                if match is not None:
+                    session['prev_cx'] = new_cx
+                    session['prev_cy'] = new_cy
+                    session['prev_scale'] = new_scale
+
+            if match is None:
+                # Frame 0 or local match failed: full pyramid search
+                l1 = cv2.pyrDown(gray)
+                l2 = cv2.pyrDown(l1)
+                l3 = cv2.pyrDown(l2)
+                l4 = cv2.pyrDown(l3)
+                target_pyramid = [gray, l1, l2, l3, l4]
+
+                match = self._ncc_match_in_pyramid(
+                    patch, target_pyramid,
+                    session['follicle_offset_x'],
+                    session['follicle_offset_y'],
+                    session['follicle_width'],
+                    session['follicle_height'],
+                    session['expected_scale'],
+                )
+
+                # Update temporal prediction state from full match
+                if match is not None:
+                    session['prev_cx'] = match['transformedX']
+                    session['prev_cy'] = match['transformedY']
+                    session['prev_scale'] = session['expected_scale']
+
+            # Wait for pipelined frame read
+            try:
+                session['next_frame'] = future.result(timeout=5)
+            except Exception:
+                session['next_frame'] = None
+
+            return {
+                'success': True,
+                'frameIndex': frame_index,
+                'match': match,
+                'frameData': frame_jpeg_b64,
+                'done': False,
+            }
+
+        except Exception as e:
+            logger.exception(f"Failed to match video frame {session.get('current_frame', '?')}")
+            return {'success': False, 'error': str(e), 'done': True}
+
+    def stop_video_session(self, session_id: str) -> Dict[str, Any]:
+        """Release VideoCapture and clean up a video session."""
+        session = self._tracking_sessions.pop(session_id, None)
+        if session is None:
+            return {'success': True}
+
+        cap = session.get('cap')
+        if cap:
+            cap.release()
+
+        executor = session.get('_executor')
+        if executor:
+            executor.shutdown(wait=False)
+
+        logger.info(f"Video session {session_id} stopped")
+        return {'success': True}
 
     def predict_tiled_base64(
         self,

@@ -7,7 +7,7 @@
  * Uses the platform adapter to work in both Electron and Web modes.
  */
 
-import { TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult } from '../types';
+import { TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult, VideoPrepareResult, VideoFrameResult } from '../types';
 import { getPlatform } from '../platform';
 
 /**
@@ -205,6 +205,49 @@ export class FollicleTrackingService {
     } catch (error) {
       console.error('Template match single failed:', error);
       return { success: false, match: null, error: error instanceof Error ? error.message : 'Match failed' };
+    }
+  }
+
+  async videoPrepare(
+    videoFilePath: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number = 1.0,
+  ): Promise<VideoPrepareResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.videoPrepare(
+          videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
+        ),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Video prepare failed:', error);
+      return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: error instanceof Error ? error.message : 'Prepare failed' };
+    }
+  }
+
+  async videoMatchFrame(sessionId: string): Promise<VideoFrameResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.videoMatchFrame(sessionId),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Video match frame failed:', error);
+      return { success: false, frameIndex: 0, match: null, done: true, error: error instanceof Error ? error.message : 'Match failed' };
+    }
+  }
+
+  async videoStop(sessionId: string): Promise<{ success: boolean }> {
+    try {
+      return await getPlatform().yoloDetection.videoStop(sessionId);
+    } catch (error) {
+      console.error('Video stop failed:', error);
+      return { success: false };
     }
   }
 }

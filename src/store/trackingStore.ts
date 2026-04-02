@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import type { ImageId, TrackingSession, FollicleCorrespondence } from '../types';
 
+interface VideoSessionInfo {
+  sessionId: string;
+  videoFilePath: string;
+  videoFileName: string;
+  fps: number;
+  frameCount: number;
+  videoWidth: number;
+  videoHeight: number;
+}
+
 interface TrackingState {
   /** All tracking sessions */
   sessions: TrackingSession[];
@@ -10,6 +20,9 @@ interface TrackingState {
   isComparisonViewOpen: boolean;
   /** Backend session ID for single-follicle matching */
   backendSessionId: string | null;
+  /** Video tracking state */
+  videoSession: VideoSessionInfo | null;
+  isVideoTrackingOpen: boolean;
 
   // Actions
   addSession: (session: TrackingSession) => void;
@@ -20,6 +33,8 @@ interface TrackingState {
   setBackendSessionId: (id: string | null) => void;
   addCorrespondence: (sessionId: string, correspondence: FollicleCorrespondence) => void;
   updateSession: (sessionId: string, updates: Partial<Pick<TrackingSession, 'targetImageId' | 'correspondences' | 'method'>>) => void;
+  openVideoTracking: (session: VideoSessionInfo) => void;
+  closeVideoTracking: () => void;
   clearAll: () => void;
 
   // Selectors
@@ -32,6 +47,8 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
   activeSessionId: null,
   isComparisonViewOpen: false,
   backendSessionId: null,
+  videoSession: null,
+  isVideoTrackingOpen: false,
 
   addSession: (session) =>
     set((state) => ({
@@ -82,12 +99,20 @@ export const useTrackingStore = create<TrackingState>((set, get) => ({
       ),
     })),
 
+  openVideoTracking: (session) =>
+    set({ videoSession: session, isVideoTrackingOpen: true }),
+
+  closeVideoTracking: () =>
+    set({ videoSession: null, isVideoTrackingOpen: false }),
+
   clearAll: () =>
     set({
       sessions: [],
       activeSessionId: null,
       isComparisonViewOpen: false,
       backendSessionId: null,
+      videoSession: null,
+      isVideoTrackingOpen: false,
     }),
 
   getActiveSession: () => {

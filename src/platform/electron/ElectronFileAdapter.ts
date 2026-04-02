@@ -6,6 +6,7 @@
 import type {
   FileAdapter,
   OpenImageResult,
+  OpenMediaResult,
   OpenFileOptions,
   SaveProjectResult,
   LoadProjectResult,
@@ -15,6 +16,10 @@ import type {
 export class ElectronFileAdapter implements FileAdapter {
   async openImageDialog(): Promise<OpenImageResult | null> {
     return window.electronAPI.openImageDialog();
+  }
+
+  async openMediaFileDialog(): Promise<OpenMediaResult | null> {
+    return window.electronAPI.openMediaFileDialog();
   }
 
   async openFileDialog(options: OpenFileOptions): Promise<OpenImageResult | null> {

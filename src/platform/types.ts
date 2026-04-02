@@ -19,6 +19,8 @@ import type {
   TrackAcrossImagesResult,
   TrackPrepareResult,
   TrackMatchSingleResult,
+  VideoPrepareResult,
+  VideoFrameResult,
 } from '../types';
 
 // ============================================
@@ -34,6 +36,13 @@ export interface OpenImageResult {
 export interface OpenFileOptions {
   filters?: Array<{ name: string; extensions: string[] }>;
   title?: string;
+}
+
+export interface OpenMediaResult {
+  filePath: string;
+  fileName: string;
+  data: ArrayBuffer | null;
+  isVideo: boolean;
 }
 
 export interface SaveProjectResult {
@@ -67,6 +76,7 @@ export interface ProjectImageData {
 export interface FileAdapter {
   /** Open single image dialog (for adding images) */
   openImageDialog(): Promise<OpenImageResult | null>;
+  openMediaFileDialog(): Promise<OpenMediaResult | null>;
 
   /** Open file dialog with filters */
   openFileDialog(options: OpenFileOptions): Promise<OpenImageResult | null>;
@@ -464,6 +474,23 @@ export interface YoloDetectionAdapter {
     follicleHeight: number,
     expectedScale: number,
   ): Promise<TrackMatchSingleResult>;
+
+  /** Prepare a video tracking session */
+  videoPrepare(
+    videoFilePath: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult>;
+
+  /** Match next video frame */
+  videoMatchFrame(sessionId: string): Promise<VideoFrameResult>;
+
+  /** Stop video tracking session */
+  videoStop(sessionId: string): Promise<{ success: boolean }>;
 }
 
 // ============================================

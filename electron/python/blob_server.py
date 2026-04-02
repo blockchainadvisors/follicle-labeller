@@ -1858,6 +1858,16 @@ class TemplateMatchSingleRequest(BaseModel):
     expectedScale: Optional[float] = 1.0
 
 
+class VideoPrepareRequest(BaseModel):
+    videoFilePath: str
+    sourcePatchData: str  # base64-encoded PNG
+    follicleOffsetX: float
+    follicleOffsetY: float
+    follicleWidth: float
+    follicleHeight: float
+    expectedScale: Optional[float] = 1.0
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2225,6 +2235,55 @@ async def yolo_detect_template_match_single(req: TemplateMatchSingleRequest):
         follicle_height=req.follicleHeight,
         expected_scale=req.expectedScale or 1.0,
     )
+
+
+@app.post('/yolo-detect/video-prepare')
+async def yolo_detect_video_prepare(req: VideoPrepareRequest):
+    """
+    Open a video file and cache the source patch for frame-by-frame matching.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    # Decode source patch base64
+    patch_b64 = req.sourcePatchData
+    if ',' in patch_b64:
+        patch_b64 = patch_b64.split(',', 1)[1]
+    patch_bytes = base64.b64decode(patch_b64)
+
+    service = get_yolo_detection_service()
+    return service.prepare_video_session(
+        video_file_path=req.videoFilePath,
+        source_patch_data=patch_bytes,
+        follicle_offset_x=req.follicleOffsetX,
+        follicle_offset_y=req.follicleOffsetY,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
+@app.post('/yolo-detect/video-match-frame/{session_id}')
+async def yolo_detect_video_match_frame(session_id: str):
+    """
+    Read the next video frame, match against the cached source patch,
+    return the result for this single frame.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.match_video_frame(session_id=session_id)
+
+
+@app.post('/yolo-detect/video-stop/{session_id}')
+async def yolo_detect_video_stop(session_id: str):
+    """Release VideoCapture and clean up a video session."""
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.stop_video_session(session_id=session_id)
 
 
 @app.post('/yolo-detect/export-onnx')

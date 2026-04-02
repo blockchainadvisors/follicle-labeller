@@ -378,6 +378,8 @@ declare global {
     electronAPI: {
       // Single image dialog (for adding images)
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
+      // Media file dialog (images + videos)
+      openMediaFileDialog: () => Promise<OpenMediaResult | null>;
       // Generic file dialog with filters
       openFileDialog: (options: {
         filters?: Array<{ name: string; extensions: string[] }>;
@@ -740,6 +742,21 @@ declare global {
           follicleHeight: number,
           expectedScale: number,
         ) => Promise<TrackMatchSingleResult>;
+        videoPrepare: (
+          videoFilePath: string,
+          sourcePatchData: string,
+          follicleOffsetX: number,
+          follicleOffsetY: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          expectedScale: number,
+        ) => Promise<VideoPrepareResult>;
+        videoMatchFrame: (
+          sessionId: string,
+        ) => Promise<VideoFrameResult>;
+        videoStop: (
+          sessionId: string,
+        ) => Promise<{ success: boolean }>;
       };
     };
   }
@@ -1133,6 +1150,46 @@ export interface TrackMatchSingleResult {
     transformedY: number;
   } | null;
   error?: string;
+}
+
+/**
+ * Result from the video-prepare endpoint.
+ */
+export interface VideoPrepareResult {
+  success: boolean;
+  sessionId: string;
+  fps: number;
+  frameCount: number;
+  width: number;
+  height: number;
+  error?: string;
+}
+
+/**
+ * Result from matching a single video frame.
+ */
+export interface VideoFrameResult {
+  success: boolean;
+  frameIndex: number;
+  match: {
+    targetDetection: DetectionPrediction;
+    confidence: number;
+    transformedX: number;
+    transformedY: number;
+  } | null;
+  frameData?: string;  // base64-encoded JPEG of the frame
+  done: boolean;
+  error?: string;
+}
+
+/**
+ * Result from opening a media file (image or video).
+ */
+export interface OpenMediaResult {
+  filePath: string;
+  fileName: string;
+  data: ArrayBuffer | null;
+  isVideo: boolean;
 }
 
 /**
