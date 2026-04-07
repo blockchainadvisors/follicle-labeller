@@ -147,3 +147,15 @@
   height: 10px;
   border-radius: 2px;
 }
+
+.comparison-watermark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 30%;
+  max-height: 40%;
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: 5;
+}

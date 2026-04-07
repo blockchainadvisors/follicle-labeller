@@ -634,6 +634,7 @@ export const ComparisonView: React.FC = () => {
             />
           </svg>
         )}
+        <img src="/kollestee-logo.png" alt="" className="comparison-watermark" />
       </div>
 
       {/* Legend */}

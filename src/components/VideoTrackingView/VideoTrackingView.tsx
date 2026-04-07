@@ -190,6 +190,7 @@ export const VideoTrackingView: React.FC = () => {
       {/* Canvas (frame + overlay drawn together) */}
       <div className="video-tracking-content" ref={contentRef}>
         <canvas ref={canvasRef} />
+        <img src="/kollestee-logo.png" alt="" className="video-tracking-watermark" />
       </div>
 
       {/* Footer */}
