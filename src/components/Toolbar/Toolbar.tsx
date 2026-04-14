@@ -2025,6 +2025,8 @@ export const Toolbar: React.FC = () => {
           frameCount: result.frameCount,
           videoWidth: result.width,
           videoHeight: result.height,
+          sourceImageId: activeImageId,
+          sourceFollicleId: selectedFollicle.id,
         });
       } else {
         // --- Image tracking flow (existing) ---

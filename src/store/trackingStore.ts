@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ImageId, TrackingSession, FollicleCorrespondence } from '../types';
 
-interface VideoSessionInfo {
+export interface VideoSessionInfo {
   sessionId: string;
   videoFilePath: string;
   videoFileName: string;
@@ -9,6 +9,8 @@ interface VideoSessionInfo {
   frameCount: number;
   videoWidth: number;
   videoHeight: number;
+  sourceImageId: ImageId;
+  sourceFollicleId: string;
 }
 
 interface TrackingState {

@@ -1183,6 +1183,16 @@ export interface VideoFrameResult {
 }
 
 /**
+ * Cached entry for client-side video frame scrubbing. The base64 JPEG
+ * string is kept; bitmaps are decoded on demand to keep memory bounded.
+ */
+export interface VideoFrameCacheEntry {
+  frameIndex: number;
+  frameDataB64: string;
+  match: VideoFrameResult['match'];
+}
+
+/**
  * Result from opening a media file (image or video).
  */
 export interface OpenMediaResult {
