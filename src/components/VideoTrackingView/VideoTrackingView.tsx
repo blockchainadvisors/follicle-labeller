@@ -218,17 +218,76 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       ctx.lineWidth = 2 * inv;
       ctx.strokeRect(x, y, w, h);
 
+      // Dual-point tracking: origin and tip come from TWO independent NCC
+      // matches with a rigid-consistency check. When one point fails
+      // (lostPoint set), its position is extrapolated from the other and
+      // rendered in a distinct style so the user can tell the tracker is
+      // guessing.
+      const originLost = frame.match.lostPoint === "origin";
+      const tipLost = frame.match.lostPoint === "tip";
+
+      // Origin marker — stroked ring (+ crosshair when trusted)
       const cx = frame.match.transformedX * sX;
       const cy = frame.match.transformedY * sY;
+
+      ctx.save();
+      ctx.strokeStyle = originLost ? "#FF6B6B" : MATCH_COLOR;
+      ctx.lineWidth = 2 * inv;
+      if (originLost) {
+        ctx.setLineDash([6 * inv, 4 * inv]);
+      }
       ctx.beginPath();
       ctx.arc(cx, cy, 6 * inv, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.restore();
+
+      if (!originLost) {
+        ctx.strokeStyle = MATCH_COLOR;
+        ctx.lineWidth = 2 * inv;
+        ctx.beginPath();
+        ctx.moveTo(cx - 10 * inv, cy);
+        ctx.lineTo(cx + 10 * inv, cy);
+        ctx.moveTo(cx, cy - 10 * inv);
+        ctx.lineTo(cx, cy + 10 * inv);
+        ctx.stroke();
+      }
+
+      // Direction line from origin to tip — drawn BEFORE the tip marker so
+      // the marker sits on top. Teal normally; dashed when either end is
+      // extrapolated so it's clear the line is anchored on a guess.
+      const tx = frame.match.tipX * sX;
+      const ty = frame.match.tipY * sY;
+
+      ctx.save();
+      ctx.strokeStyle = MATCH_COLOR;
+      ctx.lineWidth = 1.5 * inv;
+      if (originLost || tipLost) {
+        ctx.setLineDash([5 * inv, 3 * inv]);
+      }
       ctx.beginPath();
-      ctx.moveTo(cx - 10 * inv, cy);
-      ctx.lineTo(cx + 10 * inv, cy);
-      ctx.moveTo(cx, cy - 10 * inv);
-      ctx.lineTo(cx, cy + 10 * inv);
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(tx, ty);
       ctx.stroke();
+      ctx.restore();
+
+      // Tip marker — filled red dot when trusted, hollow red ring when
+      // extrapolated. Mirrors the "only origin gets the big circle"
+      // convention in CanvasRenderer, with an extra state for lost.
+      ctx.save();
+      if (tipLost) {
+        ctx.strokeStyle = "#FF6B6B";
+        ctx.lineWidth = 1.5 * inv;
+        ctx.setLineDash([3 * inv, 2 * inv]);
+        ctx.beginPath();
+        ctx.arc(tx, ty, 4 * inv, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = "#FF6B6B";
+        ctx.beginPath();
+        ctx.arc(tx, ty, 4 * inv, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
 
     ctx.restore();

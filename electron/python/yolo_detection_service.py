@@ -51,6 +51,23 @@ except ImportError:
     logger.warning("Ultralytics not installed. YOLO training will not be available.")
 
 
+# ============================================================================
+# Dual-point video tracking: rigid consistency check thresholds
+# ----------------------------------------------------------------------------
+# Video tracking runs TWO independent NCC template matches per frame — one for
+# the graft origin and one for the tip. The two matches must stay consistent
+# with the initial origin-to-tip distance (hair grafts are rigid bodies). When
+# the observed origin-to-tip distance deviates from the expected distance by
+# more than `max(RIGID_ABS_TOLERANCE_PX, RIGID_REL_TOLERANCE * expected_dist)`,
+# the lower-confidence match is rejected and its point is extrapolated from
+# the trusted one using the source-image dx/dy relationship.
+#
+# Tune these if tracking is too aggressive or too forgiving.
+# ============================================================================
+RIGID_REL_TOLERANCE = 0.20    # 20% of expected distance
+RIGID_ABS_TOLERANCE_PX = 5.0  # absolute floor, pixels
+
+
 @dataclass
 class DetectionTrainingConfig:
     """Configuration for YOLO detection training."""
@@ -2204,8 +2221,8 @@ class YOLODetectionService:
     ) -> Optional[Dict[str, Any]]:
         """
         Core 3-pass NCC matching: coarse → medium → fine.
-        Shared by template_match_single and match_video_frame.
-        Returns match dict or None.
+        Shared by template_match_single and match_video_frame's per-patch
+        helper. Returns a single-point match dict or None.
         """
         NCC_FLOOR = 0.3
         MIN_TEMPLATE_DIM = 12
@@ -2345,6 +2362,7 @@ class YOLODetectionService:
             'confidence': round(best_fine_score, 4),
             'transformedX': round(target_cx, 2),
             'transformedY': round(target_cy, 2),
+            'matchScale': float(best_fine_scale),
         }
 
     def template_match_single(
@@ -2452,20 +2470,179 @@ class YOLODetectionService:
         logger.info(f"Auto-calibrated scale: {fine_best_scale:.2f} (ncc={fine_best_score:.3f})")
         return fine_best_scale
 
+    # ------------------------------------------------------------------
+    # Dual-point video tracking helpers
+    # ------------------------------------------------------------------
+
+    def _match_one_patch_in_frame(
+        self,
+        patch: np.ndarray,
+        frame_gray: np.ndarray,
+        point_in_patch_x: float,
+        point_in_patch_y: float,
+        prev_cx: Optional[float],
+        prev_cy: Optional[float],
+        prev_scale: float,
+        expected_scale: float,
+        follicle_width: float,
+        follicle_height: float,
+        get_pyramid: Callable[[], list],
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[float], Optional[float], Optional[float]]:
+        """
+        Match one patch against one video frame. Uses fast temporal
+        prediction (_local_match) when prev_cx/cy are available, falls back
+        to full pyramid NCC on failure or at frame 0.
+
+        Returns (match_dict or None, new_cx, new_cy, new_scale).
+        On failure, returns (None, None, None, None).
+
+        ``get_pyramid`` is a zero-arg callable that lazily builds and caches
+        the target pyramid so both patch matches in a frame share one
+        pyramid without building it unless a full search is actually needed.
+        """
+        # Fast path: temporal prediction
+        if prev_cx is not None and prev_cy is not None:
+            match, new_cx, new_cy, new_scale = self._local_match(
+                patch, frame_gray,
+                point_in_patch_x, point_in_patch_y,
+                prev_cx, prev_cy, prev_scale,
+                follicle_width, follicle_height,
+            )
+            if match is not None:
+                return match, new_cx, new_cy, new_scale
+            # Local match failed — fall through to full pyramid
+
+        # Slow path: full 3-pass pyramid NCC
+        target_pyramid = get_pyramid()
+        match = self._ncc_match_in_pyramid(
+            patch, target_pyramid,
+            point_in_patch_x, point_in_patch_y,
+            follicle_width, follicle_height,
+            expected_scale,
+        )
+        if match is None:
+            return None, None, None, None
+
+        return (
+            match,
+            float(match['transformedX']),
+            float(match['transformedY']),
+            float(match.get('matchScale', expected_scale)),
+        )
+
+    @staticmethod
+    def _rigid_check(
+        origin_match: Optional[Dict[str, Any]],
+        tip_match: Optional[Dict[str, Any]],
+        initial_dist: float,
+        expected_scale: float,
+    ) -> str:
+        """
+        Verify that the two independent matches are geometrically consistent
+        with the initial origin-to-tip distance. Returns one of:
+          'both'         — both matches are trustworthy
+          'origin_only'  — tip match is untrustworthy, keep origin
+          'tip_only'     — origin match is untrustworthy, keep tip
+          'neither'      — both failed
+        """
+        if origin_match is None and tip_match is None:
+            return 'neither'
+        if origin_match is None:
+            return 'tip_only'
+        if tip_match is None:
+            return 'origin_only'
+
+        ox = float(origin_match['transformedX'])
+        oy = float(origin_match['transformedY'])
+        tx = float(tip_match['transformedX'])
+        ty = float(tip_match['transformedY'])
+        observed_dist = float(np.hypot(tx - ox, ty - oy))
+        expected_dist = initial_dist * expected_scale
+        tolerance = max(
+            RIGID_ABS_TOLERANCE_PX,
+            RIGID_REL_TOLERANCE * expected_dist,
+        )
+
+        if abs(observed_dist - expected_dist) <= tolerance:
+            return 'both'
+
+        # Rigid check failed — reject the lower-confidence match
+        origin_conf = float(origin_match['confidence'])
+        tip_conf = float(tip_match['confidence'])
+        if origin_conf >= tip_conf:
+            return 'origin_only'
+        else:
+            return 'tip_only'
+
+    @staticmethod
+    def _extrapolate_from_trusted(
+        trusted_cx: float,
+        trusted_cy: float,
+        trusted_scale: float,
+        initial_dx: float,
+        initial_dy: float,
+        extrapolate_tip: bool,
+    ) -> Tuple[float, float]:
+        """
+        Reconstruct a failed point's position from the trusted point using
+        the initial source-image origin→tip relationship, scaled by the
+        trusted point's current match scale.
+
+        ``initial_dx/dy`` is ``(tipX - originX, tipY - originY)`` measured
+        in source-image pixels when the session was prepared.
+
+        If ``extrapolate_tip`` is True, we assume the tip failed and the
+        origin is trusted:   tip = origin + initial_delta * scale.
+        Otherwise we assume the origin failed and the tip is trusted:
+                              origin = tip   - initial_delta * scale.
+
+        This extrapolation uses the initial direction vector and therefore
+        will be wrong under camera rotation — but the rescue strategy is
+        that the failed patch's prev_* state is cleared so the next frame
+        will attempt a full pyramid search and re-acquire at its true
+        position once it can be found again.
+        """
+        if extrapolate_tip:
+            return (
+                trusted_cx + initial_dx * trusted_scale,
+                trusted_cy + initial_dy * trusted_scale,
+            )
+        else:
+            return (
+                trusted_cx - initial_dx * trusted_scale,
+                trusted_cy - initial_dy * trusted_scale,
+            )
+
     def prepare_video_session(
         self,
         video_file_path: str,
-        source_patch_data: bytes,
-        follicle_offset_x: float,
-        follicle_offset_y: float,
+        origin_patch_data: bytes,
+        tip_patch_data: bytes,
+        origin_in_origin_patch_x: float,
+        origin_in_origin_patch_y: float,
+        tip_in_tip_patch_x: float,
+        tip_in_tip_patch_y: float,
+        initial_dx: float,
+        initial_dy: float,
         follicle_width: float,
         follicle_height: float,
         expected_scale: float = 1.0,
     ) -> Dict[str, Any]:
         """
-        Open a video file and cache the source patch for frame-by-frame matching.
-        Auto-calibrates the true scale by matching the source patch against the
-        first video frame across a wide range of scales.
+        Open a video file and cache TWO source patches for dual-point
+        frame-by-frame matching: one centered on the graft origin, one
+        centered on the graft tip. Each patch is matched independently per
+        frame; a rigid-consistency check validates that the two matches
+        stay geometrically aligned with the source-image relationship.
+
+        ``initial_dx`` / ``initial_dy`` = ``(tipX - originX, tipY - originY)``
+        in source-image pixels, used for the rigid check and as the
+        extrapolation delta when one point is lost.
+
+        Auto-calibrates the true scale by matching the ORIGIN patch against
+        the first video frame. One calibrated scale is used for both
+        patches — hair graft texture is locally uniform, so a single scale
+        suffices in practice.
         """
         try:
             cap = cv2.VideoCapture(video_file_path)
@@ -2477,12 +2654,18 @@ class YOLODetectionService:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            # Decode source patch
-            patch_array = np.frombuffer(source_patch_data, dtype=np.uint8)
-            patch_gray = cv2.imdecode(patch_array, cv2.IMREAD_GRAYSCALE)
-            if patch_gray is None or patch_gray.size == 0:
+            # Decode both patches
+            origin_arr = np.frombuffer(origin_patch_data, dtype=np.uint8)
+            origin_patch = cv2.imdecode(origin_arr, cv2.IMREAD_GRAYSCALE)
+            if origin_patch is None or origin_patch.size == 0:
                 cap.release()
-                return {'success': False, 'error': 'Invalid source patch data'}
+                return {'success': False, 'error': 'Invalid origin patch data'}
+
+            tip_arr = np.frombuffer(tip_patch_data, dtype=np.uint8)
+            tip_patch = cv2.imdecode(tip_arr, cv2.IMREAD_GRAYSCALE)
+            if tip_patch is None or tip_patch.size == 0:
+                cap.release()
+                return {'success': False, 'error': 'Invalid tip patch data'}
 
             # Read first frame for auto-calibration
             ret, first_frame = cap.read()
@@ -2492,13 +2675,15 @@ class YOLODetectionService:
 
             first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
 
-            # Auto-calibrate: find the true scale by scanning the source patch
-            # against the first frame. This handles different fields of view,
-            # crops, and zoom levels between the source image and video.
-            calibrated_scale = self._auto_calibrate_scale(patch_gray, first_gray)
+            # Auto-calibrate scale using the ORIGIN patch only. This handles
+            # different fields of view / crops / zoom levels between source
+            # and video. One scale for both patches.
+            calibrated_scale = self._auto_calibrate_scale(origin_patch, first_gray)
 
             # Reset video to start (frame 0 was consumed for calibration)
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+            initial_dist = float(np.hypot(initial_dx, initial_dy))
 
             session_id = str(uuid.uuid4())
             self._tracking_sessions[session_id] = {
@@ -2508,26 +2693,47 @@ class YOLODetectionService:
                 'frame_count': frame_count,
                 'width': width,
                 'height': height,
-                'source_patch_gray': patch_gray,
-                'follicle_offset_x': follicle_offset_x,
-                'follicle_offset_y': follicle_offset_y,
+
+                # Two patches, one per tracked point
+                'origin_patch_gray': origin_patch,
+                'tip_patch_gray': tip_patch,
+
+                # Where each point sits inside its own patch (≈ patch
+                # center unless edge-clipped at the source image boundary)
+                'origin_in_origin_patch_x': float(origin_in_origin_patch_x),
+                'origin_in_origin_patch_y': float(origin_in_origin_patch_y),
+                'tip_in_tip_patch_x': float(tip_in_tip_patch_x),
+                'tip_in_tip_patch_y': float(tip_in_tip_patch_y),
+
                 'follicle_width': follicle_width,
                 'follicle_height': follicle_height,
+
+                # Initial rigid relationship in source-image pixels
+                'initial_dx': float(initial_dx),
+                'initial_dy': float(initial_dy),
+                'initial_dist': initial_dist,
+
                 'expected_scale': calibrated_scale,
                 'current_frame': 0,
-                # Temporal prediction state
-                'prev_cx': None,   # previous match center X (full-res)
-                'prev_cy': None,   # previous match center Y (full-res)
-                'prev_scale': calibrated_scale,
+
+                # Temporal prediction state — one per patch
+                'prev_origin_cx': None,
+                'prev_origin_cy': None,
+                'prev_origin_scale': calibrated_scale,
+                'prev_tip_cx': None,
+                'prev_tip_cy': None,
+                'prev_tip_scale': calibrated_scale,
+
                 # Pipelined frame reading
                 'next_frame': None,
                 '_executor': None,
             }
 
             logger.info(
-                f"Video session {session_id} prepared: "
+                f"Video session {session_id} prepared (dual-point): "
                 f"{width}x{height} @ {fps:.1f}fps, {frame_count} frames, "
-                f"calibrated_scale={calibrated_scale:.2f}"
+                f"calibrated_scale={calibrated_scale:.2f}, "
+                f"initial_dist={initial_dist:.1f}px"
             )
 
             return {
@@ -2549,11 +2755,22 @@ class YOLODetectionService:
         ret, frame = cap.read()
         return (ret, frame)
 
-    def _local_match(self, patch, frame_gray, prev_cx, prev_cy, prev_scale,
+    def _local_match(self, patch, frame_gray,
+                     point_in_patch_x: float, point_in_patch_y: float,
+                     prev_cx, prev_cy, prev_scale,
                      follicle_width, follicle_height, search_radius=300):
         """
         Fast local-window NCC match around the previous position.
         Used for temporal prediction after frame 0.
+
+        ``point_in_patch_x/y`` is the coordinate of the tracked point within
+        the source patch (typically the patch center, or shifted when the
+        source crop was clipped by the image edge). The returned match dict's
+        ``transformedX/Y`` is the video-frame position of that point — i.e.
+        the matched patch top-left plus ``point_in_patch * best_scale`` —
+        NOT the patch center. This keeps the semantics of transformedX/Y
+        consistent with ``_ncc_match_in_pyramid``.
+
         Returns (match_dict_or_None, new_cx, new_cy, new_scale).
         """
         fh, fw = frame_gray.shape
@@ -2580,15 +2797,20 @@ class YOLODetectionService:
         if best_loc is None or best_score < NCC_FLOOR:
             return None, prev_cx, prev_cy, prev_scale
 
-        scaled_w = int(patch.shape[1] * best_s)
-        scaled_h = int(patch.shape[0] * best_s)
-        new_cx = lx1 + best_loc[0] + scaled_w / 2.0
-        new_cy = ly1 + best_loc[1] + scaled_h / 2.0
+        # Matched patch top-left in full-resolution video coordinates.
+        patch_tl_x = lx1 + best_loc[0]
+        patch_tl_y = ly1 + best_loc[1]
+
+        # Tracked point position in video coordinates. Uses the explicit
+        # point-in-patch offset so edge-clipped crops still yield the correct
+        # point location (rather than the patch center).
+        new_cx = patch_tl_x + point_in_patch_x * best_s
+        new_cy = patch_tl_y + point_in_patch_y * best_s
 
         target_w = follicle_width * best_s
         target_h = follicle_height * best_s
 
-        match_result = {
+        match_result: Dict[str, Any] = {
             'targetDetection': {
                 'x': round(new_cx - target_w / 2.0, 2),
                 'y': round(new_cy - target_h / 2.0, 2),
@@ -2601,16 +2823,19 @@ class YOLODetectionService:
             'confidence': round(best_score, 4),
             'transformedX': round(new_cx, 2),
             'transformedY': round(new_cy, 2),
+            'matchScale': float(best_s),
         }
         return match_result, new_cx, new_cy, best_s
 
     def match_video_frame(self, session_id: str) -> Dict[str, Any]:
         """
-        Read the next frame and match. Uses temporal prediction:
-        - Frame 0: full 3-pass pyramid NCC (coarse→medium→fine)
-        - Frames 1+: fast local-window NCC around previous position
-        If local match fails (NCC < 0.3), falls back to full search.
-        Pipelined frame reading overlaps I/O with matching.
+        Read the next frame and match both the origin and tip patches
+        independently, then run a rigid-consistency check to reject the
+        weaker match when the two disagree geometrically. When exactly one
+        point fails, its position is extrapolated from the trusted one
+        using the initial source-image delta, and its temporal prediction
+        state is cleared so the next frame will re-acquire via a full
+        pyramid search. Pipelined frame reading overlaps I/O with matching.
         """
         session = self._tracking_sessions.get(session_id)
         if session is None:
@@ -2658,47 +2883,137 @@ class YOLODetectionService:
             frame_jpeg_b64 = base64.b64encode(jpeg_buf).decode('ascii')
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            patch = session['source_patch_gray']
-            prev_cx = session.get('prev_cx')
-            prev_cy = session.get('prev_cy')
-            prev_scale = session.get('prev_scale', session['expected_scale'])
+            expected_scale = session['expected_scale']
 
-            match = None
+            # Lazily build the target pyramid only when a full search is
+            # actually needed. Both patches share the one pyramid.
+            cached_pyramid: list = []
 
-            if prev_cx is not None and prev_cy is not None:
-                # Temporal prediction: fast local window search
-                match, new_cx, new_cy, new_scale = self._local_match(
-                    patch, gray, prev_cx, prev_cy, prev_scale,
-                    session['follicle_width'], session['follicle_height']
+            def get_pyramid():
+                if not cached_pyramid:
+                    l1 = cv2.pyrDown(gray)
+                    l2 = cv2.pyrDown(l1)
+                    l3 = cv2.pyrDown(l2)
+                    l4 = cv2.pyrDown(l3)
+                    cached_pyramid.append(gray)
+                    cached_pyramid.append(l1)
+                    cached_pyramid.append(l2)
+                    cached_pyramid.append(l3)
+                    cached_pyramid.append(l4)
+                return cached_pyramid
+
+            # Match origin patch
+            origin_match, o_cx, o_cy, o_scale = self._match_one_patch_in_frame(
+                session['origin_patch_gray'], gray,
+                session['origin_in_origin_patch_x'],
+                session['origin_in_origin_patch_y'],
+                session.get('prev_origin_cx'),
+                session.get('prev_origin_cy'),
+                session.get('prev_origin_scale', expected_scale),
+                expected_scale,
+                session['follicle_width'], session['follicle_height'],
+                get_pyramid,
+            )
+
+            # Match tip patch
+            tip_match, t_cx, t_cy, t_scale = self._match_one_patch_in_frame(
+                session['tip_patch_gray'], gray,
+                session['tip_in_tip_patch_x'],
+                session['tip_in_tip_patch_y'],
+                session.get('prev_tip_cx'),
+                session.get('prev_tip_cy'),
+                session.get('prev_tip_scale', expected_scale),
+                expected_scale,
+                session['follicle_width'], session['follicle_height'],
+                get_pyramid,
+            )
+
+            # Rigid consistency check
+            status = self._rigid_check(
+                origin_match, tip_match,
+                session['initial_dist'], expected_scale,
+            )
+
+            # Combine results based on status
+            final_origin_xy = None
+            final_tip_xy = None
+            lost_point: Optional[str] = None
+
+            if status == 'both':
+                final_origin_xy = (o_cx, o_cy)
+                final_tip_xy = (t_cx, t_cy)
+                session['prev_origin_cx'] = o_cx
+                session['prev_origin_cy'] = o_cy
+                session['prev_origin_scale'] = o_scale
+                session['prev_tip_cx'] = t_cx
+                session['prev_tip_cy'] = t_cy
+                session['prev_tip_scale'] = t_scale
+
+            elif status == 'origin_only':
+                # Origin is trusted; extrapolate tip from origin using initial delta
+                final_origin_xy = (o_cx, o_cy)
+                final_tip_xy = self._extrapolate_from_trusted(
+                    o_cx, o_cy, o_scale,
+                    session['initial_dx'], session['initial_dy'],
+                    extrapolate_tip=True,
                 )
+                session['prev_origin_cx'] = o_cx
+                session['prev_origin_cy'] = o_cy
+                session['prev_origin_scale'] = o_scale
+                # Clear tip prev state so next frame attempts a full pyramid search
+                session['prev_tip_cx'] = None
+                session['prev_tip_cy'] = None
+                session['prev_tip_scale'] = expected_scale
+                lost_point = 'tip'
 
-                if match is not None:
-                    session['prev_cx'] = new_cx
-                    session['prev_cy'] = new_cy
-                    session['prev_scale'] = new_scale
-
-            if match is None:
-                # Frame 0 or local match failed: full pyramid search
-                l1 = cv2.pyrDown(gray)
-                l2 = cv2.pyrDown(l1)
-                l3 = cv2.pyrDown(l2)
-                l4 = cv2.pyrDown(l3)
-                target_pyramid = [gray, l1, l2, l3, l4]
-
-                match = self._ncc_match_in_pyramid(
-                    patch, target_pyramid,
-                    session['follicle_offset_x'],
-                    session['follicle_offset_y'],
-                    session['follicle_width'],
-                    session['follicle_height'],
-                    session['expected_scale'],
+            elif status == 'tip_only':
+                # Tip is trusted; extrapolate origin from tip using initial delta
+                final_tip_xy = (t_cx, t_cy)
+                final_origin_xy = self._extrapolate_from_trusted(
+                    t_cx, t_cy, t_scale,
+                    session['initial_dx'], session['initial_dy'],
+                    extrapolate_tip=False,
                 )
+                session['prev_tip_cx'] = t_cx
+                session['prev_tip_cy'] = t_cy
+                session['prev_tip_scale'] = t_scale
+                session['prev_origin_cx'] = None
+                session['prev_origin_cy'] = None
+                session['prev_origin_scale'] = expected_scale
+                lost_point = 'origin'
 
-                # Update temporal prediction state from full match
-                if match is not None:
-                    session['prev_cx'] = match['transformedX']
-                    session['prev_cy'] = match['transformedY']
-                    session['prev_scale'] = session['expected_scale']
+            else:  # 'neither'
+                # Wait for pipelined frame read before bailing out
+                try:
+                    session['next_frame'] = future.result(timeout=5)
+                except Exception:
+                    session['next_frame'] = None
+                return {
+                    'success': True,
+                    'frameIndex': frame_index,
+                    'match': None,
+                    'frameData': frame_jpeg_b64,
+                    'done': False,
+                }
+
+            # Assemble the combined match dict. The bbox comes from whichever
+            # of the two matches is available (prefer origin when both are).
+            bbox_source = origin_match if origin_match is not None else tip_match
+            origin_conf = float(origin_match['confidence']) if origin_match is not None else 0.0
+            tip_conf = float(tip_match['confidence']) if tip_match is not None else 0.0
+
+            final_match = {
+                'targetDetection': bbox_source['targetDetection'],
+                'confidence': round(min(origin_conf, tip_conf) if (origin_match and tip_match) else max(origin_conf, tip_conf), 4),
+                'transformedX': round(float(final_origin_xy[0]), 2),
+                'transformedY': round(float(final_origin_xy[1]), 2),
+                'tipX': round(float(final_tip_xy[0]), 2),
+                'tipY': round(float(final_tip_xy[1]), 2),
+                'originConfidence': round(origin_conf, 4),
+                'tipConfidence': round(tip_conf, 4),
+                'rigidValid': status == 'both',
+                'lostPoint': lost_point,
+            }
 
             # Wait for pipelined frame read
             try:
@@ -2709,7 +3024,7 @@ class YOLODetectionService:
             return {
                 'success': True,
                 'frameIndex': frame_index,
-                'match': match,
+                'match': final_match,
                 'frameData': frame_jpeg_b64,
                 'done': False,
             }

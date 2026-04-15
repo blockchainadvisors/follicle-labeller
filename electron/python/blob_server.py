@@ -1859,10 +1859,21 @@ class TemplateMatchSingleRequest(BaseModel):
 
 
 class VideoPrepareRequest(BaseModel):
+    """
+    Dual-point video tracking session setup. Two independent NCC template
+    patches are sent — one centered on the graft origin, one on the graft
+    tip — plus the initial source-image delta between them used for the
+    rigid-consistency check at match time.
+    """
     videoFilePath: str
-    sourcePatchData: str  # base64-encoded PNG
-    follicleOffsetX: float
-    follicleOffsetY: float
+    originPatchData: str          # base64-encoded PNG, centered on origin
+    tipPatchData: str             # base64-encoded PNG, centered on tip
+    originInOriginPatchX: float   # origin position within the origin patch
+    originInOriginPatchY: float
+    tipInTipPatchX: float         # tip position within the tip patch
+    tipInTipPatchY: float
+    initialDx: float              # tipX - originX in source-image pixels
+    initialDy: float              # tipY - originY in source-image pixels
     follicleWidth: float
     follicleHeight: float
     expectedScale: Optional[float] = 1.0
@@ -2240,27 +2251,36 @@ async def yolo_detect_template_match_single(req: TemplateMatchSingleRequest):
 @app.post('/yolo-detect/video-prepare')
 async def yolo_detect_video_prepare(req: VideoPrepareRequest):
     """
-    Open a video file and cache the source patch for frame-by-frame matching.
+    Open a video file and cache BOTH origin and tip source patches for
+    dual-point frame-by-frame NCC matching with a rigid-consistency check.
     """
     if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
         raise HTTPException(status_code=503, detail='YOLO detection service not available')
 
-    # Decode source patch base64
-    patch_b64 = req.sourcePatchData
-    if ',' in patch_b64:
-        patch_b64 = patch_b64.split(',', 1)[1]
-    patch_bytes = base64.b64decode(patch_b64)
+    def _strip_and_decode(b64: str) -> bytes:
+        if ',' in b64:
+            b64 = b64.split(',', 1)[1]
+        return base64.b64decode(b64)
+
+    origin_bytes = _strip_and_decode(req.originPatchData)
+    tip_bytes = _strip_and_decode(req.tipPatchData)
 
     service = get_yolo_detection_service()
     return service.prepare_video_session(
         video_file_path=req.videoFilePath,
-        source_patch_data=patch_bytes,
-        follicle_offset_x=req.follicleOffsetX,
-        follicle_offset_y=req.follicleOffsetY,
+        origin_patch_data=origin_bytes,
+        tip_patch_data=tip_bytes,
+        origin_in_origin_patch_x=req.originInOriginPatchX,
+        origin_in_origin_patch_y=req.originInOriginPatchY,
+        tip_in_tip_patch_x=req.tipInTipPatchX,
+        tip_in_tip_patch_y=req.tipInTipPatchY,
+        initial_dx=req.initialDx,
+        initial_dy=req.initialDy,
         follicle_width=req.follicleWidth,
         follicle_height=req.follicleHeight,
         expected_scale=req.expectedScale or 1.0,
     )
+
 
 
 @app.post('/yolo-detect/video-match-frame/{session_id}')

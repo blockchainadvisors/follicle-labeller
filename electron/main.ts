@@ -2086,15 +2086,20 @@ ipcMain.handle(
   }
 );
 
-// Prepare a video tracking session
+// Prepare a dual-point video tracking session
 ipcMain.handle(
   "yolo-detection:videoPrepare",
   async (
     _,
     videoFilePath: string,
-    sourcePatchData: string,
-    follicleOffsetX: number,
-    follicleOffsetY: number,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
@@ -2102,7 +2107,20 @@ ipcMain.handle(
     return makeBlobServerRequest(
       "/yolo-detect/video-prepare",
       "POST",
-      { videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale },
+      {
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      },
       30000
     );
   }

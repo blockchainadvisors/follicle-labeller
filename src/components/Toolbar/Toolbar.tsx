@@ -1975,42 +1975,85 @@ export const Toolbar: React.FC = () => {
         const rect = selectedFollicle as RectangleAnnotation;
         const origin = rect.origin!;
 
-        // Crop source patch around origin (same logic as ComparisonView)
+        // Dual-point video tracking (two-NCC + rigid consistency check):
+        // crop TWO independent 5×-context patches from the source image —
+        // one centered on the graft origin, one centered on the graft tip.
+        // Each patch is matched independently per frame; the backend
+        // validates that the two matches stay rigidly consistent with the
+        // initial origin→tip delta we compute here.
         const CONTEXT_MULT = 5.0;
-        const srcCx = origin.originPoint.x;
-        const srcCy = origin.originPoint.y;
+        const originX = origin.originPoint.x;
+        const originY = origin.originPoint.y;
+        const tipSrcX = originX + Math.cos(origin.directionAngle) * origin.directionLength;
+        const tipSrcY = originY + Math.sin(origin.directionAngle) * origin.directionLength;
+
         const halfW = (rect.width * CONTEXT_MULT) / 2;
         const halfH = (rect.height * CONTEXT_MULT) / 2;
         const imgW = activeImage.width;
         const imgH = activeImage.height;
-        const cropX = Math.max(0, Math.floor(srcCx - halfW));
-        const cropY = Math.max(0, Math.floor(srcCy - halfH));
-        const cropX2 = Math.min(imgW, Math.ceil(srcCx + halfW));
-        const cropY2 = Math.min(imgH, Math.ceil(srcCy + halfH));
-        const cropW = cropX2 - cropX;
-        const cropH = cropY2 - cropY;
-        const offsetX = srcCx - cropX;
-        const offsetY = srcCy - cropY;
 
-        const canvas = new OffscreenCanvas(cropW, cropH);
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(activeImage.imageBitmap, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-        const blob = await canvas.convertToBlob({ type: "image/png" });
-        const arrayBuf = await blob.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuf);
-        const chunks: string[] = [];
-        for (let i = 0; i < bytes.length; i += 0x8000) {
-          chunks.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))));
-        }
-        const patchBase64 = `data:image/png;base64,${btoa(chunks.join(""))}`;
+        // Crop one patch centered on (cx, cy) in the source image, clamped
+        // to image bounds. Returns the base64 PNG plus the point's offset
+        // within the (possibly clipped) crop — consumed by the backend as
+        // the fc_ox/fc_oy for that patch's NCC match.
+        const cropPatchBase64 = async (
+          cx: number,
+          cy: number,
+        ): Promise<{ data: string; offsetX: number; offsetY: number }> => {
+          const cropX = Math.max(0, Math.floor(cx - halfW));
+          const cropY = Math.max(0, Math.floor(cy - halfH));
+          const cropX2 = Math.min(imgW, Math.ceil(cx + halfW));
+          const cropY2 = Math.min(imgH, Math.ceil(cy + halfH));
+          const cropW = cropX2 - cropX;
+          const cropH = cropY2 - cropY;
+          const canvas = new OffscreenCanvas(cropW, cropH);
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(
+            activeImage.imageBitmap,
+            cropX, cropY, cropW, cropH,
+            0, 0, cropW, cropH,
+          );
+          const blob = await canvas.convertToBlob({ type: "image/png" });
+          const arrayBuf = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuf);
+          const chunks: string[] = [];
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            chunks.push(
+              String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))),
+            );
+          }
+          return {
+            data: `data:image/png;base64,${btoa(chunks.join(""))}`,
+            offsetX: cx - cropX,
+            offsetY: cy - cropY,
+          };
+        };
+
+        const originPatch = await cropPatchBase64(originX, originY);
+        const tipPatch = await cropPatchBase64(tipSrcX, tipSrcY);
+
+        // Initial rigid relationship in source-image pixels — consumed by
+        // the backend's rigid-consistency check and extrapolation fallback.
+        const initialDx = tipSrcX - originX;
+        const initialDy = tipSrcY - originY;
 
         // Expected scale: assume video has same resolution as source for now
         // (will be refined when video metadata comes back)
         const expectedScale = 1.0;
 
         const result = await follicleTrackingService.videoPrepare(
-          fileResult.filePath, patchBase64, offsetX, offsetY,
-          rect.width, rect.height, expectedScale
+          fileResult.filePath,
+          originPatch.data,
+          tipPatch.data,
+          originPatch.offsetX,
+          originPatch.offsetY,
+          tipPatch.offsetX,
+          tipPatch.offsetY,
+          initialDx,
+          initialDy,
+          rect.width,
+          rect.height,
+          expectedScale,
         );
 
         if (!result.success) {

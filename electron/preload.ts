@@ -924,17 +924,36 @@ const electronAPI = {
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
 
-    // Video tracking
+    // Video tracking (dual-point: two NCC patches + rigid consistency check)
     videoPrepare: (
       videoFilePath: string,
-      sourcePatchData: string,
-      follicleOffsetX: number,
-      follicleOffsetY: number,
+      originPatchData: string,
+      tipPatchData: string,
+      originInOriginPatchX: number,
+      originInOriginPatchY: number,
+      tipInTipPatchX: number,
+      tipInTipPatchY: number,
+      initialDx: number,
+      initialDy: number,
       follicleWidth: number,
       follicleHeight: number,
       expectedScale: number,
     ): Promise<Record<string, unknown>> =>
-      ipcRenderer.invoke("yolo-detection:videoPrepare", videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
+      ipcRenderer.invoke(
+        "yolo-detection:videoPrepare",
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      ),
 
     videoMatchFrame: (
       sessionId: string,

@@ -744,9 +744,14 @@ declare global {
         ) => Promise<TrackMatchSingleResult>;
         videoPrepare: (
           videoFilePath: string,
-          sourcePatchData: string,
-          follicleOffsetX: number,
-          follicleOffsetY: number,
+          originPatchData: string,
+          tipPatchData: string,
+          originInOriginPatchX: number,
+          originInOriginPatchY: number,
+          tipInTipPatchX: number,
+          tipInTipPatchY: number,
+          initialDx: number,
+          initialDy: number,
           follicleWidth: number,
           follicleHeight: number,
           expectedScale: number,
@@ -1167,6 +1172,23 @@ export interface VideoPrepareResult {
 
 /**
  * Result from matching a single video frame.
+ *
+ * Dual-point tracking runs TWO independent NCC template matches per frame
+ * (one for the origin patch, one for the tip patch) and validates that the
+ * two positions stay geometrically consistent with the initial source-image
+ * relationship. The returned shape carries both points plus per-point
+ * confidences, a `rigidValid` flag, and `lostPoint` indicating which (if
+ * any) point was extrapolated from the other when NCC failed or the rigid
+ * check rejected it.
+ *
+ * - `transformedX/Y` — origin in full-resolution video coordinates
+ * - `tipX/tipY` — tip in full-resolution video coordinates
+ * - `originConfidence` / `tipConfidence` — per-point NCC score (0 if lost)
+ * - `rigidValid` — true only when both points matched AND passed the
+ *    distance check
+ * - `lostPoint` — `'origin'` | `'tip'` | `null`; the lost point's position
+ *    is extrapolated from the trusted one using the initial source-image
+ *    delta and should be rendered as "guessed" in the UI
  */
 export interface VideoFrameResult {
   success: boolean;
@@ -1176,6 +1198,12 @@ export interface VideoFrameResult {
     confidence: number;
     transformedX: number;
     transformedY: number;
+    tipX: number;
+    tipY: number;
+    originConfidence: number;
+    tipConfidence: number;
+    rigidValid: boolean;
+    lostPoint: 'origin' | 'tip' | null;
   } | null;
   frameData?: string;  // base64-encoded JPEG of the frame
   done: boolean;

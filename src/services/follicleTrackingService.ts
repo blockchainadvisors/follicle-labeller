@@ -210,9 +210,14 @@ export class FollicleTrackingService {
 
   async videoPrepare(
     videoFilePath: string,
-    sourcePatchData: string,
-    follicleOffsetX: number,
-    follicleOffsetY: number,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number = 1.0,
@@ -220,7 +225,18 @@ export class FollicleTrackingService {
     try {
       return await withRetry(
         () => getPlatform().yoloDetection.videoPrepare(
-          videoFilePath, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
+          videoFilePath,
+          originPatchData,
+          tipPatchData,
+          originInOriginPatchX,
+          originInOriginPatchY,
+          tipInTipPatchX,
+          tipInTipPatchY,
+          initialDx,
+          initialDy,
+          follicleWidth,
+          follicleHeight,
+          expectedScale,
         ),
         { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
       );

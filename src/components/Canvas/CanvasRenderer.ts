@@ -259,7 +259,7 @@ export class CanvasRenderer {
              originPoint.x <= visibleBounds.right + margin &&
              originPoint.y >= visibleBounds.top - margin &&
              originPoint.y <= visibleBounds.bottom + margin)) {
-          this.drawOriginArrow(origin, scale, originPunchDiameter);
+          this.drawOriginArrow(origin, scale, originPunchDiameter, visibleBounds);
         }
       }
     }
@@ -273,7 +273,8 @@ export class CanvasRenderer {
   private drawOriginArrow(
     origin: FollicleOrigin,
     scale: number,
-    punchDiameter: number = 30
+    punchDiameter: number = 30,
+    visibleBounds?: { left: number; top: number; right: number; bottom: number }
   ): void {
     const { originPoint, directionAngle, directionLength } = origin;
 
@@ -288,47 +289,77 @@ export class CanvasRenderer {
     // Skip drawing if punch circle would be smaller than 2 screen pixels
     if (punchRadius * scale < 2) return;
 
-    // Arrow line and direction
-    const len = Math.min(directionLength, 40);
-    const endX = originPoint.x + Math.cos(directionAngle) * len;
-    const endY = originPoint.y + Math.sin(directionAngle) * len;
+    // True predicted tip (unclamped). Both the arrow head and the new
+    // ending-point marker use this; keypoint 1 from the YOLO keypoint
+    // head is encoded into directionAngle + directionLength upstream, so
+    // this is the raw predicted tip in image pixels.
+    const tipX = originPoint.x + Math.cos(directionAngle) * directionLength;
+    const tipY = originPoint.y + Math.sin(directionAngle) * directionLength;
 
-    // Draw arrow line first (under the circle)
+    // Draw arrow line first (under the circles)
     this.ctx.strokeStyle = '#4ECDC4';
     this.ctx.lineWidth = lineWidth;
     this.ctx.beginPath();
     this.ctx.moveTo(originPoint.x, originPoint.y);
-    this.ctx.lineTo(endX, endY);
+    this.ctx.lineTo(tipX, tipY);
     this.ctx.stroke();
 
     // Arrow head
     this.ctx.beginPath();
-    this.ctx.moveTo(endX, endY);
+    this.ctx.moveTo(tipX, tipY);
     this.ctx.lineTo(
-      endX - headLen * Math.cos(directionAngle - Math.PI / 6),
-      endY - headLen * Math.sin(directionAngle - Math.PI / 6)
+      tipX - headLen * Math.cos(directionAngle - Math.PI / 6),
+      tipY - headLen * Math.sin(directionAngle - Math.PI / 6)
     );
     this.ctx.lineTo(
-      endX - headLen * Math.cos(directionAngle + Math.PI / 6),
-      endY - headLen * Math.sin(directionAngle + Math.PI / 6)
+      tipX - headLen * Math.cos(directionAngle + Math.PI / 6),
+      tipY - headLen * Math.sin(directionAngle + Math.PI / 6)
     );
     this.ctx.closePath();
     this.ctx.fillStyle = '#4ECDC4';
     this.ctx.fill();
 
-    // Punch gripper circle (outline, not filled)
-    // This represents the actual extraction tool size
+    // Shared marker styling. The punch-gripper outline is reserved for
+    // the origin; the small center dot is drawn at both the origin and
+    // the tip, so the dot sizing is hoisted here to guarantee a single
+    // source of truth.
+    const punchStrokeWidth = Math.max(1.5, 2 / scale); // Minimum 1.5px line width on screen
+    const centerDotRadius = Math.min(3, 4 / scale);
+    const drawCenterDot = centerDotRadius * scale >= 1;
+
+    // Origin punch gripper circle (outline, not filled).
+    // Represents the actual extraction tool size at the scalp entry point.
     this.ctx.beginPath();
     this.ctx.arc(originPoint.x, originPoint.y, punchRadius, 0, Math.PI * 2);
     this.ctx.strokeStyle = '#FF6B6B';
-    this.ctx.lineWidth = Math.max(1.5, 2 / scale); // Minimum 1.5px line width on screen
+    this.ctx.lineWidth = punchStrokeWidth;
     this.ctx.stroke();
 
-    // Small center dot for precise positioning
-    const centerDotRadius = Math.min(3, 4 / scale);
-    if (centerDotRadius * scale >= 1) {
+    // Small center dot for precise positioning at the origin
+    if (drawCenterDot) {
       this.ctx.beginPath();
       this.ctx.arc(originPoint.x, originPoint.y, centerDotRadius, 0, Math.PI * 2);
+      this.ctx.fillStyle = '#FF6B6B';
+      this.ctx.fill();
+    }
+
+    // --- Ending-point marker (tip of graft) ---
+    // Only the small red center dot is drawn at the tip — the larger
+    // punch-gripper outline is reserved for the origin, since it represents
+    // the extraction-tool footprint and is meaningful only at the scalp
+    // entry point. Culled independently: the tip may be outside the
+    // viewport even when the origin is inside (long grafts near the edge).
+    const tipMargin = 50;
+    const tipVisible =
+      !visibleBounds ||
+      (tipX >= visibleBounds.left - tipMargin &&
+       tipX <= visibleBounds.right + tipMargin &&
+       tipY >= visibleBounds.top - tipMargin &&
+       tipY <= visibleBounds.bottom + tipMargin);
+
+    if (tipVisible && drawCenterDot) {
+      this.ctx.beginPath();
+      this.ctx.arc(tipX, tipY, centerDotRadius, 0, Math.PI * 2);
       this.ctx.fillStyle = '#FF6B6B';
       this.ctx.fill();
     }

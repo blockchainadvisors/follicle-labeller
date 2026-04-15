@@ -475,12 +475,22 @@ export interface YoloDetectionAdapter {
     expectedScale: number,
   ): Promise<TrackMatchSingleResult>;
 
-  /** Prepare a video tracking session */
+  /**
+   * Prepare a dual-point video tracking session. Sends two independent NCC
+   * template patches (one centered on the origin, one centered on the tip)
+   * plus the initial source-image delta between them for the rigid
+   * consistency check at match time.
+   */
   videoPrepare(
     videoFilePath: string,
-    sourcePatchData: string,
-    follicleOffsetX: number,
-    follicleOffsetY: number,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
