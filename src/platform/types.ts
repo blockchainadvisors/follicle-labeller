@@ -496,6 +496,26 @@ export interface YoloDetectionAdapter {
     expectedScale: number,
   ): Promise<VideoPrepareResult>;
 
+  /**
+   * Prepare a Lucas-Kanade optical flow video tracking session. Accepts the
+   * same patches/offsets as videoPrepare — the backend uses them for
+   * frame-0 NCC seeding and LK-failure rescue.
+   */
+  videoPrepareLK(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult>;
+
   /** Match next video frame */
   videoMatchFrame(sessionId: string): Promise<VideoFrameResult>;
 

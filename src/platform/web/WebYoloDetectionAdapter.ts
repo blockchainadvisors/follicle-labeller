@@ -451,6 +451,10 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: 'Video tracking not supported in web mode' };
   }
 
+  async videoPrepareLK(): Promise<VideoPrepareResult> {
+    return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: 'Video tracking not supported in web mode' };
+  }
+
   async videoMatchFrame(): Promise<VideoFrameResult> {
     return { success: false, frameIndex: 0, match: null, done: true, error: 'Video tracking not supported in web mode' };
   }

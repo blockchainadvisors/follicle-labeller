@@ -246,6 +246,44 @@ export class FollicleTrackingService {
     }
   }
 
+  async videoPrepareLK(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number = 1.0,
+  ): Promise<VideoPrepareResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.videoPrepareLK(
+          videoFilePath,
+          originPatchData,
+          tipPatchData,
+          originInOriginPatchX,
+          originInOriginPatchY,
+          tipInTipPatchX,
+          tipInTipPatchY,
+          initialDx,
+          initialDy,
+          follicleWidth,
+          follicleHeight,
+          expectedScale,
+        ),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Video prepare (LK) failed:', error);
+      return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: error instanceof Error ? error.message : 'Prepare failed' };
+    }
+  }
+
   async videoMatchFrame(sessionId: string): Promise<VideoFrameResult> {
     try {
       return await withRetry(

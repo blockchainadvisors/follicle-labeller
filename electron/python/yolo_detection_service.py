@@ -68,6 +68,28 @@ RIGID_REL_TOLERANCE = 0.20    # 20% of expected distance
 RIGID_ABS_TOLERANCE_PX = 5.0  # absolute floor, pixels
 
 
+# ============================================================================
+# Lucas-Kanade optical flow video tracking parameters
+# ----------------------------------------------------------------------------
+# The optical-flow tracker (new button alongside Template Match) runs pyramidal
+# Lucas-Kanade on exactly two points per frame — the graft origin and tip —
+# with a forward-backward error check for outlier rejection and a 2-point
+# similarity transform for scale-jump validation.
+#
+# When LK fails on a point, the tracker falls back to a full NCC pyramid
+# search on that point's cached source patch (same matcher used by the
+# Template Match button), and if NCC also fails it extrapolates the failed
+# point from the trusted one using the last known similarity transform.
+# ============================================================================
+LK_WIN_SIZE = (21, 21)           # OpenCV tutorial default; balances precision vs large-motion handling
+LK_MAX_LEVEL = 3                 # 4-level pyramid; absorbs ~2^3 = 8x larger motions than single-level
+LK_ITER_COUNT = 30               # max iterations per pyramid level
+LK_ITER_EPS = 0.01               # convergence epsilon (pixel displacement)
+LK_FB_ERROR_PX = 2.0             # forward-backward round-trip tolerance (pixels)
+LK_MAX_SCALE_JUMP = 0.15         # reject frames where similarity-transform scale jumps >15% vs previous
+LK_MIN_CONFIDENCE = 0.3          # below this per-point FB-derived confidence, consider the point failed
+
+
 @dataclass
 class DetectionTrainingConfig:
     """Configuration for YOLO detection training."""
@@ -2613,6 +2635,212 @@ class YOLODetectionService:
                 trusted_cy - initial_dy * trusted_scale,
             )
 
+    # ------------------------------------------------------------------
+    # Lucas-Kanade optical flow tracking helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_gray_pyramid(gray: np.ndarray) -> list:
+        """
+        Build the 5-level target pyramid [full, 1/2, 1/4, 1/8, 1/16] used by
+        _ncc_match_in_pyramid. Factored out so both the NCC and LK matchers
+        can reuse the exact same pyramid construction.
+        """
+        l1 = cv2.pyrDown(gray)
+        l2 = cv2.pyrDown(l1)
+        l3 = cv2.pyrDown(l2)
+        l4 = cv2.pyrDown(l3)
+        return [gray, l1, l2, l3, l4]
+
+    @staticmethod
+    def _fb_error_to_confidence(fb_err: float) -> float:
+        """
+        Map a forward-backward round-trip error (pixels) onto a 0..1
+        confidence value comparable to NCC's [0,1] score. fb_err = 0 maps
+        to 1.0, fb_err >= LK_FB_ERROR_PX maps to 0.0.
+        """
+        if fb_err <= 0:
+            return 1.0
+        if fb_err >= LK_FB_ERROR_PX:
+            return 0.0
+        return 1.0 - (fb_err / LK_FB_ERROR_PX)
+
+    def _lk_track_two_points(
+        self,
+        prev_gray: np.ndarray,
+        cur_gray: np.ndarray,
+        prev_points: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Run pyramidal Lucas-Kanade on exactly 2 points between prev_gray
+        and cur_gray, then perform a forward-backward round-trip check
+        (track cur -> prev and compare against the original prev_points).
+
+        Args:
+            prev_gray: previous frame, uint8 single-channel
+            cur_gray:  current frame, uint8 single-channel
+            prev_points: shape (2, 1, 2) float32 array of (x, y) points to track
+
+        Returns:
+            new_points: shape (2, 1, 2) float32, forward-tracked positions
+            fb_errors:  shape (2,)       float, per-point FB error in pixels
+            lk_status:  shape (2,)       bool,  per-point LK success (forward AND backward)
+        """
+        criteria = (
+            cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
+            LK_ITER_COUNT,
+            LK_ITER_EPS,
+        )
+
+        # Forward pass: prev -> cur
+        new_points, fwd_status, _ = cv2.calcOpticalFlowPyrLK(
+            prev_gray, cur_gray, prev_points, None,
+            winSize=LK_WIN_SIZE,
+            maxLevel=LK_MAX_LEVEL,
+            criteria=criteria,
+        )
+
+        # Backward pass: cur -> prev  (same points, reversed frames)
+        back_points, back_status, _ = cv2.calcOpticalFlowPyrLK(
+            cur_gray, prev_gray, new_points, None,
+            winSize=LK_WIN_SIZE,
+            maxLevel=LK_MAX_LEVEL,
+            criteria=criteria,
+        )
+
+        # Round-trip error in pixels, per point
+        fb_diff = (back_points - prev_points).reshape(-1, 2)
+        fb_errors = np.sqrt(np.sum(fb_diff * fb_diff, axis=1))
+
+        # Trusted iff BOTH forward and backward LK reported success
+        fwd_ok = fwd_status.reshape(-1).astype(bool)
+        back_ok = back_status.reshape(-1).astype(bool)
+        lk_status = fwd_ok & back_ok
+
+        return new_points, fb_errors, lk_status
+
+    @staticmethod
+    def _similarity_transform_from_2_points(
+        src_pts: np.ndarray,
+        dst_pts: np.ndarray,
+    ) -> Dict[str, float]:
+        """
+        Closed-form 4-DOF 2D similarity transform (translation + rotation +
+        uniform scale) from two point correspondences. Two correspondences
+        uniquely determine a 4-DOF similarity, so this is algebraically exact
+        (no least squares).
+
+        Args:
+            src_pts: shape (2, 2) — source points  [[x0, y0], [x1, y1]]
+            dst_pts: shape (2, 2) — target points
+
+        Returns a dict with 'scale', 'rotation_rad', 'tx', 'ty'. When the
+        source points coincide (degenerate), returns identity-ish defaults.
+        """
+        src_dx = float(src_pts[1][0] - src_pts[0][0])
+        src_dy = float(src_pts[1][1] - src_pts[0][1])
+        dst_dx = float(dst_pts[1][0] - dst_pts[0][0])
+        dst_dy = float(dst_pts[1][1] - dst_pts[0][1])
+
+        src_dist = float(np.hypot(src_dx, src_dy))
+        dst_dist = float(np.hypot(dst_dx, dst_dy))
+
+        # Degenerate: source points coincide. Return an identity scale/rotation
+        # and a pure translation aligning src_pts[0] with dst_pts[0].
+        if src_dist < 1e-6:
+            return {
+                'scale': 1.0,
+                'rotation_rad': 0.0,
+                'tx': float(dst_pts[0][0] - src_pts[0][0]),
+                'ty': float(dst_pts[0][1] - src_pts[0][1]),
+            }
+
+        scale = dst_dist / src_dist
+        rotation = float(np.arctan2(dst_dy, dst_dx) - np.arctan2(src_dy, src_dx))
+
+        # Align src_pts[0] -> dst_pts[0] under the rotation+scale
+        cos_r = float(np.cos(rotation))
+        sin_r = float(np.sin(rotation))
+        sx0 = float(src_pts[0][0])
+        sy0 = float(src_pts[0][1])
+        tx = float(dst_pts[0][0]) - (cos_r * sx0 - sin_r * sy0) * scale
+        ty = float(dst_pts[0][1]) - (sin_r * sx0 + cos_r * sy0) * scale
+
+        return {'scale': scale, 'rotation_rad': rotation, 'tx': tx, 'ty': ty}
+
+    @staticmethod
+    def _apply_similarity_transform(
+        point: Tuple[float, float],
+        transform: Dict[str, float],
+    ) -> Tuple[float, float]:
+        """
+        Apply a similarity transform (dict from _similarity_transform_from_2_points)
+        to a single (x, y) point. Used to extrapolate a failed LK point from
+        the trusted one while carrying the current rotation + scale.
+        """
+        s = transform['scale']
+        r = transform['rotation_rad']
+        cos_r = float(np.cos(r))
+        sin_r = float(np.sin(r))
+        px = float(point[0])
+        py = float(point[1])
+        out_x = (cos_r * px - sin_r * py) * s + transform['tx']
+        out_y = (sin_r * px + cos_r * py) * s + transform['ty']
+        return (out_x, out_y)
+
+    def _build_lk_match_dict(
+        self,
+        origin_xy: Tuple[float, float],
+        tip_xy: Tuple[float, float],
+        origin_conf: float,
+        tip_conf: float,
+        rigid_valid: bool,
+        lost_point: Optional[str],
+        follicle_width: float,
+        follicle_height: float,
+        match_scale: float,
+    ) -> Dict[str, Any]:
+        """
+        Assemble a match dict with the same shape as the NCC matcher's
+        output so VideoTrackingView renders LK results identically.
+        The displayed bbox is derived from the origin position and the
+        current similarity-transform scale (not from an NCC targetDetection).
+        """
+        target_w = float(follicle_width) * float(match_scale)
+        target_h = float(follicle_height) * float(match_scale)
+        ox = float(origin_xy[0])
+        oy = float(origin_xy[1])
+        tx = float(tip_xy[0])
+        ty = float(tip_xy[1])
+
+        # Overall confidence mirrors the NCC flow's "min of the two" when both
+        # are trusted, otherwise whichever point is still reporting a score.
+        if origin_conf > 0 and tip_conf > 0:
+            overall_conf = min(origin_conf, tip_conf)
+        else:
+            overall_conf = max(origin_conf, tip_conf)
+
+        return {
+            'targetDetection': {
+                'x': round(ox - target_w / 2.0, 2),
+                'y': round(oy - target_h / 2.0, 2),
+                'width': round(target_w, 2),
+                'height': round(target_h, 2),
+                'confidence': round(overall_conf, 4),
+                'classId': 0,
+                'className': 'follicle',
+            },
+            'confidence': round(overall_conf, 4),
+            'transformedX': round(ox, 2),
+            'transformedY': round(oy, 2),
+            'tipX': round(tx, 2),
+            'tipY': round(ty, 2),
+            'originConfidence': round(float(origin_conf), 4),
+            'tipConfidence': round(float(tip_conf), 4),
+            'rigidValid': bool(rigid_valid),
+            'lostPoint': lost_point,
+        }
+
     def prepare_video_session(
         self,
         video_file_path: str,
@@ -2749,6 +2977,191 @@ class YOLODetectionService:
             logger.exception("Failed to prepare video session")
             return {'success': False, 'error': str(e)}
 
+    def prepare_video_session_lk(
+        self,
+        video_file_path: str,
+        origin_patch_data: bytes,
+        tip_patch_data: bytes,
+        origin_in_origin_patch_x: float,
+        origin_in_origin_patch_y: float,
+        tip_in_tip_patch_x: float,
+        tip_in_tip_patch_y: float,
+        initial_dx: float,
+        initial_dy: float,
+        follicle_width: float,
+        follicle_height: float,
+        expected_scale: float = 1.0,
+    ) -> Dict[str, Any]:
+        """
+        Open a video file and prepare a session for Lucas-Kanade optical
+        flow tracking of the graft origin and tip. Same input payload as
+        ``prepare_video_session`` (two patches + offsets + initial delta)
+        so the frontend crop logic can be shared.
+
+        The patches are kept in the session dict as a **rescue path**: when
+        LK fails on a point (forward-backward error > threshold), the
+        tracker falls back to a full NCC pyramid search on that point's
+        cached patch using the same ``_ncc_match_in_pyramid`` call the
+        Template Match button uses.
+
+        Frame-0 initial positions are found by running NCC pyramid search
+        on the first video frame for each patch — this seeds LK with the
+        true positions of origin and tip before the first optical-flow
+        step on frame 1.
+        """
+        try:
+            cap = cv2.VideoCapture(video_file_path)
+            if not cap.isOpened():
+                return {'success': False, 'error': f'Could not open video: {video_file_path}'}
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            # Decode both patches
+            origin_arr = np.frombuffer(origin_patch_data, dtype=np.uint8)
+            origin_patch = cv2.imdecode(origin_arr, cv2.IMREAD_GRAYSCALE)
+            if origin_patch is None or origin_patch.size == 0:
+                cap.release()
+                return {'success': False, 'error': 'Invalid origin patch data'}
+
+            tip_arr = np.frombuffer(tip_patch_data, dtype=np.uint8)
+            tip_patch = cv2.imdecode(tip_arr, cv2.IMREAD_GRAYSCALE)
+            if tip_patch is None or tip_patch.size == 0:
+                cap.release()
+                return {'success': False, 'error': 'Invalid tip patch data'}
+
+            # Read first frame for auto-calibration + NCC seeding
+            ret, first_frame = cap.read()
+            if not ret:
+                cap.release()
+                return {'success': False, 'error': 'Could not read first video frame'}
+
+            first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+
+            # Auto-calibrate scale on the origin patch
+            calibrated_scale = self._auto_calibrate_scale(origin_patch, first_gray)
+
+            # Seed the initial origin + tip positions by running NCC pyramid
+            # search on frame 0. Both patches must succeed — if either fails
+            # we bail out rather than start tracking from a guess.
+            target_pyramid = self._build_gray_pyramid(first_gray)
+
+            origin_match = self._ncc_match_in_pyramid(
+                origin_patch, target_pyramid,
+                float(origin_in_origin_patch_x),
+                float(origin_in_origin_patch_y),
+                follicle_width, follicle_height,
+                calibrated_scale,
+            )
+            if origin_match is None:
+                cap.release()
+                return {
+                    'success': False,
+                    'error': 'Could not locate origin in first video frame',
+                }
+
+            tip_match = self._ncc_match_in_pyramid(
+                tip_patch, target_pyramid,
+                float(tip_in_tip_patch_x),
+                float(tip_in_tip_patch_y),
+                follicle_width, follicle_height,
+                calibrated_scale,
+            )
+            if tip_match is None:
+                cap.release()
+                return {
+                    'success': False,
+                    'error': 'Could not locate tip in first video frame',
+                }
+
+            # Initial 2-point array, shape (2, 1, 2) float32 for calcOpticalFlowPyrLK
+            initial_origin_x = float(origin_match['transformedX'])
+            initial_origin_y = float(origin_match['transformedY'])
+            initial_tip_x = float(tip_match['transformedX'])
+            initial_tip_y = float(tip_match['transformedY'])
+
+            initial_points = np.array(
+                [[[initial_origin_x, initial_origin_y]],
+                 [[initial_tip_x, initial_tip_y]]],
+                dtype=np.float32,
+            )
+
+            # Reset video so the first match_video_frame call reads frame 0.
+            # That first call is special-cased in _match_video_frame_lk to
+            # return the cached initial points without running LK (frame 0
+            # has no previous frame to track against).
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+            initial_dist = float(np.hypot(initial_dx, initial_dy))
+
+            session_id = str(uuid.uuid4())
+            self._tracking_sessions[session_id] = {
+                'type': 'video_lk',
+                'cap': cap,
+                'fps': fps,
+                'frame_count': frame_count,
+                'width': width,
+                'height': height,
+
+                # Source patches kept for NCC rescue on LK failure
+                'origin_patch_gray': origin_patch,
+                'tip_patch_gray': tip_patch,
+                'origin_in_origin_patch_x': float(origin_in_origin_patch_x),
+                'origin_in_origin_patch_y': float(origin_in_origin_patch_y),
+                'tip_in_tip_patch_x': float(tip_in_tip_patch_x),
+                'tip_in_tip_patch_y': float(tip_in_tip_patch_y),
+
+                'follicle_width': follicle_width,
+                'follicle_height': follicle_height,
+
+                # Initial rigid relationship in source-image pixels
+                'initial_dx': float(initial_dx),
+                'initial_dy': float(initial_dy),
+                'initial_dist': initial_dist,
+
+                'expected_scale': calibrated_scale,
+                'current_frame': 0,
+
+                # LK-specific state
+                'prev_gray': first_gray.copy(),
+                'prev_points': initial_points,
+                'initial_points': initial_points.copy(),
+                'prev_transform': {
+                    'scale': 1.0,
+                    'rotation_rad': 0.0,
+                    'tx': 0.0,
+                    'ty': 0.0,
+                },
+                'has_emitted_frame_zero': False,
+
+                # Pipelined frame reading (shared with NCC session)
+                'next_frame': None,
+                '_executor': None,
+            }
+
+            logger.info(
+                f"Video session {session_id} prepared (optical flow): "
+                f"{width}x{height} @ {fps:.1f}fps, {frame_count} frames, "
+                f"calibrated_scale={calibrated_scale:.2f}, "
+                f"seed=origin({initial_origin_x:.0f},{initial_origin_y:.0f}) "
+                f"tip({initial_tip_x:.0f},{initial_tip_y:.0f})"
+            )
+
+            return {
+                'success': True,
+                'sessionId': session_id,
+                'fps': fps,
+                'frameCount': frame_count,
+                'width': width,
+                'height': height,
+            }
+
+        except Exception as e:
+            logger.exception("Failed to prepare LK video session")
+            return {'success': False, 'error': str(e)}
+
     @staticmethod
     def _read_frame_bg(cap):
         """Read a frame in a background thread for pipelining."""
@@ -2829,21 +3242,36 @@ class YOLODetectionService:
 
     def match_video_frame(self, session_id: str) -> Dict[str, Any]:
         """
-        Read the next frame and match both the origin and tip patches
-        independently, then run a rigid-consistency check to reject the
-        weaker match when the two disagree geometrically. When exactly one
-        point fails, its position is extrapolated from the trusted one
-        using the initial source-image delta, and its temporal prediction
-        state is cleared so the next frame will re-acquire via a full
-        pyramid search. Pipelined frame reading overlaps I/O with matching.
+        Read the next frame and run the appropriate per-frame matcher
+        based on the session type. NCC sessions ('video') go to the
+        two-NCC + rigid-check matcher; LK sessions ('video_lk') go to
+        the Lucas-Kanade optical flow matcher with NCC rescue.
         """
         session = self._tracking_sessions.get(session_id)
         if session is None:
             return {'success': False, 'error': f'Session {session_id} not found', 'done': True}
+        session_type = session.get('type')
+        if session_type == 'video':
+            return self._match_video_frame_ncc(session)
+        elif session_type == 'video_lk':
+            return self._match_video_frame_lk(session)
+        else:
+            return {
+                'success': False,
+                'error': f'Unknown video session type: {session_type}',
+                'done': True,
+            }
 
-        if session.get('type') != 'video':
-            return {'success': False, 'error': 'Session is not a video session', 'done': True}
-
+    def _match_video_frame_ncc(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Match both the origin and tip patches independently via NCC, then
+        run a rigid-consistency check to reject the weaker match when the
+        two disagree geometrically. When exactly one point fails, its
+        position is extrapolated from the trusted one using the initial
+        source-image delta, and its temporal prediction state is cleared
+        so the next frame will re-acquire via a full pyramid search.
+        Pipelined frame reading overlaps I/O with matching.
+        """
         try:
             from concurrent.futures import ThreadPoolExecutor
 
@@ -2891,15 +3319,7 @@ class YOLODetectionService:
 
             def get_pyramid():
                 if not cached_pyramid:
-                    l1 = cv2.pyrDown(gray)
-                    l2 = cv2.pyrDown(l1)
-                    l3 = cv2.pyrDown(l2)
-                    l4 = cv2.pyrDown(l3)
-                    cached_pyramid.append(gray)
-                    cached_pyramid.append(l1)
-                    cached_pyramid.append(l2)
-                    cached_pyramid.append(l3)
-                    cached_pyramid.append(l4)
+                    cached_pyramid.extend(self._build_gray_pyramid(gray))
                 return cached_pyramid
 
             # Match origin patch
@@ -3031,6 +3451,256 @@ class YOLODetectionService:
 
         except Exception as e:
             logger.exception(f"Failed to match video frame {session.get('current_frame', '?')}")
+            return {'success': False, 'error': str(e), 'done': True}
+
+    def _match_video_frame_lk(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Per-frame matching for a Lucas-Kanade optical flow video session.
+
+        Algorithm:
+          - Frame 0: emit cached initial NCC-seeded points once, no LK step.
+          - Frame 1+: run pyramidal LK on the 2 tracked points, perform a
+            forward-backward error check, fall back to full NCC pyramid
+            search on any point whose LK failed, then compute a 2-point
+            similarity transform for rotation-aware validation.
+
+        Returns the same match dict shape as _match_video_frame_ncc so
+        VideoTrackingView can render both flows identically.
+        """
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+
+            cap = session['cap']
+
+            # Pipelined frame read (same pattern as NCC path)
+            if session.get('next_frame') is not None:
+                ret, frame = session['next_frame']
+                session['next_frame'] = None
+            else:
+                ret, frame = cap.read()
+
+            if not ret:
+                return {
+                    'success': True,
+                    'frameIndex': session['current_frame'],
+                    'match': None,
+                    'done': True,
+                }
+
+            frame_index = session['current_frame']
+            session['current_frame'] += 1
+
+            # Kick off next frame read in background
+            if session.get('_executor') is None:
+                session['_executor'] = ThreadPoolExecutor(max_workers=1)
+            future = session['_executor'].submit(self._read_frame_bg, cap)
+
+            # Encode frame as JPEG for frontend display (same as NCC path)
+            display_frame = frame
+            fh, fw = frame.shape[:2]
+            MAX_DISPLAY = 1280
+            if max(fw, fh) > MAX_DISPLAY:
+                scale_down = MAX_DISPLAY / max(fw, fh)
+                display_frame = cv2.resize(
+                    frame, None, fx=scale_down, fy=scale_down,
+                    interpolation=cv2.INTER_AREA,
+                )
+            _, jpeg_buf = cv2.imencode(
+                '.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
+            )
+            frame_jpeg_b64 = base64.b64encode(jpeg_buf).decode('ascii')
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            expected_scale = session['expected_scale']
+
+            # ----- FRAME 0: emit cached seed points, no LK step -----
+            if not session['has_emitted_frame_zero']:
+                session['has_emitted_frame_zero'] = True
+                session['prev_gray'] = gray.copy()
+                initial = session['prev_points'].reshape(2, 2)
+                match = self._build_lk_match_dict(
+                    origin_xy=(float(initial[0][0]), float(initial[0][1])),
+                    tip_xy=(float(initial[1][0]), float(initial[1][1])),
+                    origin_conf=1.0, tip_conf=1.0,
+                    rigid_valid=True, lost_point=None,
+                    follicle_width=session['follicle_width'],
+                    follicle_height=session['follicle_height'],
+                    match_scale=expected_scale,
+                )
+                try:
+                    session['next_frame'] = future.result(timeout=5)
+                except Exception:
+                    session['next_frame'] = None
+                return {
+                    'success': True,
+                    'frameIndex': frame_index,
+                    'match': match,
+                    'frameData': frame_jpeg_b64,
+                    'done': False,
+                }
+
+            # ----- FRAME 1+: run pyramidal LK with FB check -----
+            prev_gray = session['prev_gray']
+            prev_points = session['prev_points']
+
+            new_points, fb_errors, lk_status = self._lk_track_two_points(
+                prev_gray, gray, prev_points,
+            )
+
+            origin_trusted = bool(lk_status[0]) and float(fb_errors[0]) <= LK_FB_ERROR_PX
+            tip_trusted = bool(lk_status[1]) and float(fb_errors[1]) <= LK_FB_ERROR_PX
+
+            origin_conf = (
+                self._fb_error_to_confidence(float(fb_errors[0]))
+                if origin_trusted else 0.0
+            )
+            tip_conf = (
+                self._fb_error_to_confidence(float(fb_errors[1]))
+                if tip_trusted else 0.0
+            )
+
+            # ----- NCC rescue for failed LK points -----
+            # Lazy pyramid construction shared between both rescues.
+            cached_pyramid: list = []
+
+            def get_pyramid():
+                if not cached_pyramid:
+                    cached_pyramid.extend(self._build_gray_pyramid(gray))
+                return cached_pyramid
+
+            if not origin_trusted:
+                rescue, rx, ry, rs = self._match_one_patch_in_frame(
+                    session['origin_patch_gray'], gray,
+                    session['origin_in_origin_patch_x'],
+                    session['origin_in_origin_patch_y'],
+                    None, None,  # force full pyramid (no prev state)
+                    expected_scale,
+                    expected_scale,
+                    session['follicle_width'], session['follicle_height'],
+                    get_pyramid,
+                )
+                if rescue is not None:
+                    new_points[0][0] = [rx, ry]
+                    origin_conf = float(rescue['confidence'])
+                    origin_trusted = True
+
+            if not tip_trusted:
+                rescue, rx, ry, rs = self._match_one_patch_in_frame(
+                    session['tip_patch_gray'], gray,
+                    session['tip_in_tip_patch_x'],
+                    session['tip_in_tip_patch_y'],
+                    None, None,
+                    expected_scale,
+                    expected_scale,
+                    session['follicle_width'], session['follicle_height'],
+                    get_pyramid,
+                )
+                if rescue is not None:
+                    new_points[1][0] = [rx, ry]
+                    tip_conf = float(rescue['confidence'])
+                    tip_trusted = True
+
+            # Both still dead after rescue → emit null match and advance state
+            if not origin_trusted and not tip_trusted:
+                session['prev_gray'] = gray.copy()
+                # Keep prev_points unchanged so next frame can re-try LK
+                try:
+                    session['next_frame'] = future.result(timeout=5)
+                except Exception:
+                    session['next_frame'] = None
+                return {
+                    'success': True,
+                    'frameIndex': frame_index,
+                    'match': None,
+                    'frameData': frame_jpeg_b64,
+                    'done': False,
+                }
+
+            # ----- 2-point similarity-transform validation -----
+            initial = session['initial_points'].reshape(2, 2)
+            current = new_points.reshape(2, 2)
+
+            if origin_trusted and tip_trusted:
+                transform = self._similarity_transform_from_2_points(initial, current)
+                prev_scale = session['prev_transform']['scale']
+                scale_jump = (
+                    abs(transform['scale'] - prev_scale) / max(prev_scale, 1e-6)
+                )
+                if scale_jump > LK_MAX_SCALE_JUMP:
+                    # Anomalous scale change — demote the lower-confidence point
+                    if origin_conf >= tip_conf:
+                        tip_trusted = False
+                        tip_conf = 0.0
+                    else:
+                        origin_trusted = False
+                        origin_conf = 0.0
+
+            # ----- Resolve final positions + lost_point flag -----
+            lost_point: Optional[str] = None
+            if origin_trusted and tip_trusted:
+                final_origin = (float(current[0][0]), float(current[0][1]))
+                final_tip = (float(current[1][0]), float(current[1][1]))
+                rigid_valid = True
+                session['prev_transform'] = self._similarity_transform_from_2_points(
+                    initial, current,
+                )
+            elif origin_trusted:
+                final_origin = (float(current[0][0]), float(current[0][1]))
+                extrap = self._apply_similarity_transform(
+                    (float(initial[1][0]), float(initial[1][1])),
+                    session['prev_transform'],
+                )
+                final_tip = extrap
+                rigid_valid = False
+                lost_point = 'tip'
+            else:  # tip_trusted
+                final_tip = (float(current[1][0]), float(current[1][1]))
+                extrap = self._apply_similarity_transform(
+                    (float(initial[0][0]), float(initial[0][1])),
+                    session['prev_transform'],
+                )
+                final_origin = extrap
+                rigid_valid = False
+                lost_point = 'origin'
+
+            # Update LK state for next frame
+            session['prev_gray'] = gray.copy()
+            session['prev_points'] = np.array(
+                [[[final_origin[0], final_origin[1]]],
+                 [[final_tip[0], final_tip[1]]]],
+                dtype=np.float32,
+            )
+
+            match_scale = session['prev_transform']['scale']
+            match = self._build_lk_match_dict(
+                origin_xy=final_origin,
+                tip_xy=final_tip,
+                origin_conf=origin_conf,
+                tip_conf=tip_conf,
+                rigid_valid=rigid_valid,
+                lost_point=lost_point,
+                follicle_width=session['follicle_width'],
+                follicle_height=session['follicle_height'],
+                match_scale=match_scale,
+            )
+
+            try:
+                session['next_frame'] = future.result(timeout=5)
+            except Exception:
+                session['next_frame'] = None
+
+            return {
+                'success': True,
+                'frameIndex': frame_index,
+                'match': match,
+                'frameData': frame_jpeg_b64,
+                'done': False,
+            }
+
+        except Exception as e:
+            logger.exception(
+                f"Failed to LK-match video frame {session.get('current_frame', '?')}"
+            )
             return {'success': False, 'error': str(e), 'done': True}
 
     def stop_video_session(self, session_id: str) -> Dict[str, Any]:

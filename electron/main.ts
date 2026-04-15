@@ -2126,6 +2126,47 @@ ipcMain.handle(
   }
 );
 
+// Prepare a Lucas-Kanade optical flow video tracking session
+// (parallel to videoPrepare, same payload, different backend handler)
+ipcMain.handle(
+  "yolo-detection:videoPrepareLK",
+  async (
+    _,
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/video-prepare-lk",
+      "POST",
+      {
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      },
+      30000
+    );
+  }
+);
+
 // Match next video frame
 ipcMain.handle(
   "yolo-detection:videoMatchFrame",

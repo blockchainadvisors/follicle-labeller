@@ -955,6 +955,38 @@ const electronAPI = {
         expectedScale,
       ),
 
+    // Video tracking (Lucas-Kanade optical flow with NCC rescue) — parallel
+    // to videoPrepare, same payload, different backend tracker.
+    videoPrepareLK: (
+      videoFilePath: string,
+      originPatchData: string,
+      tipPatchData: string,
+      originInOriginPatchX: number,
+      originInOriginPatchY: number,
+      tipInTipPatchX: number,
+      tipInTipPatchY: number,
+      initialDx: number,
+      initialDy: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke(
+        "yolo-detection:videoPrepareLK",
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      ),
+
     videoMatchFrame: (
       sessionId: string,
     ): Promise<Record<string, unknown>> =>

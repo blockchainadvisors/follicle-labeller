@@ -2282,6 +2282,42 @@ async def yolo_detect_video_prepare(req: VideoPrepareRequest):
     )
 
 
+@app.post('/yolo-detect/video-prepare-lk')
+async def yolo_detect_video_prepare_lk(req: VideoPrepareRequest):
+    """
+    Open a video file and prepare a Lucas-Kanade optical flow tracking
+    session. Same payload as /yolo-detect/video-prepare — the backend uses
+    the two patches for frame-0 NCC seeding and as a rescue path when LK
+    fails on a point mid-video.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    def _strip_and_decode(b64: str) -> bytes:
+        if ',' in b64:
+            b64 = b64.split(',', 1)[1]
+        return base64.b64decode(b64)
+
+    origin_bytes = _strip_and_decode(req.originPatchData)
+    tip_bytes = _strip_and_decode(req.tipPatchData)
+
+    service = get_yolo_detection_service()
+    return service.prepare_video_session_lk(
+        video_file_path=req.videoFilePath,
+        origin_patch_data=origin_bytes,
+        tip_patch_data=tip_bytes,
+        origin_in_origin_patch_x=req.originInOriginPatchX,
+        origin_in_origin_patch_y=req.originInOriginPatchY,
+        tip_in_tip_patch_x=req.tipInTipPatchX,
+        tip_in_tip_patch_y=req.tipInTipPatchY,
+        initial_dx=req.initialDx,
+        initial_dy=req.initialDy,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
 
 @app.post('/yolo-detect/video-match-frame/{session_id}')
 async def yolo_detect_video_match_frame(session_id: str):

@@ -25,6 +25,7 @@ import {
   Database,
   FileUp,
   Crosshair,
+  Waypoints,
   Route,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
@@ -1947,8 +1948,12 @@ export const Toolbar: React.FC = () => {
 
   const openVideoTracking = useTrackingStore((s) => s.openVideoTracking);
 
-  // Interactive single-follicle tracking: prepare session then match on click
-  const handleTrackPrepare = useCallback(async () => {
+  // Interactive single-follicle tracking: prepare session then match on click.
+  // `tracker` selects between the Template Match (two-NCC + rigid check) and
+  // Optical Flow (Lucas-Kanade + NCC rescue) backends. Both share the same
+  // two-patch crop payload, the same VideoTrackingView rendering, and the
+  // same per-frame match shape — only the prepare call differs.
+  const handleTrackPrepare = useCallback(async (tracker: 'ncc' | 'lk' = 'ncc') => {
     if (!activeImage || !activeImageId || isTracking) return;
 
     const platform = getPlatform();
@@ -1960,7 +1965,12 @@ export const Toolbar: React.FC = () => {
     try {
       if (fileResult.isVideo) {
         // --- Video tracking flow ---
-        startLoading("Preparing video tracking...", false);
+        startLoading(
+          tracker === 'lk'
+            ? "Preparing optical flow tracking..."
+            : "Preparing video tracking...",
+          false,
+        );
 
         // Require exactly one selected follicle with origin
         const selectedArr = Array.from(selectedIds);
@@ -2041,7 +2051,12 @@ export const Toolbar: React.FC = () => {
         // (will be refined when video metadata comes back)
         const expectedScale = 1.0;
 
-        const result = await follicleTrackingService.videoPrepare(
+        const prepareCall =
+          tracker === 'lk'
+            ? follicleTrackingService.videoPrepareLK.bind(follicleTrackingService)
+            : follicleTrackingService.videoPrepare.bind(follicleTrackingService);
+
+        const result = await prepareCall(
           fileResult.filePath,
           originPatch.data,
           tipPatch.data,
@@ -2778,7 +2793,29 @@ export const Toolbar: React.FC = () => {
               ? "Starting detection server..."
               : "Track single follicle via Template Match"
           }
-          onClick={() => handleTrackPrepare()}
+          onClick={() => handleTrackPrepare('ncc')}
+          disabled={
+            !imageLoaded ||
+            isTracking ||
+            isDetecting ||
+            serverStarting ||
+            !blobServerConnected
+          }
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Waypoints size={18} />
+            )
+          }
+          tooltip={
+            !blobServerConnected
+              ? "Starting detection server..."
+              : "Track single follicle via Optical Flow"
+          }
+          onClick={() => handleTrackPrepare('lk')}
           disabled={
             !imageLoaded ||
             isTracking ||

@@ -199,6 +199,36 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     ) as Promise<VideoPrepareResult>;
   }
 
+  async videoPrepareLK(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult> {
+    return window.electronAPI.yoloDetection.videoPrepareLK(
+      videoFilePath,
+      originPatchData,
+      tipPatchData,
+      originInOriginPatchX,
+      originInOriginPatchY,
+      tipInTipPatchX,
+      tipInTipPatchY,
+      initialDx,
+      initialDy,
+      follicleWidth,
+      follicleHeight,
+      expectedScale,
+    ) as Promise<VideoPrepareResult>;
+  }
+
   async videoMatchFrame(sessionId: string): Promise<VideoFrameResult> {
     return window.electronAPI.yoloDetection.videoMatchFrame(sessionId) as Promise<VideoFrameResult>;
   }

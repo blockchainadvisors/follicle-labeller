@@ -756,6 +756,20 @@ declare global {
           follicleHeight: number,
           expectedScale: number,
         ) => Promise<VideoPrepareResult>;
+        videoPrepareLK: (
+          videoFilePath: string,
+          originPatchData: string,
+          tipPatchData: string,
+          originInOriginPatchX: number,
+          originInOriginPatchY: number,
+          tipInTipPatchX: number,
+          tipInTipPatchY: number,
+          initialDx: number,
+          initialDy: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          expectedScale: number,
+        ) => Promise<VideoPrepareResult>;
         videoMatchFrame: (
           sessionId: string,
         ) => Promise<VideoFrameResult>;
