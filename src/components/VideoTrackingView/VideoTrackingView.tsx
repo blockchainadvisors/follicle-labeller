@@ -874,7 +874,7 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
 
     const loop = async () => {
       while (!cancelled && !stoppedRef.current) {
-        // Wait until: playing AND at the live edge
+        // Wait until: playing AND at the live edge.
         if (
           !isPlayingRef.current ||
           viewFrameRef.current < processingMaxFrameRef.current
@@ -911,7 +911,7 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
 
           if (
             isPlayingRef.current &&
-            viewFrameRef.current === result.frameIndex - 1
+            viewFrameRef.current <= result.frameIndex - 1
           ) {
             await displayFrameAtIndex(result.frameIndex);
           }

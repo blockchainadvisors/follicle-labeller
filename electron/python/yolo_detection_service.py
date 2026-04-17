@@ -89,6 +89,17 @@ LK_FB_ERROR_PX = 2.0             # forward-backward round-trip tolerance (pixels
 LK_MAX_SCALE_JUMP = 0.15         # reject frames where similarity-transform scale jumps >15% vs previous
 LK_MIN_CONFIDENCE = 0.3          # below this per-point FB-derived confidence, consider the point failed
 
+# NCC anchor-check parameters (applied on top of LK)
+# ----------------------------------------------------------------------------
+# FB error only measures per-frame flow self-consistency — it catches sudden
+# jumps but is blind to gradual drift. The anchor check validates that the
+# current tracked region still resembles the original source patch by running
+# a local NCC template match. Used as a binary gate: below the floor the
+# point is demoted to untrusted and drops into the NCC rescue path.
+LK_ANCHOR_NCC_FLOOR = 0.3        # NCC similarity below this → tracked point has drifted
+LK_ANCHOR_SEARCH_RADIUS_PX = 15  # ± pixels around LK position to search for best-match location
+LK_ANCHOR_TEMPLATE_HALF_PX = 30  # video-space half-size of the anchor template (small local window)
+
 
 @dataclass
 class DetectionTrainingConfig:
@@ -2841,6 +2852,82 @@ class YOLODetectionService:
             'lostPoint': lost_point,
         }
 
+    def _ncc_anchor_check(
+        self,
+        source_patch: np.ndarray,
+        cur_gray: np.ndarray,
+        tracked_x: float,
+        tracked_y: float,
+        point_in_patch_x: float,
+        point_in_patch_y: float,
+        effective_scale: float,
+        template_half_px: int = LK_ANCHOR_TEMPLATE_HALF_PX,
+        search_radius_px: int = LK_ANCHOR_SEARCH_RADIUS_PX,
+    ) -> float:
+        """
+        Local NCC similarity between a small window of the cached source
+        patch (centered on the tracked point) and the region around
+        ``(tracked_x, tracked_y)`` in ``cur_gray``. Validates that the
+        LK-reported point still resembles the original feature.
+
+        Uses a small local template (~60 px in video space) instead of
+        the full 5x-context source patch for performance (~2 ms per call
+        vs 10-20 ms). Returns 0.0 on any edge case (out of frame, scale
+        collapse, search window too small, OpenCV error).
+        """
+        if effective_scale <= 0 or source_patch is None or source_patch.size == 0:
+            return 0.0
+
+        patch_h, patch_w = source_patch.shape[:2]
+        src_half = max(4, int(round(template_half_px / max(effective_scale, 0.01))))
+
+        px_i = int(round(point_in_patch_x))
+        py_i = int(round(point_in_patch_y))
+        sx1 = max(0, px_i - src_half)
+        sy1 = max(0, py_i - src_half)
+        sx2 = min(patch_w, px_i + src_half + 1)
+        sy2 = min(patch_h, py_i + src_half + 1)
+        local_source = source_patch[sy1:sy2, sx1:sx2]
+        if local_source.shape[0] < 3 or local_source.shape[1] < 3:
+            return 0.0
+
+        scaled_w = max(3, int(round(local_source.shape[1] * effective_scale)))
+        scaled_h = max(3, int(round(local_source.shape[0] * effective_scale)))
+        template = cv2.resize(
+            local_source, (scaled_w, scaled_h), interpolation=cv2.INTER_AREA,
+        )
+
+        local_offset_x = px_i - sx1
+        local_offset_y = py_i - sy1
+        ideal_tl_x = tracked_x - local_offset_x * effective_scale
+        ideal_tl_y = tracked_y - local_offset_y * effective_scale
+
+        wx1 = int(round(ideal_tl_x - search_radius_px))
+        wy1 = int(round(ideal_tl_y - search_radius_px))
+        wx2 = wx1 + scaled_w + 2 * search_radius_px
+        wy2 = wy1 + scaled_h + 2 * search_radius_px
+
+        fh, fw = cur_gray.shape[:2]
+        wx1 = max(0, wx1)
+        wy1 = max(0, wy1)
+        wx2 = min(fw, wx2)
+        wy2 = min(fh, wy2)
+
+        if wx2 <= wx1 or wy2 <= wy1:
+            return 0.0
+
+        search = cur_gray[wy1:wy2, wx1:wx2]
+        if search.shape[0] < scaled_h or search.shape[1] < scaled_w:
+            return 0.0
+
+        try:
+            result = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
+        except cv2.error:
+            return 0.0
+
+        _, max_val, _, _ = cv2.minMaxLoc(result)
+        return float(max_val)
+
     def prepare_video_session(
         self,
         video_file_path: str,
@@ -3558,6 +3645,40 @@ class YOLODetectionService:
                 self._fb_error_to_confidence(float(fb_errors[1]))
                 if tip_trusted else 0.0
             )
+
+            # ----- NCC anchor check on LK-trusted points -----
+            # FB error only measures per-frame flow self-consistency — it
+            # catches sudden jumps but is blind to gradual drift. Validate
+            # that each LK-reported point still resembles the cached source
+            # patch. Used as a gate only — anchor score is NOT combined into
+            # the reported confidence (it would drag healthy tracking down
+            # to ~50% because source-vs-video NCC naturally runs lower than
+            # FB-derived confidence due to lighting/rotation/compression).
+            effective_scale = expected_scale * session['prev_transform']['scale']
+
+            if origin_trusted:
+                origin_anchor = self._ncc_anchor_check(
+                    session['origin_patch_gray'], gray,
+                    float(new_points[0][0][0]), float(new_points[0][0][1]),
+                    session['origin_in_origin_patch_x'],
+                    session['origin_in_origin_patch_y'],
+                    effective_scale,
+                )
+                if origin_anchor < LK_ANCHOR_NCC_FLOOR:
+                    origin_trusted = False
+                    origin_conf = 0.0
+
+            if tip_trusted:
+                tip_anchor = self._ncc_anchor_check(
+                    session['tip_patch_gray'], gray,
+                    float(new_points[1][0][0]), float(new_points[1][0][1]),
+                    session['tip_in_tip_patch_x'],
+                    session['tip_in_tip_patch_y'],
+                    effective_scale,
+                )
+                if tip_anchor < LK_ANCHOR_NCC_FLOOR:
+                    tip_trusted = False
+                    tip_conf = 0.0
 
             # ----- NCC rescue for failed LK points -----
             # Lazy pyramid construction shared between both rescues.
