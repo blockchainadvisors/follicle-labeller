@@ -304,6 +304,62 @@ export class FollicleTrackingService {
       return { success: false };
     }
   }
+
+  async cameraPrepareLK(
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    firstFrameData: string,
+    expectedScale: number = 1.0,
+  ): Promise<VideoPrepareResult> {
+    try {
+      return await withRetry(
+        () => getPlatform().yoloDetection.cameraPrepareLK(
+          originPatchData,
+          tipPatchData,
+          originInOriginPatchX,
+          originInOriginPatchY,
+          tipInTipPatchX,
+          tipInTipPatchY,
+          initialDx,
+          initialDy,
+          follicleWidth,
+          follicleHeight,
+          firstFrameData,
+          expectedScale,
+        ),
+        { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
+      );
+    } catch (error) {
+      console.error('Camera prepare (LK) failed:', error);
+      return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: error instanceof Error ? error.message : 'Prepare failed' };
+    }
+  }
+
+  async cameraMatchFrame(
+    sessionId: string,
+    frameData: string,
+  ): Promise<VideoFrameResult> {
+    // No retry wrapper here: the caller drives frame cadence and will
+    // just drop this frame's match on failure. Retrying mid-stream would
+    // stall the capture loop behind stale frames.
+    try {
+      return await getPlatform().yoloDetection.cameraMatchFrame(
+        sessionId,
+        frameData,
+      );
+    } catch (error) {
+      console.error('Camera match frame failed:', error);
+      return { success: false, frameIndex: 0, match: null, done: false, error: error instanceof Error ? error.message : 'Match failed' };
+    }
+  }
 }
 
 // Export singleton instance

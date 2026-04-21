@@ -521,6 +521,39 @@ export interface YoloDetectionAdapter {
 
   /** Stop video tracking session */
   videoStop(sessionId: string): Promise<{ success: boolean }>;
+
+  /**
+   * Prepare a Lucas-Kanade optical flow tracking session fed by a live
+   * camera stream. Takes the same two source patches as ``videoPrepareLK``
+   * but instead of a video file path, receives ``firstFrameData`` — a
+   * base64 JPEG of the first frame captured from getUserMedia. Subsequent
+   * frames arrive via ``cameraMatchFrame``.
+   */
+  cameraPrepareLK(
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    firstFrameData: string,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult>;
+
+  /**
+   * Per-frame match for an active camera session. ``frameData`` is a
+   * base64-encoded JPEG captured from the MediaStream — the backend does
+   * not own the frame source, so the caller drives cadence and applies
+   * its own back-pressure.
+   */
+  cameraMatchFrame(
+    sessionId: string,
+    frameData: string,
+  ): Promise<VideoFrameResult>;
 }
 
 // ============================================

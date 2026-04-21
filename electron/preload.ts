@@ -996,6 +996,50 @@ const electronAPI = {
       sessionId: string,
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke("yolo-detection:videoStop", sessionId),
+
+    // Live camera LK session — same tracker as videoPrepareLK but fed
+    // frame-by-frame from a getUserMedia stream. firstFrameData seeds
+    // the NCC anchors the way cv2.VideoCapture.read() does on the file
+    // path.
+    cameraPrepareLK: (
+      originPatchData: string,
+      tipPatchData: string,
+      originInOriginPatchX: number,
+      originInOriginPatchY: number,
+      tipInTipPatchX: number,
+      tipInTipPatchY: number,
+      initialDx: number,
+      initialDy: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      firstFrameData: string,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke(
+        "yolo-detection:cameraPrepareLK",
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        firstFrameData,
+        expectedScale,
+      ),
+
+    cameraMatchFrame: (
+      sessionId: string,
+      frameData: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke(
+        "yolo-detection:cameraMatchFrame",
+        sessionId,
+        frameData,
+      ),
   },
 };
 

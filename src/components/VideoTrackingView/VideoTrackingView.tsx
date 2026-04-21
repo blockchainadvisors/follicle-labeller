@@ -60,14 +60,17 @@ interface InnerProps {
 const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
   const {
     sessionId,
+    source,
     videoFileName,
     fps,
     frameCount,
     videoWidth,
     videoHeight,
+    cameraDeviceId,
     sourceImageId,
     sourceFollicleId,
   } = session;
+  const isCamera = source === 'camera';
 
   // Source scalp image and tracked follicle resolved from stores.
   // These may become null if the image/follicle is deleted mid-session;
@@ -866,8 +869,11 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [zoomAtPoint, resetViewport, seekTo, togglePlay, fps, fitSourceToFollicle]);
 
-  // Processing loop: fetches new frames from the backend
+  // Processing loop: fetches new frames from the backend.
+  // File-source only — camera sessions use the capture loop below which
+  // pushes frames FROM the frontend TO the backend.
   useEffect(() => {
+    if (isCamera) return;
     if (status !== "tracking") return;
     stoppedRef.current = false;
     let cancelled = false;
@@ -926,10 +932,13 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, status, displayFrameAtIndex, memoryWarning]);
+  }, [isCamera, sessionId, status, displayFrameAtIndex, memoryWarning]);
 
-  // Playback tick: advance view through cache at FPS
+  // Playback tick: advance view through cache at FPS.
+  // File-source only — camera sessions render each frame as it arrives,
+  // driven by requestVideoFrameCallback rather than a fixed FPS cadence.
   useEffect(() => {
+    if (isCamera) return;
     if (!isPlaying) return;
     if (fps <= 0) return;
 
@@ -956,7 +965,203 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [isPlaying, fps, displayFrameAtIndex]);
+  }, [isCamera, isPlaying, fps, displayFrameAtIndex]);
+
+  // Camera capture loop: open getUserMedia, draw each <video> frame into
+  // an OffscreenCanvas, push the JPEG to the backend for a per-frame
+  // match, then render the resulting bitmap directly (no frame cache).
+  // Back-pressure: drop intervening frames while a match is inflight.
+  useEffect(() => {
+    if (!isCamera) return;
+    if (!cameraDeviceId) return;
+    if (status !== "tracking") return;
+
+    stoppedRef.current = false;
+    let cancelled = false;
+    let activeStream: MediaStream | null = null;
+    let rafId = 0;
+    let inflight = false;
+    let frameCounter = 0;
+
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    const offCanvas =
+      typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(videoWidth || 640, videoHeight || 480)
+        : null;
+
+    const blobToBase64 = async (blob: Blob): Promise<string> => {
+      const buf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode.apply(
+          null,
+          Array.from(bytes.subarray(i, i + 0x8000)),
+        );
+      }
+      return `data:image/jpeg;base64,${btoa(binary)}`;
+    };
+
+    const scheduleNext = () => {
+      if (cancelled || stoppedRef.current) return;
+      const v = video as HTMLVideoElement & {
+        requestVideoFrameCallback?: (cb: () => void) => number;
+      };
+      if (typeof v.requestVideoFrameCallback === "function") {
+        v.requestVideoFrameCallback(() => {
+          void captureOnce();
+        });
+      } else {
+        rafId = requestAnimationFrame(() => {
+          void captureOnce();
+        });
+      }
+    };
+
+    const captureOnce = async () => {
+      if (cancelled || stoppedRef.current) return;
+      if (!isPlayingRef.current || inflight) {
+        scheduleNext();
+        return;
+      }
+      if (!video.videoWidth || !video.videoHeight || !offCanvas) {
+        scheduleNext();
+        return;
+      }
+
+      inflight = true;
+      try {
+        if (offCanvas.width !== video.videoWidth)
+          offCanvas.width = video.videoWidth;
+        if (offCanvas.height !== video.videoHeight)
+          offCanvas.height = video.videoHeight;
+        const ctx = offCanvas.getContext("2d");
+        if (!ctx) {
+          inflight = false;
+          scheduleNext();
+          return;
+        }
+        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+        const blob = await offCanvas.convertToBlob({
+          type: "image/jpeg",
+          quality: 0.8,
+        });
+        const bitmap = await createImageBitmap(blob);
+        const b64 = await blobToBase64(blob);
+
+        const result = await follicleTrackingService.cameraMatchFrame(
+          sessionId,
+          b64,
+        );
+
+        if (cancelled || stoppedRef.current) {
+          bitmap.close();
+          return;
+        }
+        if (!result.success) {
+          bitmap.close();
+          return;
+        }
+
+        const frameIndex = frameCounter++;
+
+        if (result.match) {
+          if (frameIndex === 0 || frameZeroAnchorRef.current === null) {
+            if (frameIndex === 0) {
+              frameZeroAnchorRef.current = {
+                x: result.match.transformedX,
+                y: result.match.transformedY,
+              };
+            }
+          }
+          const anchor = frameZeroAnchorRef.current;
+          if (anchor) {
+            const dx = result.match.transformedX - anchor.x;
+            const dy = result.match.transformedY - anchor.y;
+            setDrift(Math.hypot(dx, dy));
+          }
+        } else {
+          setDrift(null);
+        }
+
+        setConfidence(result.match ? result.match.confidence : null);
+        viewFrameRef.current = frameIndex;
+        processingMaxFrameRef.current = frameIndex;
+        setViewFrame(frameIndex);
+        setProcessingMaxFrame(frameIndex);
+
+        if (currentFrameRef.current) {
+          try {
+            currentFrameRef.current.bitmap.close();
+          } catch {
+            // ignore
+          }
+        }
+        currentFrameRef.current = {
+          bitmap,
+          match: result.match,
+          frameIndex,
+        };
+        redrawCanvas();
+      } catch (err) {
+        console.error("Camera capture loop error:", err);
+      } finally {
+        inflight = false;
+        scheduleNext();
+      }
+    };
+
+    (async () => {
+      try {
+        activeStream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: cameraDeviceId } },
+        });
+        if (cancelled) {
+          activeStream.getTracks().forEach((t) => t.stop());
+          activeStream = null;
+          return;
+        }
+        video.srcObject = activeStream;
+        await video.play();
+        if (!video.videoWidth || !video.videoHeight) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error("Timed out waiting for camera metadata")),
+              5000,
+            );
+            video.onloadedmetadata = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          });
+        }
+        scheduleNext();
+      } catch (err) {
+        console.error("Failed to open camera stream:", err);
+        setStatus("stopped");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      if (activeStream) {
+        activeStream.getTracks().forEach((t) => t.stop());
+        activeStream = null;
+      }
+      video.srcObject = null;
+    };
+  }, [
+    isCamera,
+    cameraDeviceId,
+    sessionId,
+    status,
+    videoWidth,
+    videoHeight,
+    redrawCanvas,
+  ]);
 
   // Mount cleanup: close all bitmaps on unmount
   useEffect(() => {
@@ -1115,22 +1320,26 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       {/* Header */}
       <div className="video-tracking-header">
         <div className="video-tracking-header-left">
-          <div className="video-tracking-title">Video Tracking</div>
+          <div className="video-tracking-title">
+            {isCamera ? "Live Camera Tracking" : "Video Tracking"}
+          </div>
           <div className="video-tracking-stats">
             <span>
               Frame:{" "}
               <span className="video-tracking-stat-value">
-                {displayFrameNum}/{frameCount}
+                {isCamera ? displayFrameNum : `${displayFrameNum}/${frameCount}`}
               </span>
             </span>
-            <span>
-              FPS:{" "}
-              <span className="video-tracking-stat-value">
-                {fps.toFixed(1)}
+            {!isCamera && (
+              <span>
+                FPS:{" "}
+                <span className="video-tracking-stat-value">
+                  {fps.toFixed(1)}
+                </span>
               </span>
-            </span>
+            )}
             <span>
-              File:{" "}
+              {isCamera ? "Camera: " : "File: "}
               <span className="video-tracking-stat-value">{videoFileName}</span>
             </span>
             {confidence !== null && (
@@ -1225,32 +1434,41 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           {isPlaying ? "⏸" : "▶"}
         </button>
 
-        <div
-          className="video-tracking-scrubber"
-          ref={scrubberTrackRef}
-          onMouseDown={handleScrubMouseDown}
-          onMouseMove={handleScrubHover}
-          onMouseLeave={handleScrubLeave}
-        >
-          <div className="scrubber-track" />
+        {isCamera ? (
+          // Live cameras have no known duration, so the scrubber is
+          // hidden. Status text covers the tracking state.
+          <div className="video-tracking-scrubber video-tracking-scrubber-live">
+            <div className="scrubber-track" />
+            <span className="video-tracking-live-label">● LIVE</span>
+          </div>
+        ) : (
           <div
-            className="scrubber-buffered"
-            style={{ width: `${bufferedPercent}%` }}
-          />
-          <div
-            className="scrubber-played"
-            style={{ width: `${playedPercent}%` }}
-          />
-          <div
-            className="scrubber-thumb"
-            style={{ left: `${playedPercent}%` }}
-          />
-          {scrubHoverFrame !== null && (
-            <div className="scrubber-tooltip" style={{ left: scrubHoverX }}>
-              {formatTimecode(scrubHoverFrame, fps)}
-            </div>
-          )}
-        </div>
+            className="video-tracking-scrubber"
+            ref={scrubberTrackRef}
+            onMouseDown={handleScrubMouseDown}
+            onMouseMove={handleScrubHover}
+            onMouseLeave={handleScrubLeave}
+          >
+            <div className="scrubber-track" />
+            <div
+              className="scrubber-buffered"
+              style={{ width: `${bufferedPercent}%` }}
+            />
+            <div
+              className="scrubber-played"
+              style={{ width: `${playedPercent}%` }}
+            />
+            <div
+              className="scrubber-thumb"
+              style={{ left: `${playedPercent}%` }}
+            />
+            {scrubHoverFrame !== null && (
+              <div className="scrubber-tooltip" style={{ left: scrubHoverX }}>
+                {formatTimecode(scrubHoverFrame, fps)}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="video-tracking-footer-right">
           <span className="video-tracking-zoom-display" title="Zoom level">
@@ -1266,7 +1484,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           <span className="video-tracking-status-text">
             {status === "tracking" && "Tracking"}
             {status === "done" && "Complete"}
-            {status === "stopped" && `Stopped at frame ${displayFrameNum}`}
+            {status === "stopped" &&
+              (isCamera ? "Stopped" : `Stopped at frame ${displayFrameNum}`)}
           </span>
         </div>
       </div>
