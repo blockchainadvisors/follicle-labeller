@@ -70,6 +70,13 @@ function createWindow(): void {
     title: "Follicle Labeller",
   });
 
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (_wc, permission, callback) => {
+      if (permission === "media") return callback(true);
+      callback(false);
+    },
+  );
+
   // Load content based on environment
   if (
     process.env.NODE_ENV === "development" ||
@@ -135,6 +142,41 @@ ipcMain.handle("dialog:openImage", async () => {
     fileName: path.basename(filePath),
     data: data.buffer,
   };
+});
+
+// Open media file dialog (images + videos)
+ipcMain.handle("dialog:openMediaFile", async () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (!window) return null;
+
+  const VIDEO_EXTENSIONS = ["mp4", "avi", "mov", "mkv", "wmv", "webm"];
+
+  const result = await dialog.showOpenDialog(window, {
+    properties: ["openFile"],
+    filters: [
+      {
+        name: "Images & Videos",
+        extensions: [
+          "png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp",
+          ...VIDEO_EXTENSIONS,
+        ],
+      },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const fileName = path.basename(filePath);
+  const ext = path.extname(filePath).toLowerCase().slice(1);
+  const isVideo = VIDEO_EXTENSIONS.includes(ext);
+
+  if (isVideo) {
+    return { filePath, fileName, data: null, isVideo: true };
+  } else {
+    const data = fs.readFileSync(filePath);
+    return { filePath, fileName, data: data.buffer, isVideo: false };
+  }
 });
 
 // Open generic file dialog with custom filters
@@ -1942,6 +1984,218 @@ ipcMain.handle(
         imgsz: imgsz ?? 640,
       },
       600000 // 10 minute timeout for TensorRT export (can be slow)
+    );
+  }
+);
+
+// Track follicles across two images from different angles
+ipcMain.handle(
+  "yolo-detection:trackAcrossImages",
+  async (
+    _,
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: string
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-across-images",
+      "POST",
+      {
+        sourceImageData,
+        targetImageData,
+        confidenceThreshold: confidenceThreshold ?? 0.5,
+        matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+        method: method ?? "auto",
+      },
+      600000 // 10 minute timeout (tiled inference on two large images)
+    );
+  }
+);
+
+// Prepare a tracking session (compute homography, cache images)
+ipcMain.handle(
+  "yolo-detection:trackPrepare",
+  async (
+    _,
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-prepare",
+      "POST",
+      {
+        sourceImageData,
+        targetImageData,
+        confidenceThreshold: confidenceThreshold ?? 0.5,
+        matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+      },
+      600000
+    );
+  }
+);
+
+// Match a single follicle against a prepared tracking session
+ipcMain.handle(
+  "yolo-detection:trackMatchSingle",
+  async (
+    _,
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/track-match-single",
+      "POST",
+      { sessionId, sourceBbox },
+      30000 // 30 second timeout (single follicle = fast)
+    );
+  }
+);
+
+// Prepare a template-matching session (no homography, no YOLO)
+ipcMain.handle(
+  "yolo-detection:templatePrepare",
+  async (
+    _,
+    targetFilePath: string,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/template-prepare",
+      "POST",
+      { targetFilePath },
+      30000
+    );
+  }
+);
+
+// Match a single follicle via template matching (receives small context patch)
+ipcMain.handle(
+  "yolo-detection:templateMatchSingle",
+  async (
+    _,
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/template-match-single",
+      "POST",
+      { sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale },
+      30000
+    );
+  }
+);
+
+// Prepare a dual-point video tracking session
+ipcMain.handle(
+  "yolo-detection:videoPrepare",
+  async (
+    _,
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/video-prepare",
+      "POST",
+      {
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      },
+      30000
+    );
+  }
+);
+
+// Prepare a Lucas-Kanade optical flow video tracking session
+// (parallel to videoPrepare, same payload, different backend handler)
+ipcMain.handle(
+  "yolo-detection:videoPrepareLK",
+  async (
+    _,
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/video-prepare-lk",
+      "POST",
+      {
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      },
+      30000
+    );
+  }
+);
+
+// Match next video frame
+ipcMain.handle(
+  "yolo-detection:videoMatchFrame",
+  async (_, sessionId: string) => {
+    return makeBlobServerRequest(
+      `/yolo-detect/video-match-frame/${sessionId}`,
+      "POST",
+      {},
+      30000
+    );
+  }
+);
+
+// Stop video tracking session
+ipcMain.handle(
+  "yolo-detection:videoStop",
+  async (_, sessionId: string) => {
+    return makeBlobServerRequest(
+      `/yolo-detect/video-stop/${sessionId}`,
+      "POST",
+      {},
+      10000
     );
   }
 );

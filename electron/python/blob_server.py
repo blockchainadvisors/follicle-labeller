@@ -1824,6 +1824,61 @@ class DetectionPredictTiledRequest(BaseModel):
     scaleFactor: Optional[float] = 1.0  # Upscale factor for smaller objects
 
 
+class DetectionTrackAcrossImagesRequest(BaseModel):
+    sourceImageData: str  # base64 encoded
+    targetImageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+    matchDistanceThreshold: Optional[float] = 50.0  # pixels
+    method: Optional[str] = 'auto'  # 'auto', 'homography', 'track'
+
+
+class TrackPrepareRequest(BaseModel):
+    sourceImageData: str  # base64 encoded
+    targetImageData: str  # base64 encoded
+    confidenceThreshold: Optional[float] = 0.5
+    matchDistanceThreshold: Optional[float] = 50.0
+
+
+class TrackMatchSingleRequest(BaseModel):
+    sessionId: str
+    sourceBbox: Dict[str, float]  # {x, y, width, height}
+
+
+class TemplatePrepareRequest(BaseModel):
+    targetFilePath: str
+
+
+class TemplateMatchSingleRequest(BaseModel):
+    sessionId: str
+    sourcePatchData: str  # base64-encoded PNG of the context patch
+    follicleOffsetX: float
+    follicleOffsetY: float
+    follicleWidth: float
+    follicleHeight: float
+    expectedScale: Optional[float] = 1.0
+
+
+class VideoPrepareRequest(BaseModel):
+    """
+    Dual-point video tracking session setup. Two independent NCC template
+    patches are sent — one centered on the graft origin, one on the graft
+    tip — plus the initial source-image delta between them used for the
+    rigid-consistency check at match time.
+    """
+    videoFilePath: str
+    originPatchData: str          # base64-encoded PNG, centered on origin
+    tipPatchData: str             # base64-encoded PNG, centered on tip
+    originInOriginPatchX: float   # origin position within the origin patch
+    originInOriginPatchY: float
+    tipInTipPatchX: float         # tip position within the tip patch
+    tipInTipPatchY: float
+    initialDx: float              # tipX - originX in source-image pixels
+    initialDy: float              # tipY - originY in source-image pixels
+    follicleWidth: float
+    follicleHeight: float
+    expectedScale: Optional[float] = 1.0
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2091,6 +2146,200 @@ async def yolo_detect_predict_tiled(req: DetectionPredictTiledRequest):
         'scaleFactor': req.scaleFactor or 1.0,
         'backend': service.get_loaded_model_backend()
     }
+
+
+@app.post('/yolo-detect/track-across-images')
+async def yolo_detect_track_across_images(req: DetectionTrackAcrossImagesRequest):
+    """
+    Track follicles across two images of the same scalp from different angles.
+    Uses homography-based feature matching with model.track() fallback.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+
+    result = service.track_across_images_base64(
+        source_image_base64=req.sourceImageData,
+        target_image_base64=req.targetImageData,
+        confidence_threshold=req.confidenceThreshold or 0.5,
+        match_distance_threshold=req.matchDistanceThreshold or 50.0,
+        method=req.method or 'auto'
+    )
+
+    return result
+
+
+@app.post('/yolo-detect/track-prepare')
+async def yolo_detect_track_prepare(req: TrackPrepareRequest):
+    """
+    Prepare a tracking session: compute homography between two images.
+    Returns a session ID for subsequent single-follicle match requests.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.prepare_tracking_session_base64(
+        source_image_base64=req.sourceImageData,
+        target_image_base64=req.targetImageData,
+        confidence_threshold=req.confidenceThreshold or 0.5,
+        match_distance_threshold=req.matchDistanceThreshold or 50.0
+    )
+
+
+@app.post('/yolo-detect/track-match-single')
+async def yolo_detect_track_match_single(req: TrackMatchSingleRequest):
+    """
+    Match a single source follicle against the target image using
+    a previously prepared tracking session.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.match_single_follicle(
+        session_id=req.sessionId,
+        source_bbox=req.sourceBbox
+    )
+
+
+@app.post('/yolo-detect/template-prepare')
+async def yolo_detect_template_prepare(req: TemplatePrepareRequest):
+    """
+    Prepare a template-matching session: read target image from disk
+    and build a Gaussian pyramid.  Only the target is needed here —
+    the source patch is sent per-click.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.prepare_template_session(
+        target_file_path=req.targetFilePath,
+    )
+
+
+@app.post('/yolo-detect/template-match-single')
+async def yolo_detect_template_match_single(req: TemplateMatchSingleRequest):
+    """
+    Match a single source follicle using multi-scale pyramid NCC
+    template matching.  Receives just the small context patch around
+    the follicle, not the full source image.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    # Decode the small base64 patch (typically a few KB)
+    patch_b64 = req.sourcePatchData
+    if ',' in patch_b64:
+        patch_b64 = patch_b64.split(',', 1)[1]
+    patch_bytes = base64.b64decode(patch_b64)
+
+    service = get_yolo_detection_service()
+    return service.template_match_single(
+        session_id=req.sessionId,
+        source_patch_data=patch_bytes,
+        follicle_offset_x=req.follicleOffsetX,
+        follicle_offset_y=req.follicleOffsetY,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
+@app.post('/yolo-detect/video-prepare')
+async def yolo_detect_video_prepare(req: VideoPrepareRequest):
+    """
+    Open a video file and cache BOTH origin and tip source patches for
+    dual-point frame-by-frame NCC matching with a rigid-consistency check.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    def _strip_and_decode(b64: str) -> bytes:
+        if ',' in b64:
+            b64 = b64.split(',', 1)[1]
+        return base64.b64decode(b64)
+
+    origin_bytes = _strip_and_decode(req.originPatchData)
+    tip_bytes = _strip_and_decode(req.tipPatchData)
+
+    service = get_yolo_detection_service()
+    return service.prepare_video_session(
+        video_file_path=req.videoFilePath,
+        origin_patch_data=origin_bytes,
+        tip_patch_data=tip_bytes,
+        origin_in_origin_patch_x=req.originInOriginPatchX,
+        origin_in_origin_patch_y=req.originInOriginPatchY,
+        tip_in_tip_patch_x=req.tipInTipPatchX,
+        tip_in_tip_patch_y=req.tipInTipPatchY,
+        initial_dx=req.initialDx,
+        initial_dy=req.initialDy,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
+@app.post('/yolo-detect/video-prepare-lk')
+async def yolo_detect_video_prepare_lk(req: VideoPrepareRequest):
+    """
+    Open a video file and prepare a Lucas-Kanade optical flow tracking
+    session. Same payload as /yolo-detect/video-prepare — the backend uses
+    the two patches for frame-0 NCC seeding and as a rescue path when LK
+    fails on a point mid-video.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    def _strip_and_decode(b64: str) -> bytes:
+        if ',' in b64:
+            b64 = b64.split(',', 1)[1]
+        return base64.b64decode(b64)
+
+    origin_bytes = _strip_and_decode(req.originPatchData)
+    tip_bytes = _strip_and_decode(req.tipPatchData)
+
+    service = get_yolo_detection_service()
+    return service.prepare_video_session_lk(
+        video_file_path=req.videoFilePath,
+        origin_patch_data=origin_bytes,
+        tip_patch_data=tip_bytes,
+        origin_in_origin_patch_x=req.originInOriginPatchX,
+        origin_in_origin_patch_y=req.originInOriginPatchY,
+        tip_in_tip_patch_x=req.tipInTipPatchX,
+        tip_in_tip_patch_y=req.tipInTipPatchY,
+        initial_dx=req.initialDx,
+        initial_dy=req.initialDy,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
+
+@app.post('/yolo-detect/video-match-frame/{session_id}')
+async def yolo_detect_video_match_frame(session_id: str):
+    """
+    Read the next video frame, match against the cached source patch,
+    return the result for this single frame.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.match_video_frame(session_id=session_id)
+
+
+@app.post('/yolo-detect/video-stop/{session_id}')
+async def yolo_detect_video_stop(session_id: str):
+    """Release VideoCapture and clean up a video session."""
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    service = get_yolo_detection_service()
+    return service.stop_video_session(session_id=session_id)
 
 
 @app.post('/yolo-detect/export-onnx')

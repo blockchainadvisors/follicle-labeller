@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult, VideoPrepareResult, VideoFrameResult } from '../../types';
 import { config } from '../config';
 
 export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
@@ -314,5 +314,152 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     }
 
     return response.json();
+  }
+
+  async trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-across-images`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImageData,
+          targetImageData,
+          confidenceThreshold: confidenceThreshold ?? 0.5,
+          matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+          method: method ?? 'auto',
+        }),
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          sourceDetections: [],
+          targetDetections: [],
+          matches: [],
+          method: method ?? 'auto',
+          error: `Server returned ${response.status}`,
+        };
+      }
+
+      return response.json();
+    } catch (error) {
+      return {
+        success: false,
+        sourceDetections: [],
+        targetDetections: [],
+        matches: [],
+        method: method ?? 'auto',
+        error: String(error),
+      };
+    }
+  }
+
+  async trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sourceImageData,
+          targetImageData,
+          confidenceThreshold: confidenceThreshold ?? 0.5,
+          matchDistanceThreshold: matchDistanceThreshold ?? 50.0,
+        }),
+      });
+      if (!response.ok) {
+        return { success: false, sessionId: '', error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, sessionId: '', error: String(error) };
+    }
+  }
+
+  async trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/track-match-single`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, sourceBbox }),
+      });
+      if (!response.ok) {
+        return { success: false, match: null, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, match: null, error: String(error) };
+    }
+  }
+
+  async templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/template-prepare`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetFilePath }),
+      });
+      if (!response.ok) {
+        return { success: false, sessionId: '', error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, sessionId: '', error: String(error) };
+    }
+  }
+
+  async templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<TrackMatchSingleResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/template-match-single`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale }),
+      });
+      if (!response.ok) {
+        return { success: false, match: null, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, match: null, error: String(error) };
+    }
+  }
+
+  async videoPrepare(): Promise<VideoPrepareResult> {
+    return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: 'Video tracking not supported in web mode' };
+  }
+
+  async videoPrepareLK(): Promise<VideoPrepareResult> {
+    return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: 'Video tracking not supported in web mode' };
+  }
+
+  async videoMatchFrame(): Promise<VideoFrameResult> {
+    return { success: false, frameIndex: 0, match: null, done: true, error: 'Video tracking not supported in web mode' };
+  }
+
+  async videoStop(): Promise<{ success: boolean }> {
+    return { success: true };
   }
 }

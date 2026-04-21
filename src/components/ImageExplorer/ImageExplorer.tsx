@@ -4,7 +4,8 @@ import { useFollicleStore } from '../../store/follicleStore';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useLoadingStore } from '../../store/loadingStore';
 import { ProjectImage } from '../../types';
-import { AlertTriangle, Settings } from 'lucide-react';
+import { AlertTriangle, Settings, Link } from 'lucide-react';
+import { useTrackingStore } from '../../store/trackingStore';
 
 // Generate thumbnail using OffscreenCanvas
 async function generateThumbnail(imageBitmap: ImageBitmap, maxSize: number = 48): Promise<string> {
@@ -32,11 +33,12 @@ interface ImageItemProps {
   isActive: boolean;
   annotationCount: number;
   hasCustomSettings: boolean;
+  hasTrackingSession: boolean;
   onSelect: () => void;
   onRemove: () => void;
 }
 
-const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, hasCustomSettings, onSelect, onRemove }) => {
+const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount, hasCustomSettings, hasTrackingSession, onSelect, onRemove }) => {
   const [thumbnail, setThumbnail] = useState<string>('');
   const [isHovered, setIsHovered] = useState(false);
 
@@ -81,6 +83,11 @@ const ImageItem: React.FC<ImageItemProps> = ({ image, isActive, annotationCount,
               <Settings size={10} />
             </span>
           )}
+          {hasTrackingSession && (
+            <span className="custom-settings-indicator" title="Part of a tracking session">
+              <Link size={10} />
+            </span>
+          )}
         </span>
         <span className="annotation-count">
           {annotationCount} annotation{annotationCount !== 1 ? 's' : ''}
@@ -114,6 +121,8 @@ export const ImageExplorer: React.FC = () => {
   const deleteFolliclesForImage = useFollicleStore(state => state.deleteFolliclesForImage);
 
   const imageSettingsOverrides = useSettingsStore(state => state.imageSettingsOverrides);
+
+  const trackingSessions = useTrackingStore(state => state.sessions);
 
   // Loading store for global loading overlay
   const startLoading = useLoadingStore((state) => state.startLoading);
@@ -236,6 +245,7 @@ export const ImageExplorer: React.FC = () => {
                 isActive={imageId === activeImageId}
                 annotationCount={getAnnotationCount(imageId)}
                 hasCustomSettings={imageSettingsOverrides.has(imageId)}
+                hasTrackingSession={trackingSessions.some(s => s.sourceImageId === imageId || s.targetImageId === imageId)}
                 onSelect={() => setActiveImage(imageId)}
                 onRemove={() => handleRemoveImage(imageId)}
               />

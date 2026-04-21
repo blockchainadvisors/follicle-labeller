@@ -4,6 +4,7 @@ import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, Detecti
 import { blobService } from '../../services/blobService';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
+import { useCameraDevices, useCameraPreview } from '../../hooks/useCameraDevices';
 import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
@@ -87,6 +88,10 @@ export interface DetectionSettings {
 
   // Origin visualization settings
   originPunchDiameter: number;  // Diameter of the punch gripper circle in image pixels (default 30)
+
+  // Live camera selection (machine-local; intentionally not exported to .fol project files)
+  liveCameraDeviceId: string | null;
+  liveCameraLabel: string | null;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -154,6 +159,9 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   keypointInferenceBackend: 'pytorch',
   // Origin visualization - punch gripper diameter in image pixels
   originPunchDiameter: 30,
+  // Live camera - no selection until the user picks one
+  liveCameraDeviceId: null,
+  liveCameraLabel: null,
 };
 
 // Install state that can be managed by parent for persistence
@@ -851,6 +859,28 @@ export function DetectionSettingsDialog({
       setTensorrtInstallError(error instanceof Error ? error.message : 'TensorRT installation failed');
     }
   };
+
+  // Live camera — enumerate devices, handle permission, and preview the active one
+  const {
+    devices: cameraDevices,
+    permission: cameraPermission,
+    refresh: refreshCameras,
+    requestAccess: requestCameraAccess,
+  } = useCameraDevices(true);
+  const cameraPreviewEnabled =
+    !!settings.liveCameraDeviceId &&
+    cameraDevices.some((d) => d.deviceId === settings.liveCameraDeviceId);
+  const {
+    stream: cameraStream,
+    error: cameraPreviewError,
+    loading: cameraPreviewLoading,
+  } = useCameraPreview(settings.liveCameraDeviceId, cameraPreviewEnabled);
+  const cameraPreviewRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (cameraPreviewRef.current) {
+      cameraPreviewRef.current.srcObject = cameraStream;
+    }
+  }, [cameraStream]);
 
   // Live update handler - immediately saves changes
   const handleChange = <K extends keyof DetectionSettings>(
@@ -2000,6 +2030,99 @@ export function DetectionSettingsDialog({
                     </p>
                   </>
                 )}
+              </div>
+            )}
+          </section>
+
+          <section className="settings-section">
+            <h3>Live Camera</h3>
+            <div className="settings-row">
+              <label htmlFor="live-camera-select">Camera</label>
+              <select
+                id="live-camera-select"
+                value={settings.liveCameraDeviceId ?? ''}
+                disabled={cameraPermission !== 'granted' || cameraDevices.length === 0}
+                onChange={e => {
+                  const dev = cameraDevices.find(d => d.deviceId === e.target.value);
+                  const newSettings: DetectionSettings = {
+                    ...settings,
+                    liveCameraDeviceId: dev?.deviceId ?? null,
+                    liveCameraLabel: dev?.label || null,
+                  };
+                  if (applyToImageOnly && activeImageId && onImageSettingsChange) {
+                    onImageSettingsChange(activeImageId, newSettings);
+                  } else {
+                    onSettingsChange(newSettings);
+                  }
+                }}
+              >
+                <option value="" disabled>
+                  {cameraPermission === 'granted'
+                    ? (cameraDevices.length ? 'Select a camera…' : 'No cameras detected')
+                    : cameraPermission === 'denied'
+                    ? 'Camera access denied'
+                    : cameraPermission === 'unavailable'
+                    ? 'Camera API unavailable'
+                    : 'Requesting camera access…'}
+                </option>
+                {cameraDevices.map((d, i) => (
+                  <option key={d.deviceId || `cam-${i}`} value={d.deviceId}>
+                    {d.label || `Camera ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="camera-refresh-btn"
+                onClick={() => void refreshCameras()}
+                title="Refresh camera list"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {cameraPermission === 'denied' && (
+              <div className="settings-row camera-hint-row">
+                <AlertCircle size={14} />
+                <span>
+                  Camera access denied. Enable it in System Settings › Privacy &amp; Security › Camera, then click Retry.
+                </span>
+                <button
+                  type="button"
+                  className="camera-refresh-btn"
+                  onClick={() => void requestCameraAccess()}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {settings.liveCameraDeviceId &&
+              !cameraDevices.some(d => d.deviceId === settings.liveCameraDeviceId) &&
+              cameraPermission === 'granted' && (
+              <div className="settings-row camera-warning-row">
+                <AlertCircle size={14} />
+                <span>
+                  Previously selected camera "{settings.liveCameraLabel ?? 'unknown'}" is not connected.
+                </span>
+              </div>
+            )}
+
+            {cameraPreviewEnabled && (
+              <div className="settings-row camera-preview-row">
+                {cameraPreviewLoading && (
+                  <span className="setting-hint">Opening camera…</span>
+                )}
+                {cameraPreviewError && (
+                  <span className="setting-hint camera-preview-error">{cameraPreviewError}</span>
+                )}
+                <video
+                  ref={cameraPreviewRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="camera-preview"
+                />
               </div>
             )}
           </section>

@@ -118,6 +118,7 @@ export const PropertyPanel: React.FC = () => {
             </ul>
           </div>
         </div>
+        <img src="/kollestee-logo.png" alt="Kollestee UK Global" className="app-logo" />
       </div>
     );
   }
@@ -306,6 +307,7 @@ export const PropertyPanel: React.FC = () => {
             </div>
           </div>
         )}
+        <img src="/kollestee-logo.png" alt="Kollestee UK Global" className="app-logo" />
       </div>
     );
   }
@@ -513,6 +515,8 @@ export const PropertyPanel: React.FC = () => {
           Delete {shapeLabel}
         </button>
       </div>
+
+      <img src="/kollestee-logo.png" alt="Kollestee UK Global" className="app-logo" />
 
       {/* Unlock confirmation dialog */}
       {showUnlockWarning && isRectangle(selected) && (

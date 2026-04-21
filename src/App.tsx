@@ -6,13 +6,18 @@ import { ImageExplorer } from './components/ImageExplorer/ImageExplorer';
 import { HelpPanel } from './components/HelpPanel/HelpPanel';
 import { StatisticsPanel } from './components/StatisticsPanel/StatisticsPanel';
 import { LoadingOverlay } from './components/LoadingOverlay';
+import { ComparisonView } from './components/ComparisonView/ComparisonView';
+import { VideoTrackingView } from './components/VideoTrackingView/VideoTrackingView';
 import { useThemeStore } from './store/themeStore';
 import { useCanvasStore } from './store/canvasStore';
+import { useTrackingStore } from './store/trackingStore';
 
 const App: React.FC = () => {
   const initializeTheme = useThemeStore(state => state.initializeTheme);
   const showStatistics = useCanvasStore(state => state.showStatistics);
   const toggleStatistics = useCanvasStore(state => state.toggleStatistics);
+  const isComparisonViewOpen = useTrackingStore(state => state.isComparisonViewOpen);
+  const isVideoTrackingOpen = useTrackingStore(state => state.isVideoTrackingOpen);
 
   // Initialize theme on app startup
   useEffect(() => {
@@ -22,11 +27,17 @@ const App: React.FC = () => {
   return (
     <div className="app">
       <Toolbar />
-      <div className="main-content">
-        <ImageExplorer />
-        <ImageCanvas />
-        <PropertyPanel />
-      </div>
+      {isVideoTrackingOpen ? (
+        <VideoTrackingView />
+      ) : isComparisonViewOpen ? (
+        <ComparisonView />
+      ) : (
+        <div className="main-content">
+          <ImageExplorer />
+          <ImageCanvas />
+          <PropertyPanel />
+        </div>
+      )}
       <HelpPanel />
       {showStatistics && <StatisticsPanel onClose={toggleStatistics} />}
       <LoadingOverlay />

@@ -16,6 +16,11 @@ import type {
   ModelInfo,
   KeypointPrediction,
   DetectionPrediction,
+  TrackAcrossImagesResult,
+  TrackPrepareResult,
+  TrackMatchSingleResult,
+  VideoPrepareResult,
+  VideoFrameResult,
 } from '../types';
 
 // ============================================
@@ -31,6 +36,13 @@ export interface OpenImageResult {
 export interface OpenFileOptions {
   filters?: Array<{ name: string; extensions: string[] }>;
   title?: string;
+}
+
+export interface OpenMediaResult {
+  filePath: string;
+  fileName: string;
+  data: ArrayBuffer | null;
+  isVideo: boolean;
 }
 
 export interface SaveProjectResult {
@@ -64,6 +76,7 @@ export interface ProjectImageData {
 export interface FileAdapter {
   /** Open single image dialog (for adding images) */
   openImageDialog(): Promise<OpenImageResult | null>;
+  openMediaFileDialog(): Promise<OpenMediaResult | null>;
 
   /** Open file dialog with filters */
   openFileDialog(options: OpenFileOptions): Promise<OpenImageResult | null>;
@@ -422,6 +435,92 @@ export interface YoloDetectionAdapter {
     half?: boolean,
     imgsz?: number
   ): Promise<ExportTensorRTResult>;
+
+  /** Track follicles across two images from different angles */
+  trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult>;
+
+  /** Prepare a tracking session (compute homography, cache images) */
+  trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult>;
+
+  /** Match a single follicle against a prepared tracking session */
+  trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult>;
+
+  /** Prepare a template-matching session (target only, read from disk) */
+  templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult>;
+
+  /** Match a single follicle via multi-scale NCC template matching */
+  templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<TrackMatchSingleResult>;
+
+  /**
+   * Prepare a dual-point video tracking session. Sends two independent NCC
+   * template patches (one centered on the origin, one centered on the tip)
+   * plus the initial source-image delta between them for the rigid
+   * consistency check at match time.
+   */
+  videoPrepare(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult>;
+
+  /**
+   * Prepare a Lucas-Kanade optical flow video tracking session. Accepts the
+   * same patches/offsets as videoPrepare — the backend uses them for
+   * frame-0 NCC seeding and LK-failure rescue.
+   */
+  videoPrepareLK(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult>;
+
+  /** Match next video frame */
+  videoMatchFrame(sessionId: string): Promise<VideoFrameResult>;
+
+  /** Stop video tracking session */
+  videoStop(sessionId: string): Promise<{ success: boolean }>;
 }
 
 // ============================================

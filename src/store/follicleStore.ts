@@ -35,6 +35,7 @@ interface FollicleState {
   // Bulk operations
   clearAll: () => void;
   importFollicles: (follicles: Follicle[]) => void;
+  appendFollicles: (follicles: Follicle[]) => void;
   deleteFolliclesForImage: (imageId: ImageId) => void;
 
   // Selectors
@@ -305,6 +306,12 @@ export const useFollicleStore = create<FollicleState>()(
       importFollicles: (follicles) => {
         colorIndex = follicles.length;
         set({ follicles, selectedIds: new Set() });
+      },
+
+      appendFollicles: (newFollicles) => {
+        set(state => ({
+          follicles: [...state.follicles, ...newFollicles],
+        }));
       },
 
       deleteFolliclesForImage: (imageId) => {
