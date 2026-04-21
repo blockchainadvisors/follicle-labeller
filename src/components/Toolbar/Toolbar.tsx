@@ -2788,19 +2788,9 @@ export const Toolbar: React.FC = () => {
               <Crosshair size={18} />
             )
           }
-          tooltip={
-            !blobServerConnected
-              ? "Starting detection server..."
-              : "Track single follicle via Template Match"
-          }
+          tooltip="Template Match (disabled)"
           onClick={() => handleTrackPrepare('ncc')}
-          disabled={
-            !imageLoaded ||
-            isTracking ||
-            isDetecting ||
-            serverStarting ||
-            !blobServerConnected
-          }
+          disabled={true}
         />
         <IconButton
           icon={
@@ -2832,19 +2822,9 @@ export const Toolbar: React.FC = () => {
               <Route size={18} />
             )
           }
-          tooltip={
-            !blobServerConnected
-              ? "Starting detection server..."
-              : "Track via BoT-SORT"
-          }
+          tooltip="BoT-SORT (disabled)"
           onClick={() => handleTrackFollicles('track')}
-          disabled={
-            !imageLoaded ||
-            isTracking ||
-            isDetecting ||
-            serverStarting ||
-            !blobServerConnected
-          }
+          disabled={true}
         />
         <IconButton
           icon={
