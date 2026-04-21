@@ -24,6 +24,9 @@ import {
   Brain,
   Database,
   FileUp,
+  Crosshair,
+  Waypoints,
+  Route,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -79,9 +82,12 @@ import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction 
 import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
+import { follicleTrackingService } from "../../services/follicleTrackingService";
 import { generateId } from "../../utils/id-generator";
 import { getPlatform } from "../../platform";
 import type { LoadProjectResult } from "../../platform/types";
+import { useTrackingStore } from "../../store/trackingStore";
+import type { FollicleCorrespondence, TrackingSession } from "../../types";
 
 // Reusable icon button component
 interface IconButtonProps {
@@ -1330,13 +1336,14 @@ export const Toolbar: React.FC = () => {
 
   // Helper to get image as base64
   const getImageBase64 = useCallback(async (image: ProjectImage): Promise<string> => {
-    // Convert ArrayBuffer to base64
+    // Convert ArrayBuffer to base64 using chunked approach (avoids O(n²) string concat)
     const bytes = new Uint8Array(image.imageData);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
+    const chunks: string[] = [];
+    const chunkSize = 0x8000; // 32KB chunks — fits in call stack for apply()
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      chunks.push(String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize))));
     }
-    const base64 = btoa(binary);
+    const base64 = btoa(chunks.join(''));
 
     // Determine mime type from filename
     const ext = image.fileName.toLowerCase().split('.').pop();
@@ -1933,6 +1940,379 @@ export const Toolbar: React.FC = () => {
     }
   }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
+  // Track follicles across two images
+  const [isTracking, setIsTracking] = useState(false);
+  const addTrackingSession = useTrackingStore((s) => s.addSession);
+  const openComparisonView = useTrackingStore((s) => s.openComparisonView);
+  const setBackendSessionId = useTrackingStore((s) => s.setBackendSessionId);
+
+  const openVideoTracking = useTrackingStore((s) => s.openVideoTracking);
+
+  // Interactive single-follicle tracking: prepare session then match on click.
+  // `tracker` selects between the Template Match (two-NCC + rigid check) and
+  // Optical Flow (Lucas-Kanade + NCC rescue) backends. Both share the same
+  // two-patch crop payload, the same VideoTrackingView rendering, and the
+  // same per-frame match shape — only the prepare call differs.
+  const handleTrackPrepare = useCallback(async (tracker: 'ncc' | 'lk' = 'ncc') => {
+    if (!activeImage || !activeImageId || isTracking) return;
+
+    const platform = getPlatform();
+    const fileResult = await platform.file.openMediaFileDialog();
+    if (!fileResult) return;
+
+    setIsTracking(true);
+
+    try {
+      if (fileResult.isVideo) {
+        // --- Video tracking flow ---
+        startLoading(
+          tracker === 'lk'
+            ? "Preparing optical flow tracking..."
+            : "Preparing video tracking...",
+          false,
+        );
+
+        // Require exactly one selected follicle with origin
+        const selectedArr = Array.from(selectedIds);
+        if (selectedArr.length !== 1) {
+          throw new Error("Select exactly one follicle with an origin before tracking a video");
+        }
+        const selectedFollicle = follicles.find((f) => f.id === selectedArr[0]);
+        if (!selectedFollicle || selectedFollicle.shape !== "rectangle" || !(selectedFollicle as RectangleAnnotation).origin) {
+          throw new Error("Selected follicle must be a rectangle with an origin set");
+        }
+
+        const rect = selectedFollicle as RectangleAnnotation;
+        const origin = rect.origin!;
+
+        // Dual-point video tracking (two-NCC + rigid consistency check):
+        // crop TWO independent 5×-context patches from the source image —
+        // one centered on the graft origin, one centered on the graft tip.
+        // Each patch is matched independently per frame; the backend
+        // validates that the two matches stay rigidly consistent with the
+        // initial origin→tip delta we compute here.
+        const CONTEXT_MULT = 5.0;
+        const originX = origin.originPoint.x;
+        const originY = origin.originPoint.y;
+        const tipSrcX = originX + Math.cos(origin.directionAngle) * origin.directionLength;
+        const tipSrcY = originY + Math.sin(origin.directionAngle) * origin.directionLength;
+
+        const halfW = (rect.width * CONTEXT_MULT) / 2;
+        const halfH = (rect.height * CONTEXT_MULT) / 2;
+        const imgW = activeImage.width;
+        const imgH = activeImage.height;
+
+        // Crop one patch centered on (cx, cy) in the source image, clamped
+        // to image bounds. Returns the base64 PNG plus the point's offset
+        // within the (possibly clipped) crop — consumed by the backend as
+        // the fc_ox/fc_oy for that patch's NCC match.
+        const cropPatchBase64 = async (
+          cx: number,
+          cy: number,
+        ): Promise<{ data: string; offsetX: number; offsetY: number }> => {
+          const cropX = Math.max(0, Math.floor(cx - halfW));
+          const cropY = Math.max(0, Math.floor(cy - halfH));
+          const cropX2 = Math.min(imgW, Math.ceil(cx + halfW));
+          const cropY2 = Math.min(imgH, Math.ceil(cy + halfH));
+          const cropW = cropX2 - cropX;
+          const cropH = cropY2 - cropY;
+          const canvas = new OffscreenCanvas(cropW, cropH);
+          const ctx = canvas.getContext("2d")!;
+          ctx.drawImage(
+            activeImage.imageBitmap,
+            cropX, cropY, cropW, cropH,
+            0, 0, cropW, cropH,
+          );
+          const blob = await canvas.convertToBlob({ type: "image/png" });
+          const arrayBuf = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuf);
+          const chunks: string[] = [];
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            chunks.push(
+              String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))),
+            );
+          }
+          return {
+            data: `data:image/png;base64,${btoa(chunks.join(""))}`,
+            offsetX: cx - cropX,
+            offsetY: cy - cropY,
+          };
+        };
+
+        const originPatch = await cropPatchBase64(originX, originY);
+        const tipPatch = await cropPatchBase64(tipSrcX, tipSrcY);
+
+        // Initial rigid relationship in source-image pixels — consumed by
+        // the backend's rigid-consistency check and extrapolation fallback.
+        const initialDx = tipSrcX - originX;
+        const initialDy = tipSrcY - originY;
+
+        // Expected scale: assume video has same resolution as source for now
+        // (will be refined when video metadata comes back)
+        const expectedScale = 1.0;
+
+        const prepareCall =
+          tracker === 'lk'
+            ? follicleTrackingService.videoPrepareLK.bind(follicleTrackingService)
+            : follicleTrackingService.videoPrepare.bind(follicleTrackingService);
+
+        const result = await prepareCall(
+          fileResult.filePath,
+          originPatch.data,
+          tipPatch.data,
+          originPatch.offsetX,
+          originPatch.offsetY,
+          tipPatch.offsetX,
+          tipPatch.offsetY,
+          initialDx,
+          initialDy,
+          rect.width,
+          rect.height,
+          expectedScale,
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || "Failed to prepare video session");
+        }
+
+        openVideoTracking({
+          sessionId: result.sessionId,
+          videoFilePath: fileResult.filePath,
+          videoFileName: fileResult.fileName,
+          fps: result.fps,
+          frameCount: result.frameCount,
+          videoWidth: result.width,
+          videoHeight: result.height,
+          sourceImageId: activeImageId,
+          sourceFollicleId: selectedFollicle.id,
+        });
+      } else {
+        // --- Image tracking flow (existing) ---
+        startLoading("Preparing tracking session...", false);
+
+        const newImageId = generateImageId();
+        const imgBlob = new Blob([fileResult.data!]);
+        const imageBitmap = await createImageBitmap(imgBlob);
+        const imageSrc = URL.createObjectURL(imgBlob);
+
+        addImage({
+          id: newImageId,
+          fileName: fileResult.fileName,
+          width: imageBitmap.width,
+          height: imageBitmap.height,
+          imageData: fileResult.data!,
+          imageBitmap,
+          imageSrc,
+          viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+          createdAt: Date.now(),
+          sortOrder: images.size,
+        });
+
+        const result = await follicleTrackingService.templatePrepare(
+          fileResult.filePath,
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || "Failed to prepare tracking session");
+        }
+
+        setBackendSessionId(result.sessionId);
+
+        const session: TrackingSession = {
+          id: generateId(),
+          sourceImageId: activeImageId,
+          targetImageId: newImageId,
+          correspondences: [],
+          method: "template",
+          createdAt: Date.now(),
+        };
+
+        addTrackingSession(session);
+        openComparisonView(session.id);
+      }
+    } catch (error) {
+      console.error("Track prepare failed:", error);
+      alert(
+        `Tracking preparation failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    } finally {
+      setIsTracking(false);
+      stopLoading();
+    }
+  }, [
+    activeImage, activeImageId, isTracking, images.size, selectedIds, follicles,
+    addImage, addTrackingSession, openComparisonView, openVideoTracking,
+    setBackendSessionId, startLoading, stopLoading,
+  ]);
+
+  const handleTrackFollicles = useCallback(async (method: 'homography' | 'track') => {
+    if (!activeImage || !activeImageId || isTracking) return;
+
+    // Open file picker for second image
+    const platform = getPlatform();
+    const fileResult = await platform.file.openImageDialog();
+    if (!fileResult) return;
+
+    setIsTracking(true);
+    const methodLabel = method === 'homography' ? 'Homography' : 'BoT-SORT';
+    startLoading(`Tracking follicles via ${methodLabel}...`, false);
+
+    try {
+      // Add the new image to the project (permanent)
+      const newImageId = generateImageId();
+      const blob = new Blob([fileResult.data]);
+      const imageBitmap = await createImageBitmap(blob);
+      const imageSrc = URL.createObjectURL(blob);
+
+      addImage({
+        id: newImageId,
+        fileName: fileResult.fileName,
+        width: imageBitmap.width,
+        height: imageBitmap.height,
+        imageData: fileResult.data,
+        imageBitmap,
+        imageSrc,
+        viewport: { offsetX: 0, offsetY: 0, scale: 1 },
+        createdAt: Date.now(),
+        sortOrder: images.size,
+      });
+
+      // Convert both images to base64
+      const sourceBase64 = await getImageBase64(activeImage);
+
+      // Convert target image to base64 from its ArrayBuffer
+      const targetBytes = new Uint8Array(fileResult.data);
+      const targetChunks: string[] = [];
+      for (let i = 0; i < targetBytes.length; i += 0x8000) {
+        targetChunks.push(String.fromCharCode.apply(null, Array.from(targetBytes.subarray(i, i + 0x8000))));
+      }
+      const targetBase64Raw = btoa(targetChunks.join(''));
+      const targetExt = fileResult.fileName.toLowerCase().split(".").pop();
+      let targetMime = "image/png";
+      if (targetExt === "jpg" || targetExt === "jpeg") targetMime = "image/jpeg";
+      const targetBase64 = `data:${targetMime};base64,${targetBase64Raw}`;
+
+      // Run cross-image tracking with the selected method
+      const result = await follicleTrackingService.trackAcrossImages(
+        sourceBase64,
+        targetBase64,
+        detectionSettings.yoloConfidenceThreshold || 0.5,
+        50.0,
+        method
+      );
+
+      if (!result.success) {
+        throw new Error(result.error || "Tracking failed");
+      }
+
+      // Create annotations from BOTH source and target detection results.
+      // The backend runs model.predict() independently on both images,
+      // so we use those fresh detections rather than relying on existing store annotations.
+      const now = Date.now();
+
+      // Source annotations from the tracking detection
+      const sourceAnnotations: RectangleAnnotation[] = result.sourceDetections.map(
+        (det, i) => ({
+          id: generateId(),
+          imageId: activeImageId,
+          shape: "rectangle" as const,
+          x: det.x,
+          y: det.y,
+          width: det.width,
+          height: det.height,
+          label: `Track S${i + 1}`,
+          notes: `Tracked detection (conf: ${(det.confidence * 100).toFixed(0)}%)`,
+          color: ANNOTATION_COLORS[i % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      // Target annotations from the tracking detection
+      const targetAnnotations: RectangleAnnotation[] = result.targetDetections.map(
+        (det, i) => ({
+          id: generateId(),
+          imageId: newImageId,
+          shape: "rectangle" as const,
+          x: det.x,
+          y: det.y,
+          width: det.width,
+          height: det.height,
+          label: `Track T${i + 1}`,
+          notes: `Tracked detection (conf: ${(det.confidence * 100).toFixed(0)}%)`,
+          color: ANNOTATION_COLORS[i % ANNOTATION_COLORS.length],
+          createdAt: now,
+          updatedAt: now,
+        })
+      );
+
+      // Import all new annotations at once
+      const allNewAnnotations = [...sourceAnnotations, ...targetAnnotations];
+      if (allNewAnnotations.length > 0) {
+        importFollicles(allNewAnnotations);
+      }
+
+      // Build correspondence entries using direct index mapping
+      const correspondences: FollicleCorrespondence[] = result.matches.map((match) => {
+        const sourceAnnotation = sourceAnnotations[match.sourceDetectionIndex];
+        const targetAnnotation = targetAnnotations[match.targetDetectionIndex];
+
+        return {
+          id: generateId(),
+          sourceAnnotationId: sourceAnnotation?.id || "",
+          targetAnnotationId: targetAnnotation?.id || "",
+          sourceImageId: activeImageId,
+          targetImageId: newImageId,
+          confidence: match.confidence,
+          transformedPosition: {
+            x: match.transformedX,
+            y: match.transformedY,
+          },
+        };
+      }).filter((c) => c.sourceAnnotationId && c.targetAnnotationId);
+
+      // Create tracking session
+      const session: TrackingSession = {
+        id: generateId(),
+        sourceImageId: activeImageId,
+        targetImageId: newImageId,
+        correspondences,
+        homographyMatrix: result.homographyMatrix,
+        method: result.method as "homography" | "track",
+        createdAt: Date.now(),
+      };
+
+      addTrackingSession(session);
+      openComparisonView(session.id);
+
+      console.log(
+        `Tracking complete: ${result.matches.length} matches via ${result.method}, ` +
+        `${correspondences.length} correspondences linked`
+      );
+    } catch (error) {
+      console.error("Track follicles failed:", error);
+      alert(
+        `Tracking failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    } finally {
+      setIsTracking(false);
+      stopLoading();
+    }
+  }, [
+    activeImage,
+    activeImageId,
+    isTracking,
+    detectionSettings.yoloConfidenceThreshold,
+    addImage,
+    images.size,
+    importFollicles,
+    startLoading,
+    stopLoading,
+    addTrackingSession,
+    openComparisonView,
+    getImageBase64,
+  ]);
+
   // Handle learned detection (from annotations)
   const handleLearnedDetect = useCallback(
     async (settings: LearnedDetectionSettings) => {
@@ -2399,6 +2779,52 @@ export const Toolbar: React.FC = () => {
             !blobServerConnected ||
             !(detectionSettings.minWidth > 0 && detectionSettings.maxWidth > 0)
           }
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Crosshair size={18} />
+            )
+          }
+          tooltip="Template Match (disabled)"
+          onClick={() => handleTrackPrepare('ncc')}
+          disabled={true}
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Waypoints size={18} />
+            )
+          }
+          tooltip={
+            !blobServerConnected
+              ? "Starting detection server..."
+              : "Track single follicle via Optical Flow"
+          }
+          onClick={() => handleTrackPrepare('lk')}
+          disabled={
+            !imageLoaded ||
+            isTracking ||
+            isDetecting ||
+            serverStarting ||
+            !blobServerConnected
+          }
+        />
+        <IconButton
+          icon={
+            isTracking ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : (
+              <Route size={18} />
+            )
+          }
+          tooltip="BoT-SORT (disabled)"
+          onClick={() => handleTrackFollicles('track')}
+          disabled={true}
         />
         <IconButton
           icon={

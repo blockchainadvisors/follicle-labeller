@@ -12,6 +12,14 @@ const electronAPI = {
     data: ArrayBuffer;
   } | null> => ipcRenderer.invoke("dialog:openImage"),
 
+  // Open media file dialog (images + videos)
+  openMediaFileDialog: (): Promise<{
+    filePath: string;
+    fileName: string;
+    data: ArrayBuffer | null;
+    isVideo: boolean;
+  } | null> => ipcRenderer.invoke("dialog:openMediaFile"),
+
   // Open generic file dialog with filters - returns file path and data
   openFileDialog: (options: {
     filters?: Array<{ name: string; extensions: string[] }>;
@@ -871,6 +879,123 @@ const electronAPI = {
       imgsz?: number
     ): Promise<{ success: boolean; engine_path?: string; error?: string }> =>
       ipcRenderer.invoke("yolo-detection:exportTensorRT", modelPath, outputPath, half, imgsz),
+
+    // Track follicles across two images from different angles
+    trackAcrossImages: (
+      sourceImageData: string,
+      targetImageData: string,
+      confidenceThreshold?: number,
+      matchDistanceThreshold?: number,
+      method?: string
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackAcrossImages", sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method),
+
+    // Prepare a tracking session (compute homography, cache images)
+    trackPrepare: (
+      sourceImageData: string,
+      targetImageData: string,
+      confidenceThreshold?: number,
+      matchDistanceThreshold?: number
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackPrepare", sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold),
+
+    // Match a single follicle against a prepared session
+    trackMatchSingle: (
+      sessionId: string,
+      sourceBbox: { x: number; y: number; width: number; height: number }
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:trackMatchSingle", sessionId, sourceBbox),
+
+    // Prepare a template-matching session (target only, read from disk)
+    templatePrepare: (
+      targetFilePath: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:templatePrepare", targetFilePath),
+
+    // Match a single follicle via template matching (small context patch)
+    templateMatchSingle: (
+      sessionId: string,
+      sourcePatchData: string,
+      follicleOffsetX: number,
+      follicleOffsetY: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:templateMatchSingle", sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale),
+
+    // Video tracking (dual-point: two NCC patches + rigid consistency check)
+    videoPrepare: (
+      videoFilePath: string,
+      originPatchData: string,
+      tipPatchData: string,
+      originInOriginPatchX: number,
+      originInOriginPatchY: number,
+      tipInTipPatchX: number,
+      tipInTipPatchY: number,
+      initialDx: number,
+      initialDy: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke(
+        "yolo-detection:videoPrepare",
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      ),
+
+    // Video tracking (Lucas-Kanade optical flow with NCC rescue) — parallel
+    // to videoPrepare, same payload, different backend tracker.
+    videoPrepareLK: (
+      videoFilePath: string,
+      originPatchData: string,
+      tipPatchData: string,
+      originInOriginPatchX: number,
+      originInOriginPatchY: number,
+      tipInTipPatchX: number,
+      tipInTipPatchY: number,
+      initialDx: number,
+      initialDy: number,
+      follicleWidth: number,
+      follicleHeight: number,
+      expectedScale: number,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke(
+        "yolo-detection:videoPrepareLK",
+        videoFilePath,
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        expectedScale,
+      ),
+
+    videoMatchFrame: (
+      sessionId: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:videoMatchFrame", sessionId),
+
+    videoStop: (
+      sessionId: string,
+    ): Promise<Record<string, unknown>> =>
+      ipcRenderer.invoke("yolo-detection:videoStop", sessionId),
   },
 };
 

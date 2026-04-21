@@ -434,6 +434,17 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
   border-left: 1px solid var(--border);
   padding: 16px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-logo {
+  width: 100%;
+  height: auto;
+  opacity: 0.85;
+  pointer-events: none;
+  margin-top: auto;
+  padding-top: 16px;
 }
 
 .property-panel h3 {
@@ -445,8 +456,8 @@ h4, .h4 { font-size: var(--text-md); font-weight: var(--font-semibold); line-hei
 
 .property-panel.empty {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
 }
 
 .property-panel .empty-state {

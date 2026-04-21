@@ -18,7 +18,7 @@ import type {
   PredictDetectionResult,
   PredictTiledResult,
 } from '../types';
-import type { YoloDetectionStatus, TensorRTStatus } from '../../types';
+import type { YoloDetectionStatus, TensorRTStatus, TrackAcrossImagesResult, TrackPrepareResult, TrackMatchSingleResult, VideoPrepareResult, VideoFrameResult } from '../../types';
 
 export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
   async getStatus(): Promise<YoloDetectionStatus> {
@@ -113,5 +113,127 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     imgsz?: number
   ): Promise<ExportTensorRTResult> {
     return window.electronAPI.yoloDetection.exportToTensorRT(modelPath, outputPath, half, imgsz);
+  }
+
+  async trackAcrossImages(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number,
+    method?: 'auto' | 'homography' | 'track'
+  ): Promise<TrackAcrossImagesResult> {
+    return window.electronAPI.yoloDetection.trackAcrossImages(
+      sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold, method
+    ) as Promise<TrackAcrossImagesResult>;
+  }
+
+  async trackPrepare(
+    sourceImageData: string,
+    targetImageData: string,
+    confidenceThreshold?: number,
+    matchDistanceThreshold?: number
+  ): Promise<TrackPrepareResult> {
+    return window.electronAPI.yoloDetection.trackPrepare(
+      sourceImageData, targetImageData, confidenceThreshold, matchDistanceThreshold
+    ) as Promise<TrackPrepareResult>;
+  }
+
+  async trackMatchSingle(
+    sessionId: string,
+    sourceBbox: { x: number; y: number; width: number; height: number }
+  ): Promise<TrackMatchSingleResult> {
+    return window.electronAPI.yoloDetection.trackMatchSingle(
+      sessionId, sourceBbox
+    ) as Promise<TrackMatchSingleResult>;
+  }
+
+  async templatePrepare(
+    targetFilePath: string,
+  ): Promise<TrackPrepareResult> {
+    return window.electronAPI.yoloDetection.templatePrepare(
+      targetFilePath
+    ) as Promise<TrackPrepareResult>;
+  }
+
+  async templateMatchSingle(
+    sessionId: string,
+    sourcePatchData: string,
+    follicleOffsetX: number,
+    follicleOffsetY: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<TrackMatchSingleResult> {
+    return window.electronAPI.yoloDetection.templateMatchSingle(
+      sessionId, sourcePatchData, follicleOffsetX, follicleOffsetY, follicleWidth, follicleHeight, expectedScale
+    ) as Promise<TrackMatchSingleResult>;
+  }
+
+  async videoPrepare(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult> {
+    return window.electronAPI.yoloDetection.videoPrepare(
+      videoFilePath,
+      originPatchData,
+      tipPatchData,
+      originInOriginPatchX,
+      originInOriginPatchY,
+      tipInTipPatchX,
+      tipInTipPatchY,
+      initialDx,
+      initialDy,
+      follicleWidth,
+      follicleHeight,
+      expectedScale,
+    ) as Promise<VideoPrepareResult>;
+  }
+
+  async videoPrepareLK(
+    videoFilePath: string,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult> {
+    return window.electronAPI.yoloDetection.videoPrepareLK(
+      videoFilePath,
+      originPatchData,
+      tipPatchData,
+      originInOriginPatchX,
+      originInOriginPatchY,
+      tipInTipPatchX,
+      tipInTipPatchY,
+      initialDx,
+      initialDy,
+      follicleWidth,
+      follicleHeight,
+      expectedScale,
+    ) as Promise<VideoPrepareResult>;
+  }
+
+  async videoMatchFrame(sessionId: string): Promise<VideoFrameResult> {
+    return window.electronAPI.yoloDetection.videoMatchFrame(sessionId) as Promise<VideoFrameResult>;
+  }
+
+  async videoStop(sessionId: string): Promise<{ success: boolean }> {
+    return window.electronAPI.yoloDetection.videoStop(sessionId) as Promise<{ success: boolean }>;
   }
 }

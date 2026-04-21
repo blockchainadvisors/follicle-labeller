@@ -365,6 +365,7 @@ export interface ProjectManifestV2 {
   };
   images: ImageManifestEntry[];
   settings?: ProjectSettings;  // Optional global settings (backward compatible)
+  trackingSessions?: TrackingSession[];  // Optional cross-image tracking data
 }
 
 export interface AnnotationsFileV2 {
@@ -377,6 +378,8 @@ declare global {
     electronAPI: {
       // Single image dialog (for adding images)
       openImageDialog: () => Promise<{ filePath: string; fileName: string; data: ArrayBuffer } | null>;
+      // Media file dialog (images + videos)
+      openMediaFileDialog: () => Promise<OpenMediaResult | null>;
       // Generic file dialog with filters
       openFileDialog: (options: {
         filters?: Array<{ name: string; extensions: string[] }>;
@@ -710,6 +713,69 @@ declare global {
           half?: boolean,
           imgsz?: number
         ) => Promise<{ success: boolean; engine_path?: string; error?: string }>;
+        trackAcrossImages: (
+          sourceImageData: string,
+          targetImageData: string,
+          confidenceThreshold?: number,
+          matchDistanceThreshold?: number,
+          method?: 'auto' | 'homography' | 'track'
+        ) => Promise<TrackAcrossImagesResult>;
+        trackPrepare: (
+          sourceImageData: string,
+          targetImageData: string,
+          confidenceThreshold?: number,
+          matchDistanceThreshold?: number
+        ) => Promise<TrackPrepareResult>;
+        trackMatchSingle: (
+          sessionId: string,
+          sourceBbox: { x: number; y: number; width: number; height: number }
+        ) => Promise<TrackMatchSingleResult>;
+        templatePrepare: (
+          targetFilePath: string,
+        ) => Promise<TrackPrepareResult>;
+        templateMatchSingle: (
+          sessionId: string,
+          sourcePatchData: string,
+          follicleOffsetX: number,
+          follicleOffsetY: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          expectedScale: number,
+        ) => Promise<TrackMatchSingleResult>;
+        videoPrepare: (
+          videoFilePath: string,
+          originPatchData: string,
+          tipPatchData: string,
+          originInOriginPatchX: number,
+          originInOriginPatchY: number,
+          tipInTipPatchX: number,
+          tipInTipPatchY: number,
+          initialDx: number,
+          initialDy: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          expectedScale: number,
+        ) => Promise<VideoPrepareResult>;
+        videoPrepareLK: (
+          videoFilePath: string,
+          originPatchData: string,
+          tipPatchData: string,
+          originInOriginPatchX: number,
+          originInOriginPatchY: number,
+          tipInTipPatchX: number,
+          tipInTipPatchY: number,
+          initialDx: number,
+          initialDy: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          expectedScale: number,
+        ) => Promise<VideoPrepareResult>;
+        videoMatchFrame: (
+          sessionId: string,
+        ) => Promise<VideoFrameResult>;
+        videoStop: (
+          sessionId: string,
+        ) => Promise<{ success: boolean }>;
       };
     };
   }
@@ -1046,6 +1112,177 @@ export interface TensorRTStatus {
 
 /** Inference backend for YOLO detection */
 export type YoloInferenceBackend = 'pytorch' | 'tensorrt';
+
+// ============================================
+// Cross-Image Follicle Tracking Types
+// ============================================
+
+/**
+ * A single match between a detection in the source image
+ * and a detection in the target image.
+ */
+export interface TrackingMatch {
+  /** Index into the source detections array */
+  sourceDetectionIndex: number;
+  /** Index into the target detections array */
+  targetDetectionIndex: number;
+  /** Match confidence (0-1, based on distance after homography) */
+  confidence: number;
+  /** Source detection center projected into target image space (X) */
+  transformedX: number;
+  /** Source detection center projected into target image space (Y) */
+  transformedY: number;
+}
+
+/**
+ * Result from the cross-image tracking endpoint.
+ */
+export interface TrackAcrossImagesResult {
+  success: boolean;
+  sourceDetections: DetectionPrediction[];
+  targetDetections: DetectionPrediction[];
+  matches: TrackingMatch[];
+  homographyMatrix?: number[][];
+  method: string;
+  error?: string;
+}
+
+/**
+ * Result from the track-prepare endpoint.
+ */
+export interface TrackPrepareResult {
+  success: boolean;
+  sessionId: string;
+  homographyMatrix?: number[][];
+  error?: string;
+}
+
+/**
+ * Result from the track-match-single endpoint.
+ */
+export interface TrackMatchSingleResult {
+  success: boolean;
+  match: {
+    targetDetection: DetectionPrediction;
+    confidence: number;
+    transformedX: number;
+    transformedY: number;
+  } | null;
+  error?: string;
+}
+
+/**
+ * Result from the video-prepare endpoint.
+ */
+export interface VideoPrepareResult {
+  success: boolean;
+  sessionId: string;
+  fps: number;
+  frameCount: number;
+  width: number;
+  height: number;
+  error?: string;
+}
+
+/**
+ * Result from matching a single video frame.
+ *
+ * Dual-point tracking runs TWO independent NCC template matches per frame
+ * (one for the origin patch, one for the tip patch) and validates that the
+ * two positions stay geometrically consistent with the initial source-image
+ * relationship. The returned shape carries both points plus per-point
+ * confidences, a `rigidValid` flag, and `lostPoint` indicating which (if
+ * any) point was extrapolated from the other when NCC failed or the rigid
+ * check rejected it.
+ *
+ * - `transformedX/Y` — origin in full-resolution video coordinates
+ * - `tipX/tipY` — tip in full-resolution video coordinates
+ * - `originConfidence` / `tipConfidence` — per-point NCC score (0 if lost)
+ * - `rigidValid` — true only when both points matched AND passed the
+ *    distance check
+ * - `lostPoint` — `'origin'` | `'tip'` | `null`; the lost point's position
+ *    is extrapolated from the trusted one using the initial source-image
+ *    delta and should be rendered as "guessed" in the UI
+ */
+export interface VideoFrameResult {
+  success: boolean;
+  frameIndex: number;
+  match: {
+    targetDetection: DetectionPrediction;
+    confidence: number;
+    transformedX: number;
+    transformedY: number;
+    tipX: number;
+    tipY: number;
+    originConfidence: number;
+    tipConfidence: number;
+    rigidValid: boolean;
+    lostPoint: 'origin' | 'tip' | null;
+  } | null;
+  frameData?: string;  // base64-encoded JPEG of the frame
+  done: boolean;
+  error?: string;
+}
+
+/**
+ * Cached entry for client-side video frame scrubbing. The base64 JPEG
+ * string is kept; bitmaps are decoded on demand to keep memory bounded.
+ */
+export interface VideoFrameCacheEntry {
+  frameIndex: number;
+  frameDataB64: string;
+  match: VideoFrameResult['match'];
+}
+
+/**
+ * Result from opening a media file (image or video).
+ */
+export interface OpenMediaResult {
+  filePath: string;
+  fileName: string;
+  data: ArrayBuffer | null;
+  isVideo: boolean;
+}
+
+/**
+ * A correspondence between two specific annotations across images.
+ */
+export interface FollicleCorrespondence {
+  /** Unique correspondence ID */
+  id: string;
+  /** Annotation ID in the source image */
+  sourceAnnotationId: string;
+  /** Annotation ID in the target image */
+  targetAnnotationId: string;
+  /** Source image ID */
+  sourceImageId: ImageId;
+  /** Target image ID */
+  targetImageId: ImageId;
+  /** Match confidence (0-1) */
+  confidence: number;
+  /** Source follicle position projected into target image space */
+  transformedPosition?: Point;
+}
+
+/**
+ * A tracking session linking two images with their follicle correspondences.
+ */
+export interface TrackingSession {
+  /** Unique session ID */
+  id: string;
+  /** Source image ID */
+  sourceImageId: ImageId;
+  /** Target image ID */
+  targetImageId: ImageId;
+  /** List of follicle correspondences */
+  correspondences: FollicleCorrespondence[];
+  /** 3x3 homography matrix from source to target (if homography method was used) */
+  homographyMatrix?: number[][];
+  /** Matching method used */
+  method: 'homography' | 'track' | 'template';
+  /** When this session was created */
+  createdAt: number;
+}
 
 // ============================================
 // COCO JSON Format Types
