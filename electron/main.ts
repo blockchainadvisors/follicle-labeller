@@ -70,6 +70,13 @@ function createWindow(): void {
     title: "Follicle Labeller",
   });
 
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (_wc, permission, callback) => {
+      if (permission === "media") return callback(true);
+      callback(false);
+    },
+  );
+
   // Load content based on environment
   if (
     process.env.NODE_ENV === "development" ||

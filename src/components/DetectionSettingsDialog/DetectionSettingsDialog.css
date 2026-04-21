@@ -1592,3 +1592,93 @@
   background: var(--accent);
   border-color: var(--accent);
 }
+
+/* Live Camera section */
+.camera-refresh-btn {
+  padding: 6px 12px;
+  background: var(--bg-secondary, #f5f5f5);
+  color: var(--text-primary, #111);
+  border: 1px solid var(--border, #e0e0e0);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.camera-refresh-btn:hover {
+  background: var(--bg-tertiary, #eaeaea);
+  border-color: var(--accent, #3b82f6);
+}
+
+.settings-row.camera-hint-row,
+.settings-row.camera-warning-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  margin-top: 8px;
+}
+
+.settings-row.camera-hint-row {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #991b1b;
+}
+
+.settings-row.camera-hint-row svg {
+  color: var(--danger, #ef4444);
+  flex-shrink: 0;
+}
+
+.settings-row.camera-warning-row {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #92400e;
+}
+
+.settings-row.camera-warning-row svg {
+  color: #f59e0b;
+  flex-shrink: 0;
+}
+
+.settings-row.camera-preview-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.camera-preview {
+  width: 320px;
+  height: 180px;
+  background: #000;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.camera-preview-error {
+  color: var(--danger, #ef4444);
+}
+
+[data-theme="dark"] .camera-refresh-btn {
+  background: var(--bg-secondary, #2a2a2a);
+  color: var(--text-primary, #eaeaea);
+  border-color: var(--border, #555);
+}
+
+[data-theme="dark"] .camera-refresh-btn:hover {
+  background: var(--bg-tertiary, #3a3a3a);
+  border-color: var(--accent);
+}
+
+[data-theme="dark"] .settings-row.camera-hint-row {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fecaca;
+}
+
+[data-theme="dark"] .settings-row.camera-warning-row {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fde68a;
+}
