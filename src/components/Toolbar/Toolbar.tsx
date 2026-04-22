@@ -27,6 +27,7 @@ import {
   Crosshair,
   Waypoints,
   Route,
+  Target,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -84,6 +85,9 @@ import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
+import { laserControlService } from "../../services/laserControlService";
+import { useLaserStore } from "../../store/laserStore";
+import { getFollicleCenter } from "../../utils/follicle-center";
 import { generateId } from "../../utils/id-generator";
 import { getPlatform } from "../../platform";
 import type { LoadProjectResult } from "../../platform/types";
@@ -173,6 +177,9 @@ export const Toolbar: React.FC = () => {
   const importFollicles = useFollicleStore((state) => state.importFollicles);
   const updateFollicle = useFollicleStore((state) => state.updateFollicle);
   const clearAll = useFollicleStore((state) => state.clearAll);
+
+  // Laser session — phase drives the Aim Laser button's active state.
+  const laserPhase = useLaserStore((state) => state.phase);
 
   const temporalStore = useTemporalStore();
 
@@ -1941,6 +1948,25 @@ export const Toolbar: React.FC = () => {
     }
   }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
+  // Virtual laser pointer. Spawns a simulated laser dot ~500 px away from
+  // the selected follicle and converges it using uncalibrated visual
+  // servoing. A second click stops an active or locked session (toggle).
+  const handleAimLaser = useCallback(() => {
+    // Any non-idle phase (converging or locked) means there's a visible
+    // dot to dismiss — clicking again tears down the session.
+    if (useLaserStore.getState().phase !== 'idle') {
+      laserControlService.stop();
+      return;
+    }
+    if (selectedIds.size !== 1 || !activeImage) return;
+    const selectedId = selectedIds.values().next().value;
+    if (!selectedId) return;
+    const follicle = follicles.find((f) => f.id === selectedId);
+    if (!follicle) return;
+    const center = getFollicleCenter(follicle);
+    laserControlService.start(follicle.id, center, activeImage.width, activeImage.height);
+  }, [selectedIds, follicles, activeImage]);
+
   // Track follicles across two images
   const [isTracking, setIsTracking] = useState(false);
   const addTrackingSession = useTrackingStore((s) => s.addSession);
@@ -3024,6 +3050,19 @@ export const Toolbar: React.FC = () => {
           tooltip="BoT-SORT (disabled)"
           onClick={() => handleTrackFollicles('track')}
           disabled={true}
+        />
+        <IconButton
+          icon={<Target size={18} />}
+          tooltip={
+            laserPhase !== 'idle'
+              ? "Stop Aim Laser"
+              : selectedIds.size !== 1
+                ? "Select exactly one follicle to aim laser"
+                : "Aim virtual laser at selected follicle"
+          }
+          onClick={handleAimLaser}
+          disabled={laserPhase === 'idle' && (selectedIds.size !== 1 || !imageLoaded)}
+          active={laserPhase !== 'idle'}
         />
         <IconButton
           icon={
