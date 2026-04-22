@@ -776,6 +776,24 @@ declare global {
         videoStop: (
           sessionId: string,
         ) => Promise<{ success: boolean }>;
+        cameraPrepareLK: (
+          originPatchData: string,
+          tipPatchData: string,
+          originInOriginPatchX: number,
+          originInOriginPatchY: number,
+          tipInTipPatchX: number,
+          tipInTipPatchY: number,
+          initialDx: number,
+          initialDy: number,
+          follicleWidth: number,
+          follicleHeight: number,
+          firstFrameData: string,
+          expectedScale: number,
+        ) => Promise<VideoPrepareResult>;
+        cameraMatchFrame: (
+          sessionId: string,
+          frameData: string,
+        ) => Promise<VideoFrameResult>;
       };
     };
   }

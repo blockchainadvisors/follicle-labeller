@@ -209,6 +209,19 @@
   user-select: none;
 }
 
+.video-tracking-scrubber-live {
+  cursor: default;
+  justify-content: center;
+}
+
+.video-tracking-live-label {
+  position: relative;
+  font-size: var(--text-sm, 12px);
+  font-weight: var(--font-semibold, 600);
+  color: #ef4444;
+  letter-spacing: 0.1em;
+}
+
 .scrubber-track {
   position: absolute;
   left: 0;

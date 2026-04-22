@@ -27,6 +27,7 @@ import {
   Crosshair,
   Waypoints,
   Route,
+  Target,
 } from "lucide-react";
 import { useCanvasStore } from "../../store/canvasStore";
 import { useProjectStore, generateImageId } from "../../store/projectStore";
@@ -78,11 +79,15 @@ import {
   findDuplicates,
 } from "../DuplicateDetectionDialog";
 import { ServerErrorDialog } from "../ServerErrorDialog/ServerErrorDialog";
+import { TrackingSourceChoiceDialog } from "../TrackingSourceChoiceDialog/TrackingSourceChoiceDialog";
 import { ProjectImage, RectangleAnnotation, FollicleOrigin, DetectionPrediction } from "../../types";
 import { yoloKeypointService } from "../../services/yoloKeypointService";
 import type { BlobDetection } from "../../services/blobService";
 import { yoloDetectionService } from "../../services/yoloDetectionService";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
+import { laserControlService } from "../../services/laserControlService";
+import { useLaserStore } from "../../store/laserStore";
+import { getFollicleCenter } from "../../utils/follicle-center";
 import { generateId } from "../../utils/id-generator";
 import { getPlatform } from "../../platform";
 import type { LoadProjectResult } from "../../platform/types";
@@ -172,6 +177,9 @@ export const Toolbar: React.FC = () => {
   const importFollicles = useFollicleStore((state) => state.importFollicles);
   const updateFollicle = useFollicleStore((state) => state.updateFollicle);
   const clearAll = useFollicleStore((state) => state.clearAll);
+
+  // Laser session — phase drives the Aim Laser button's active state.
+  const laserPhase = useLaserStore((state) => state.phase);
 
   const temporalStore = useTemporalStore();
 
@@ -1940,6 +1948,25 @@ export const Toolbar: React.FC = () => {
     }
   }, [detectionSettings.detectionMethod, handleYoloDetect, handleBlobDetect]);
 
+  // Virtual laser pointer. Spawns a simulated laser dot ~500 px away from
+  // the selected follicle and converges it using uncalibrated visual
+  // servoing. A second click stops an active or locked session (toggle).
+  const handleAimLaser = useCallback(() => {
+    // Any non-idle phase (converging or locked) means there's a visible
+    // dot to dismiss — clicking again tears down the session.
+    if (useLaserStore.getState().phase !== 'idle') {
+      laserControlService.stop();
+      return;
+    }
+    if (selectedIds.size !== 1 || !activeImage) return;
+    const selectedId = selectedIds.values().next().value;
+    if (!selectedId) return;
+    const follicle = follicles.find((f) => f.id === selectedId);
+    if (!follicle) return;
+    const center = getFollicleCenter(follicle);
+    laserControlService.start(follicle.id, center, activeImage.width, activeImage.height);
+  }, [selectedIds, follicles, activeImage]);
+
   // Track follicles across two images
   const [isTracking, setIsTracking] = useState(false);
   const addTrackingSession = useTrackingStore((s) => s.addSession);
@@ -2077,6 +2104,7 @@ export const Toolbar: React.FC = () => {
 
         openVideoTracking({
           sessionId: result.sessionId,
+          source: 'file',
           videoFilePath: fileResult.filePath,
           videoFileName: fileResult.fileName,
           fps: result.fps,
@@ -2144,6 +2172,203 @@ export const Toolbar: React.FC = () => {
     addImage, addTrackingSession, openComparisonView, openVideoTracking,
     setBackendSessionId, startLoading, stopLoading,
   ]);
+
+  // Modal that gates the Optical Flow tracking button. When closed it
+  // resolves either to a file dialog (existing flow) or to a live camera
+  // session (new flow). Template Match ('ncc') — currently UI-disabled —
+  // still routes directly through handleTrackPrepare for backwards
+  // compatibility.
+  const [showTrackingSourceChoice, setShowTrackingSourceChoice] = useState(false);
+
+  // Capture ONE JPEG frame from the given MediaStream. Used to seed the
+  // backend's origin/tip anchors before the per-frame tracking loop in
+  // VideoTrackingView takes over. The stream is stopped once the frame
+  // is grabbed — VideoTrackingView reopens its own stream on mount.
+  const captureFirstFrameFromDevice = useCallback(
+    async (deviceId: string): Promise<{
+      frameDataUrl: string;
+      width: number;
+      height: number;
+    }> => {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } },
+      });
+      try {
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+        await video.play();
+
+        // Wait until the frame has real dimensions (metadata may arrive
+        // slightly after play() resolves on some browsers).
+        if (!video.videoWidth || !video.videoHeight) {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(new Error('Timed out waiting for camera frame')),
+              5000,
+            );
+            video.onloadedmetadata = () => {
+              clearTimeout(timer);
+              resolve();
+            };
+          });
+        }
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Could not create 2D canvas context');
+        ctx.drawImage(video, 0, 0, w, h);
+        const frameDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        return { frameDataUrl, width: w, height: h };
+      } finally {
+        stream.getTracks().forEach(t => t.stop());
+      }
+    },
+    [],
+  );
+
+  const handleTrackPrepareFromCamera = useCallback(
+    async (deviceId: string, deviceLabel: string) => {
+      if (!activeImage || !activeImageId || isTracking) return;
+
+      setIsTracking(true);
+      startLoading('Preparing optical flow tracking...', false);
+
+      try {
+        const selectedArr = Array.from(selectedIds);
+        if (selectedArr.length !== 1) {
+          throw new Error(
+            'Select exactly one follicle with an origin before tracking a video',
+          );
+        }
+        const selectedFollicle = follicles.find(f => f.id === selectedArr[0]);
+        if (
+          !selectedFollicle ||
+          selectedFollicle.shape !== 'rectangle' ||
+          !(selectedFollicle as RectangleAnnotation).origin
+        ) {
+          throw new Error(
+            'Selected follicle must be a rectangle with an origin set',
+          );
+        }
+
+        const rect = selectedFollicle as RectangleAnnotation;
+        const origin = rect.origin!;
+
+        // Same two-patch crop the file flow uses — camera and file share
+        // the backend's LK tracker so the source-image payload is
+        // identical.
+        const CONTEXT_MULT = 5.0;
+        const originX = origin.originPoint.x;
+        const originY = origin.originPoint.y;
+        const tipSrcX =
+          originX + Math.cos(origin.directionAngle) * origin.directionLength;
+        const tipSrcY =
+          originY + Math.sin(origin.directionAngle) * origin.directionLength;
+
+        const halfW = (rect.width * CONTEXT_MULT) / 2;
+        const halfH = (rect.height * CONTEXT_MULT) / 2;
+        const imgW = activeImage.width;
+        const imgH = activeImage.height;
+
+        const cropPatchBase64 = async (
+          cx: number,
+          cy: number,
+        ): Promise<{ data: string; offsetX: number; offsetY: number }> => {
+          const cropX = Math.max(0, Math.floor(cx - halfW));
+          const cropY = Math.max(0, Math.floor(cy - halfH));
+          const cropX2 = Math.min(imgW, Math.ceil(cx + halfW));
+          const cropY2 = Math.min(imgH, Math.ceil(cy + halfH));
+          const cropW = cropX2 - cropX;
+          const cropH = cropY2 - cropY;
+          const canvas = new OffscreenCanvas(cropW, cropH);
+          const ctx = canvas.getContext('2d')!;
+          ctx.drawImage(
+            activeImage.imageBitmap,
+            cropX, cropY, cropW, cropH,
+            0, 0, cropW, cropH,
+          );
+          const blob = await canvas.convertToBlob({ type: 'image/png' });
+          const arrayBuf = await blob.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuf);
+          const chunks: string[] = [];
+          for (let i = 0; i < bytes.length; i += 0x8000) {
+            chunks.push(
+              String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000))),
+            );
+          }
+          return {
+            data: `data:image/png;base64,${btoa(chunks.join(''))}`,
+            offsetX: cx - cropX,
+            offsetY: cy - cropY,
+          };
+        };
+
+        const originPatch = await cropPatchBase64(originX, originY);
+        const tipPatch = await cropPatchBase64(tipSrcX, tipSrcY);
+        const initialDx = tipSrcX - originX;
+        const initialDy = tipSrcY - originY;
+
+        // Grab the first camera frame for NCC seeding in the backend.
+        const { frameDataUrl } = await captureFirstFrameFromDevice(deviceId);
+
+        const result = await follicleTrackingService.cameraPrepareLK(
+          originPatch.data,
+          tipPatch.data,
+          originPatch.offsetX,
+          originPatch.offsetY,
+          tipPatch.offsetX,
+          tipPatch.offsetY,
+          initialDx,
+          initialDy,
+          rect.width,
+          rect.height,
+          frameDataUrl,
+          1.0,
+        );
+
+        if (!result.success) {
+          throw new Error(result.error || 'Failed to prepare camera session');
+        }
+
+        openVideoTracking({
+          sessionId: result.sessionId,
+          source: 'camera',
+          videoFileName: deviceLabel,
+          fps: result.fps,
+          frameCount: result.frameCount,
+          videoWidth: result.width,
+          videoHeight: result.height,
+          cameraDeviceId: deviceId,
+          sourceImageId: activeImageId,
+          sourceFollicleId: selectedFollicle.id,
+        });
+      } catch (error) {
+        console.error('Camera track prepare failed:', error);
+        alert(
+          `Tracking preparation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        );
+      } finally {
+        setIsTracking(false);
+        stopLoading();
+      }
+    },
+    [
+      activeImage,
+      activeImageId,
+      isTracking,
+      selectedIds,
+      follicles,
+      openVideoTracking,
+      captureFirstFrameFromDevice,
+      startLoading,
+      stopLoading,
+    ],
+  );
 
   const handleTrackFollicles = useCallback(async (method: 'homography' | 'track') => {
     if (!activeImage || !activeImageId || isTracking) return;
@@ -2805,7 +3030,7 @@ export const Toolbar: React.FC = () => {
               ? "Starting detection server..."
               : "Track single follicle via Optical Flow"
           }
-          onClick={() => handleTrackPrepare('lk')}
+          onClick={() => setShowTrackingSourceChoice(true)}
           disabled={
             !imageLoaded ||
             isTracking ||
@@ -2825,6 +3050,19 @@ export const Toolbar: React.FC = () => {
           tooltip="BoT-SORT (disabled)"
           onClick={() => handleTrackFollicles('track')}
           disabled={true}
+        />
+        <IconButton
+          icon={<Target size={18} />}
+          tooltip={
+            laserPhase !== 'idle'
+              ? "Stop Aim Laser"
+              : selectedIds.size !== 1
+                ? "Select exactly one follicle to aim laser"
+                : "Aim virtual laser at selected follicle"
+          }
+          onClick={handleAimLaser}
+          disabled={laserPhase === 'idle' && (selectedIds.size !== 1 || !imageLoaded)}
+          active={laserPhase !== 'idle'}
         />
         <IconButton
           icon={
@@ -3171,6 +3409,27 @@ export const Toolbar: React.FC = () => {
           errorDetails={serverError.errorDetails}
           onRetry={handleRetryServerStart}
           onClose={() => setServerError(null)}
+        />
+      )}
+
+      {/* Optical Flow source picker: camera vs. file */}
+      {showTrackingSourceChoice && (
+        <TrackingSourceChoiceDialog
+          onPickFile={() => {
+            setShowTrackingSourceChoice(false);
+            void handleTrackPrepare('lk');
+          }}
+          onPickCamera={(deviceId, deviceLabel) => {
+            // Defer past the modal unmount so the preview stream's
+            // cleanup (MediaStreamTrack.stop()) runs before we reopen
+            // the same device — Chrome/Safari can reject concurrent
+            // getUserMedia calls on the same deviceId.
+            setShowTrackingSourceChoice(false);
+            requestAnimationFrame(() => {
+              void handleTrackPrepareFromCamera(deviceId, deviceLabel);
+            });
+          }}
+          onClose={() => setShowTrackingSourceChoice(false)}
         />
       )}
     </div>

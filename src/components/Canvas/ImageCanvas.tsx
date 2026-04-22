@@ -6,6 +6,8 @@ import { useProjectStore, generateImageId } from "../../store/projectStore";
 import { useThemeStore } from "../../store/themeStore";
 import { useLoadingStore } from "../../store/loadingStore";
 import { useSettingsStore } from "../../store/settingsStore";
+import { useLaserStore } from "../../store/laserStore";
+import { laserControlService } from "../../services/laserControlService";
 import { CanvasRenderer } from "./CanvasRenderer";
 import { HeatmapOverlay } from "../HeatmapOverlay/HeatmapOverlay";
 import { FollicleOriginDialog } from "../FollicleOriginDialog";
@@ -248,6 +250,11 @@ export const ImageCanvas: React.FC = () => {
   // Subscribe to theme changes to trigger canvas re-render
   const themeBackground = useThemeStore((state) => state.background);
 
+  // Laser session subscription — phase change + per-tick pixel updates
+  // drive the render effect below so the animated dot stays in sync.
+  const laserPhase = useLaserStore((state) => state.phase);
+  const laserNextPixelAt = useLaserStore((state) => state.nextPixelAt);
+
   const temporalStore = useTemporalStore();
 
   // Resize canvas to fit container - use ResizeObserver to detect layout changes
@@ -327,7 +334,12 @@ export const ImageCanvas: React.FC = () => {
     const renderer = rendererRef.current;
     if (!canvas || !renderer) return;
 
+    const laserActive = laserPhase !== 'idle';
+
     const renderFrame = () => {
+      // Pull a fresh laser snapshot inside RAF so interpolation stays
+      // smooth between controller ticks without re-triggering the effect.
+      const laserSnapshot = laserActive ? useLaserStore.getState() : null;
       renderer.render(
         canvas.width,
         canvas.height,
@@ -339,7 +351,15 @@ export const ImageCanvas: React.FC = () => {
         showShapes,
         currentShapeType,
         originPunchDiameter,
+        laserSnapshot,
+        performance.now(),
       );
+
+      // Keep looping while a laser session is active so the dot animates
+      // between controller ticks. Otherwise a single frame is enough.
+      if (laserActive) {
+        animationFrameRef.current = requestAnimationFrame(renderFrame);
+      }
     };
 
     if (animationFrameRef.current) {
@@ -363,6 +383,8 @@ export const ImageCanvas: React.FC = () => {
     currentShapeType,
     themeBackground,
     originPunchDiameter,
+    laserPhase,
+    laserNextPixelAt,
   ]);
 
   // Get image coordinates from mouse event
@@ -1355,6 +1377,12 @@ export const ImageCanvas: React.FC = () => {
 
       // Escape to deselect and cancel operations
       if (e.key === "Escape") {
+        // Dismiss any visible laser session (converging or locked) —
+        // isActive() only reports the live interval, but the dot may
+        // still be on screen after lock.
+        if (useLaserStore.getState().phase !== 'idle') {
+          laserControlService.stop();
+        }
         clearSelection();
         setDragState({
           isDragging: false,

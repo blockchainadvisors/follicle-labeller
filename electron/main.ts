@@ -2200,6 +2200,63 @@ ipcMain.handle(
   }
 );
 
+// Prepare a live-camera LK optical flow session. Same payload as
+// videoPrepareLK minus the videoFilePath, plus a base64 JPEG of the
+// first frame the frontend captured from getUserMedia (used to seed
+// origin + tip anchors in the backend).
+ipcMain.handle(
+  "yolo-detection:cameraPrepareLK",
+  async (
+    _,
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    firstFrameData: string,
+    expectedScale: number,
+  ) => {
+    return makeBlobServerRequest(
+      "/yolo-detect/camera-prepare-lk",
+      "POST",
+      {
+        originPatchData,
+        tipPatchData,
+        originInOriginPatchX,
+        originInOriginPatchY,
+        tipInTipPatchX,
+        tipInTipPatchY,
+        initialDx,
+        initialDy,
+        follicleWidth,
+        follicleHeight,
+        firstFrameData,
+        expectedScale,
+      },
+      30000
+    );
+  }
+);
+
+// Match one live-camera frame. The frontend drives cadence — each call
+// is standalone with a fresh base64 JPEG frame payload.
+ipcMain.handle(
+  "yolo-detection:cameraMatchFrame",
+  async (_, sessionId: string, frameData: string) => {
+    return makeBlobServerRequest(
+      `/yolo-detect/camera-match-frame/${sessionId}`,
+      "POST",
+      { frameData },
+      30000
+    );
+  }
+);
+
 // Write detection dataset files to temp directory
 ipcMain.handle(
   "yolo-detection:writeDatasetToTemp",

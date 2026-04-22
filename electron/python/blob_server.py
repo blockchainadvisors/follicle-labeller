@@ -1879,6 +1879,33 @@ class VideoPrepareRequest(BaseModel):
     expectedScale: Optional[float] = 1.0
 
 
+class CameraPrepareRequest(BaseModel):
+    """
+    Live-camera tracking session setup. Identical payload to
+    ``VideoPrepareRequest`` except the video file path is replaced by
+    ``firstFrameData`` — a raw base64-encoded JPEG frame captured by the
+    frontend from the getUserMedia stream. Subsequent frames arrive via
+    /yolo-detect/camera-match-frame.
+    """
+    originPatchData: str
+    tipPatchData: str
+    originInOriginPatchX: float
+    originInOriginPatchY: float
+    tipInTipPatchX: float
+    tipInTipPatchY: float
+    initialDx: float
+    initialDy: float
+    follicleWidth: float
+    follicleHeight: float
+    firstFrameData: str           # base64-encoded JPEG of the first camera frame
+    expectedScale: Optional[float] = 1.0
+
+
+class CameraMatchFrameRequest(BaseModel):
+    """Per-frame payload for an active camera tracking session."""
+    frameData: str                # base64-encoded JPEG of the captured frame
+
+
 class DetectionValidateDatasetRequest(BaseModel):
     datasetPath: str
 
@@ -2330,6 +2357,57 @@ async def yolo_detect_video_match_frame(session_id: str):
 
     service = get_yolo_detection_service()
     return service.match_video_frame(session_id=session_id)
+
+
+@app.post('/yolo-detect/camera-prepare-lk')
+async def yolo_detect_camera_prepare_lk(req: CameraPrepareRequest):
+    """
+    Open a Lucas-Kanade optical flow tracking session fed by live camera
+    frames. The first frame (base64 JPEG) seeds origin + tip anchors;
+    subsequent frames arrive via /yolo-detect/camera-match-frame.
+    """
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    def _strip_and_decode(b64: str) -> bytes:
+        if ',' in b64:
+            b64 = b64.split(',', 1)[1]
+        return base64.b64decode(b64)
+
+    origin_bytes = _strip_and_decode(req.originPatchData)
+    tip_bytes = _strip_and_decode(req.tipPatchData)
+    first_frame_bytes = _strip_and_decode(req.firstFrameData)
+
+    service = get_yolo_detection_service()
+    return service.prepare_camera_session_lk(
+        origin_patch_data=origin_bytes,
+        tip_patch_data=tip_bytes,
+        origin_in_origin_patch_x=req.originInOriginPatchX,
+        origin_in_origin_patch_y=req.originInOriginPatchY,
+        tip_in_tip_patch_x=req.tipInTipPatchX,
+        tip_in_tip_patch_y=req.tipInTipPatchY,
+        initial_dx=req.initialDx,
+        initial_dy=req.initialDy,
+        follicle_width=req.follicleWidth,
+        follicle_height=req.follicleHeight,
+        first_frame_data=first_frame_bytes,
+        expected_scale=req.expectedScale or 1.0,
+    )
+
+
+@app.post('/yolo-detect/camera-match-frame/{session_id}')
+async def yolo_detect_camera_match_frame(session_id: str, req: CameraMatchFrameRequest):
+    """Per-frame match for an active camera session."""
+    if not YOLO_DETECTION_AVAILABLE or not get_yolo_detection_service:
+        raise HTTPException(status_code=503, detail='YOLO detection service not available')
+
+    frame_b64 = req.frameData
+    if ',' in frame_b64:
+        frame_b64 = frame_b64.split(',', 1)[1]
+    frame_bytes = base64.b64decode(frame_b64)
+
+    service = get_yolo_detection_service()
+    return service.match_camera_frame(session_id=session_id, frame_data=frame_bytes)
 
 
 @app.post('/yolo-detect/video-stop/{session_id}')

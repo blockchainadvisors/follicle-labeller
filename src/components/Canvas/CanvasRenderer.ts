@@ -1,5 +1,17 @@
 import { Follicle, Viewport, DragState, ShapeType, isCircle, isRectangle, isLinear, CircleAnnotation, RectangleAnnotation, LinearAnnotation, Point, FollicleOrigin } from '../../types';
 
+// Subset of the laser store the renderer needs. Kept as a local interface
+// rather than importing the store so the renderer stays framework-agnostic.
+export interface LaserRenderSnapshot {
+  phase: 'idle' | 'converging' | 'locked' | 'lost';
+  prevPixel: Point | null;
+  nextPixel: Point | null;
+  nextPixelAt: number;
+  tickPeriodMs: number;
+  trail: Point[];
+  lockedAt: number | null;
+}
+
 // Helper function to calculate distance from point to line segment
 function pointToLineDistance(point: Point, lineStart: Point, lineEnd: Point): number {
   const dx = lineEnd.x - lineStart.x;
@@ -70,7 +82,9 @@ export class CanvasRenderer {
     showLabels: boolean = true,
     showShapes: boolean = true,
     currentShapeType: ShapeType = 'circle',
-    originPunchDiameter: number = 30
+    originPunchDiameter: number = 30,
+    laser: LaserRenderSnapshot | null = null,
+    now: number = performance.now()
   ): void {
     this.clear(canvasWidth, canvasHeight);
 
@@ -121,7 +135,74 @@ export class CanvasRenderer {
       this.drawLassoPreview(dragState.lassoPoints, viewport.scale);
     }
 
+    // Virtual laser pointer overlay — drawn last so it sits above annotations.
+    if (laser && laser.phase !== 'idle') {
+      this.drawLaser(laser, viewport.scale, now);
+    }
+
     this.ctx.restore();
+  }
+
+  private drawLaser(laser: LaserRenderSnapshot, scale: number, now: number): void {
+    const prev = laser.prevPixel;
+    const next = laser.nextPixel;
+    if (!prev || !next) return;
+
+    // Linear interpolation between the last two controller ticks.
+    const elapsed = now - laser.nextPixelAt;
+    const t = Math.max(0, Math.min(1, elapsed / Math.max(1, laser.tickPeriodMs)));
+    const display: Point = {
+      x: prev.x + (next.x - prev.x) * t,
+      y: prev.y + (next.y - prev.y) * t,
+    };
+
+    // Fading trail (oldest → newest: low alpha → high alpha).
+    if (laser.trail.length >= 2) {
+      this.ctx.lineCap = 'round';
+      this.ctx.lineWidth = 2 / scale;
+      for (let i = 1; i < laser.trail.length; i++) {
+        const a = laser.trail[i - 1];
+        const b = laser.trail[i];
+        const alpha = 0.5 * (i / laser.trail.length);
+        this.ctx.strokeStyle = `rgba(255, 42, 42, ${alpha})`;
+        this.ctx.beginPath();
+        this.ctx.moveTo(a.x, a.y);
+        this.ctx.lineTo(b.x, b.y);
+        this.ctx.stroke();
+      }
+      this.ctx.lineCap = 'butt';
+    }
+
+    // Halo — radial gradient approximating a soft glow.
+    const haloRadius = 12 / scale;
+    const gradient = this.ctx.createRadialGradient(
+      display.x, display.y, 0,
+      display.x, display.y, haloRadius
+    );
+    gradient.addColorStop(0, 'rgba(255, 42, 42, 0.6)');
+    gradient.addColorStop(1, 'rgba(255, 42, 42, 0)');
+    this.ctx.fillStyle = gradient;
+    this.ctx.beginPath();
+    this.ctx.arc(display.x, display.y, haloRadius, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    // Solid core dot.
+    const coreRadius = 4 / scale;
+    this.ctx.fillStyle = '#FF2A2A';
+    this.ctx.beginPath();
+    this.ctx.arc(display.x, display.y, coreRadius, 0, Math.PI * 2);
+    this.ctx.fill();
+
+    // Locked indicator: subtle pulsing ring to communicate "on target".
+    if (laser.phase === 'locked') {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 300);
+      const ringRadius = 8 / scale;
+      this.ctx.strokeStyle = `rgba(255, 42, 42, ${0.3 + pulse * 0.5})`;
+      this.ctx.lineWidth = 1.5 / scale;
+      this.ctx.beginPath();
+      this.ctx.arc(display.x, display.y, ringRadius, 0, Math.PI * 2);
+      this.ctx.stroke();
+    }
   }
 
   private drawCircle(

@@ -462,4 +462,68 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
   async videoStop(): Promise<{ success: boolean }> {
     return { success: true };
   }
+
+  async cameraPrepareLK(
+    originPatchData: string,
+    tipPatchData: string,
+    originInOriginPatchX: number,
+    originInOriginPatchY: number,
+    tipInTipPatchX: number,
+    tipInTipPatchY: number,
+    initialDx: number,
+    initialDy: number,
+    follicleWidth: number,
+    follicleHeight: number,
+    firstFrameData: string,
+    expectedScale: number,
+  ): Promise<VideoPrepareResult> {
+    try {
+      const response = await fetch(`${config.backendUrl}/yolo-detect/camera-prepare-lk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          originPatchData,
+          tipPatchData,
+          originInOriginPatchX,
+          originInOriginPatchY,
+          tipInTipPatchX,
+          tipInTipPatchY,
+          initialDx,
+          initialDy,
+          follicleWidth,
+          follicleHeight,
+          firstFrameData,
+          expectedScale,
+        }),
+      });
+      if (!response.ok) {
+        return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, sessionId: '', fps: 0, frameCount: 0, width: 0, height: 0, error: String(error) };
+    }
+  }
+
+  async cameraMatchFrame(
+    sessionId: string,
+    frameData: string,
+  ): Promise<VideoFrameResult> {
+    try {
+      const response = await fetch(
+        `${config.backendUrl}/yolo-detect/camera-match-frame/${sessionId}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frameData }),
+        },
+      );
+      if (!response.ok) {
+        return { success: false, frameIndex: 0, match: null, done: true, error: `Server returned ${response.status}` };
+      }
+      return response.json();
+    } catch (error) {
+      return { success: false, frameIndex: 0, match: null, done: true, error: String(error) };
+    }
+  }
 }

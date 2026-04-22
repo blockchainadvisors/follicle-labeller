@@ -3,12 +3,26 @@ import type { ImageId, TrackingSession, FollicleCorrespondence } from '../types'
 
 export interface VideoSessionInfo {
   sessionId: string;
-  videoFilePath: string;
+  /**
+   * Source of the frames driving this tracking session. ``'file'`` uses
+   * the existing pull-from-backend pipeline (cv2.VideoCapture + frame
+   * cache + scrubber). ``'camera'`` is driven by the frontend: frames
+   * captured from a getUserMedia MediaStream are pushed to the backend
+   * per-frame, there is no scrubber, and the session is unbounded.
+   */
+  source: 'file' | 'camera';
+  /** Only set when ``source === 'file'``. */
+  videoFilePath?: string;
+  /** File name (``source === 'file'``) or camera label (``source === 'camera'``). */
   videoFileName: string;
+  /** Backend-reported fps. 0 for camera sessions (frontend drives cadence). */
   fps: number;
+  /** Backend-reported frame count. -1 for camera sessions (unbounded). */
   frameCount: number;
   videoWidth: number;
   videoHeight: number;
+  /** Only set when ``source === 'camera'`` — the getUserMedia deviceId. */
+  cameraDeviceId?: string;
   sourceImageId: ImageId;
   sourceFollicleId: string;
 }
