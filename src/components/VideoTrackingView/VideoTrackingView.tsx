@@ -3,6 +3,9 @@ import { useTrackingStore, type VideoSessionInfo } from "../../store/trackingSto
 import { useProjectStore } from "../../store/projectStore";
 import { useFollicleStore } from "../../store/follicleStore";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
+import { laserControlService } from "../../services/laserControlService";
+import { useLaserStore } from "../../store/laserStore";
+import { drawLaserOverlay } from "../../utils/drawLaserOverlay";
 import { CanvasRenderer } from "../Canvas/CanvasRenderer";
 import type {
   VideoFrameResult,
@@ -100,6 +103,10 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
 
   const stoppedRef = useRef(false);
 
+  // Virtual laser pointer: guards a single `start()` call for this
+  // video session. Flipped on first trusted match; reset on stop.
+  const laserStartedRef = useRef(false);
+
   const frameCacheRef = useRef<Map<number, VideoFrameCacheEntry>>(new Map());
   const cacheBytesRef = useRef(0);
 
@@ -163,6 +170,12 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
+  // Virtual laser session subscription — drives a self-sustaining RAF
+  // so the dot interpolates between 10 Hz controller ticks even when
+  // video playback isn't advancing frames (paused, or after tracking
+  // stopped). Scheduled only while the laser is non-idle.
+  const laserPhase = useLaserStore((s) => s.phase);
+
   // ==================== DRAWING ====================
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -211,6 +224,31 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       const sX = baseW / videoWidth;
       const sY = baseH / videoHeight;
       const inv = 1 / v.scale;
+
+      // Virtual laser: start on first trusted origin, then follow the
+      // moving origin via setTarget. Skip updates when the origin was
+      // extrapolated (lostPoint === 'origin') so the laser freezes on
+      // the last trusted position — matches the user's chosen policy.
+      const originLostForLaser = frame.match.lostPoint === "origin";
+      if (!originLostForLaser) {
+        const originPixel = {
+          x: frame.match.transformedX,
+          y: frame.match.transformedY,
+        };
+        if (!laserStartedRef.current) {
+          laserControlService.start(
+            sourceFollicleId,
+            originPixel,
+            videoWidth,
+            videoHeight,
+            { mode: "tracking" },
+          );
+          laserStartedRef.current = true;
+        } else {
+          laserControlService.setTarget(originPixel);
+        }
+      }
+
       const det = frame.match.targetDetection;
       const x = det.x * sX;
       const y = det.y * sY;
@@ -291,6 +329,22 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         ctx.fill();
       }
       ctx.restore();
+
+      // Virtual laser overlay — drawn inside the letterboxed + viewport
+      // transform so the dot aligns with the origin in video-pixel space.
+      // `pixelToCanvas` scales video-pixel coords into the letterbox
+      // display space used by the markers above. `inv` keeps the dot a
+      // constant screen size regardless of zoom.
+      const laserSnapshot = useLaserStore.getState();
+      if (laserSnapshot.phase !== "idle") {
+        drawLaserOverlay(
+          ctx,
+          laserSnapshot,
+          performance.now(),
+          (p) => ({ x: p.x * sX, y: p.y * sY }),
+          inv,
+        );
+      }
     }
 
     ctx.restore();
@@ -314,7 +368,41 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         screenY,
       );
     }
-  }, [videoWidth, videoHeight]);
+  }, [videoWidth, videoHeight, sourceFollicleId]);
+
+  // Keep the canvas repainting at 60 Hz while the laser is active so
+  // the dot interpolates smoothly between 10 Hz controller ticks. The
+  // loop reads `useLaserStore.getState()` inside `redrawCanvas` each
+  // frame, so no dependency on tick-level state is needed here.
+  useEffect(() => {
+    if (laserPhase === "idle") return;
+    let rafId = 0;
+    const loop = () => {
+      redrawCanvas();
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafId);
+  }, [laserPhase, redrawCanvas]);
+
+  // Stop the laser whenever the video session ends — covers handleStop
+  // (which sets status='stopped'), camera disconnect (also 'stopped'),
+  // and processing completion ('done'). Unmount is handled separately.
+  useEffect(() => {
+    if (status === "stopped" || status === "done") {
+      laserControlService.stop();
+      laserStartedRef.current = false;
+    }
+  }, [status]);
+
+  // Reset the start-guard whenever the laser phase returns to idle.
+  // This lets the next trusted match restart the session if the laser
+  // died mid-tracking (e.g., probe failure on a bad initial pose).
+  useEffect(() => {
+    if (laserPhase === "idle") {
+      laserStartedRef.current = false;
+    }
+  }, [laserPhase]);
 
   // ==================== DISPLAY FRAME ====================
   const displayFrameAtIndex = useCallback(
@@ -1168,6 +1256,10 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     return () => {
       stoppedRef.current = true;
       seekRequestIdRef.current++;
+      // Tear down any in-flight laser session — the view is going away,
+      // there is nowhere left to render the dot.
+      laserControlService.stop();
+      laserStartedRef.current = false;
       if (currentFrameRef.current) {
         try {
           currentFrameRef.current.bitmap.close();
