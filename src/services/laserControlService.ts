@@ -19,7 +19,7 @@
  */
 
 import { Point } from '../types';
-import { useLaserStore } from '../store/laserStore';
+import { useLaserStore, LaserMode } from '../store/laserStore';
 import { useFollicleStore } from '../store/follicleStore';
 import { distance } from '../utils/coordinate-transform';
 
@@ -275,8 +275,14 @@ class VisualServoController {
    * Execute one control step. Returns `'converged'` when err < EPS,
    * `'lost'` on fatal conditions (too many iterations, off-image,
    * probe failure on re-init), or `'running'` otherwise.
+   *
+   * In `'tracking'` mode the target is expected to move between ticks,
+   * so we never report `'converged'` (the controller keeps servoing)
+   * and the open-ended termination conditions (`MAX_ITERATIONS`,
+   * `offImageCount`) are suppressed. Jacobian re-seeding on sustained
+   * singularity is kept — that's still a valuable recovery path.
    */
-  step(target: Point): { status: 'running' | 'converged' | 'lost'; observed: Point } {
+  step(target: Point, mode: LaserMode = 'static'): { status: 'running' | 'converged' | 'lost'; observed: Point } {
     if (!this.jacobianInitialized) {
       const ok = this.initJacobian();
       if (!ok) {
@@ -287,7 +293,7 @@ class VisualServoController {
     const observed = this.arm.observe();
     const err = sub(observed, target);
 
-    if (magnitude(err) < EPS_CONVERGED_PX) {
+    if (mode === 'static' && magnitude(err) < EPS_CONVERGED_PX) {
       return { status: 'converged', observed };
     }
 
@@ -345,12 +351,16 @@ class VisualServoController {
     } else {
       this.offImageCount = 0;
     }
-    if (this.offImageCount >= 10) {
-      return { status: 'lost', observed: newObserved };
-    }
 
-    if (this.iterations >= MAX_ITERATIONS) {
-      return { status: 'lost', observed: newObserved };
+    // Open-ended tracking sessions don't time out or bail on off-image
+    // excursions — the live target can legitimately drift near edges.
+    if (mode === 'static') {
+      if (this.offImageCount >= 10) {
+        return { status: 'lost', observed: newObserved };
+      }
+      if (this.iterations >= MAX_ITERATIONS) {
+        return { status: 'lost', observed: newObserved };
+      }
     }
 
     return { status: 'running', observed: newObserved };
@@ -364,6 +374,7 @@ export class LaserControlService {
   private controller: VisualServoController | null = null;
   private currentTarget: Point | null = null;
   private currentTargetId: string | null = null;
+  private mode: LaserMode = 'static';
   private follicleUnsubscribe: (() => void) | null = null;
 
   private constructor() {}
@@ -382,9 +393,23 @@ export class LaserControlService {
   /**
    * Begin a new laser session targeting the given follicle. Stops any
    * existing session first.
+   *
+   * `opts.mode` defaults to `'static'` for the image-canvas workflow.
+   * Pass `'tracking'` for the video workflow: the session stays open
+   * against a moving target updated via `setTarget`, never locks, and
+   * ignores the follicle-store lifecycle (the video view owns it).
    */
-  start(targetFollicleId: string, targetPixel: Point, imageWidth: number, imageHeight: number): void {
+  start(
+    targetFollicleId: string,
+    targetPixel: Point,
+    imageWidth: number,
+    imageHeight: number,
+    opts: { mode?: LaserMode } = {},
+  ): void {
     this.stop();
+
+    const mode = opts.mode ?? 'static';
+    this.mode = mode;
 
     const cx = imageWidth / 2;
     const cy = imageHeight / 2;
@@ -408,19 +433,37 @@ export class LaserControlService {
       initialPixel,
       tickPeriodMs: TICK_PERIOD_MS,
       now,
+      mode,
     });
 
-    // End the session if the target follicle is deleted mid-flight.
-    this.follicleUnsubscribe = useFollicleStore.subscribe((state) => {
-      if (!this.currentTargetId) return;
-      const stillExists = state.follicles.some((f) => f.id === this.currentTargetId);
-      if (!stillExists) {
-        useLaserStore.getState().setPhase('lost', performance.now());
-        this.stop();
-      }
-    });
+    // In static mode, end the session if the target follicle is deleted
+    // mid-flight. In tracking mode the video view owns lifecycle — the
+    // sidebar follicle store isn't the source of truth for the session.
+    if (mode === 'static') {
+      this.follicleUnsubscribe = useFollicleStore.subscribe((state) => {
+        if (!this.currentTargetId) return;
+        const stillExists = state.follicles.some((f) => f.id === this.currentTargetId);
+        if (!stillExists) {
+          useLaserStore.getState().setPhase('lost', performance.now());
+          this.stop();
+        }
+      });
+    }
 
     this.intervalHandle = setInterval(() => this.tick(), TICK_PERIOD_MS);
+  }
+
+  /**
+   * Update the current target pixel without tearing the session down.
+   * Intended for `'tracking'` mode where the target moves per video
+   * frame. The Broyden Jacobian estimate is preserved because the arm
+   * geometry is unchanged; the next control step naturally steers
+   * toward the new target.
+   */
+  setTarget(pixel: Point): void {
+    if (!this.controller) return;
+    this.currentTarget = { ...pixel };
+    useLaserStore.setState({ targetPixel: { ...pixel } });
   }
 
   stop(): void {
@@ -435,13 +478,14 @@ export class LaserControlService {
     this.controller = null;
     this.currentTarget = null;
     this.currentTargetId = null;
+    this.mode = 'static';
     useLaserStore.getState().endSession();
   }
 
   private tick(): void {
     if (!this.controller || !this.currentTarget) return;
 
-    const result = this.controller.step(this.currentTarget);
+    const result = this.controller.step(this.currentTarget, this.mode);
     const now = performance.now();
     useLaserStore.getState().pushObservation(result.observed, now);
 

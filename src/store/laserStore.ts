@@ -3,10 +3,19 @@ import { Point } from '../types';
 
 export type LaserPhase = 'idle' | 'converging' | 'locked' | 'lost';
 
+/**
+ * Session mode. `static` is the original image-space workflow (spawn,
+ * converge, lock). `tracking` is the video workflow where the target is
+ * updated per-frame and the controller never enters `locked` — it keeps
+ * servoing against a moving target until the caller stops the session.
+ */
+export type LaserMode = 'static' | 'tracking';
+
 const TRAIL_CAP = 20;
 
 interface LaserState {
   phase: LaserPhase;
+  mode: LaserMode;
   targetFollicleId: string | null;
   targetPixel: Point | null;
 
@@ -28,6 +37,7 @@ interface LaserState {
     initialPixel: Point;
     tickPeriodMs: number;
     now: number;
+    mode?: LaserMode;
   }) => void;
   pushObservation: (pixel: Point, now: number) => void;
   setPhase: (phase: LaserPhase, now: number) => void;
@@ -36,6 +46,7 @@ interface LaserState {
 
 export const useLaserStore = create<LaserState>()((set) => ({
   phase: 'idle',
+  mode: 'static',
   targetFollicleId: null,
   targetPixel: null,
   prevPixel: null,
@@ -45,9 +56,10 @@ export const useLaserStore = create<LaserState>()((set) => ({
   trail: [],
   lockedAt: null,
 
-  beginSession: ({ targetFollicleId, targetPixel, initialPixel, tickPeriodMs, now }) => {
+  beginSession: ({ targetFollicleId, targetPixel, initialPixel, tickPeriodMs, now, mode = 'static' }) => {
     set({
       phase: 'converging',
+      mode,
       targetFollicleId,
       targetPixel: { ...targetPixel },
       prevPixel: { ...initialPixel },
@@ -83,6 +95,7 @@ export const useLaserStore = create<LaserState>()((set) => ({
   endSession: () => {
     set({
       phase: 'idle',
+      mode: 'static',
       targetFollicleId: null,
       targetPixel: null,
       prevPixel: null,
