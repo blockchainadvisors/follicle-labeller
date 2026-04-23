@@ -117,6 +117,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     bitmap: ImageBitmap;
     match: VideoFrameResult["match"];
     frameIndex: number;
+    cooldownRemaining?: number | null;
+    cooldownReason?: "seeking" | "origin_lost" | null;
   } | null>(null);
 
   const isPlayingRef = useRef(true);
@@ -227,9 +229,11 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
 
       // Virtual laser: start on first trusted origin, then follow the
       // moving origin via setTarget. Skip updates when the origin was
-      // extrapolated (lostPoint === 'origin') so the laser freezes on
-      // the last trusted position — matches the user's chosen policy.
-      const originLostForLaser = frame.match.lostPoint === "origin";
+      // extrapolated (lostPoint === 'origin') OR the session is in
+      // cooldown (lostPoint === 'both' with markers frozen on the last
+      // trusted position) — matches the user's chosen policy.
+      const originLostForLaser =
+        frame.match.lostPoint === "origin" || frame.match.lostPoint === "both";
       if (!originLostForLaser) {
         const originPixel = {
           x: frame.match.transformedX,
@@ -263,9 +267,12 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       // matches with a rigid-consistency check. When one point fails
       // (lostPoint set), its position is extrapolated from the other and
       // rendered in a distinct style so the user can tell the tracker is
-      // guessing.
-      const originLost = frame.match.lostPoint === "origin";
-      const tipLost = frame.match.lostPoint === "tip";
+      // guessing. `lostPoint === 'both'` means the session is in cooldown
+      // and both markers are frozen on the last trusted position.
+      const originLost =
+        frame.match.lostPoint === "origin" || frame.match.lostPoint === "both";
+      const tipLost =
+        frame.match.lostPoint === "tip" || frame.match.lostPoint === "both";
 
       // Origin marker — stroked ring (+ crosshair when trusted)
       const cx = frame.match.transformedX * sX;
@@ -350,7 +357,10 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     ctx.restore();
 
     // Draw confidence label in screen space (sharp text at any zoom)
-    if (frame.match) {
+    // Suppressed during cooldown — we render the cooldown label instead.
+    const inCooldown =
+      typeof frame.cooldownRemaining === "number" && frame.cooldownRemaining > 0;
+    if (frame.match && !inCooldown) {
       const sX = baseW / videoWidth;
       const sY = baseH / videoHeight;
       const screenX =
@@ -367,6 +377,20 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         screenX,
         screenY,
       );
+    }
+
+    // Cooldown countdown — shown anchored to the top-left of the
+    // letterboxed video area in screen space. Colour is amber so it
+    // doesn't clash with the teal match colour or the red laser.
+    if (inCooldown) {
+      const remaining = frame.cooldownRemaining as number;
+      const label =
+        frame.cooldownReason === "origin_lost"
+          ? `Reacquiring in ${remaining.toFixed(1)} s…`
+          : `Searching in ${remaining.toFixed(1)} s…`;
+      ctx.fillStyle = "#FFB74D";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillText(label, baseOffsetX + 12, baseOffsetY + 22);
     }
   }, [videoWidth, videoHeight, sourceFollicleId]);
 
@@ -468,6 +492,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         bitmap,
         match: entry.match,
         frameIndex: idx,
+        cooldownRemaining: entry.cooldownRemaining,
+        cooldownReason: entry.cooldownReason,
       };
       redrawCanvas();
     },
@@ -998,6 +1024,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
             frameIndex: result.frameIndex,
             frameDataB64: result.frameData || "",
             match: result.match,
+            cooldownRemaining: result.cooldownRemaining,
+            cooldownReason: result.cooldownReason,
           });
           cacheBytesRef.current += result.frameData?.length || 0;
           processingMaxFrameRef.current = result.frameIndex;
@@ -1191,6 +1219,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           bitmap,
           match: result.match,
           frameIndex,
+          cooldownRemaining: result.cooldownRemaining,
+          cooldownReason: result.cooldownReason,
         };
         redrawCanvas();
       } catch (err) {
