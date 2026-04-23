@@ -970,6 +970,7 @@ const electronAPI = {
       follicleWidth: number,
       follicleHeight: number,
       expectedScale: number,
+      cooldownSec?: number,
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke(
         "yolo-detection:videoPrepareLK",
@@ -985,6 +986,7 @@ const electronAPI = {
         follicleWidth,
         follicleHeight,
         expectedScale,
+        cooldownSec,
       ),
 
     videoMatchFrame: (
@@ -1014,6 +1016,7 @@ const electronAPI = {
       follicleHeight: number,
       firstFrameData: string,
       expectedScale: number,
+      cooldownSec?: number,
     ): Promise<Record<string, unknown>> =>
       ipcRenderer.invoke(
         "yolo-detection:cameraPrepareLK",
@@ -1029,6 +1032,7 @@ const electronAPI = {
         follicleHeight,
         firstFrameData,
         expectedScale,
+        cooldownSec,
       ),
 
     cameraMatchFrame: (

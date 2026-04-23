@@ -476,6 +476,7 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult> {
     try {
       const response = await fetch(`${config.backendUrl}/yolo-detect/camera-prepare-lk`, {
@@ -494,6 +495,7 @@ export class WebYoloDetectionAdapter implements YoloDetectionAdapter {
           follicleHeight,
           firstFrameData,
           expectedScale,
+          cooldownSec,
         }),
       });
       if (!response.ok) {
