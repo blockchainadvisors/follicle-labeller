@@ -92,6 +92,11 @@ export interface DetectionSettings {
   // Live camera selection (machine-local; intentionally not exported to .fol project files)
   liveCameraDeviceId: string | null;
   liveCameraLabel: string | null;
+
+  // Video tracking: seconds to wait after origin is lost before retrying NCC
+  // against the scalp image. Applies to both file and live-camera sessions.
+  // Clamped backend-side to [0.5, 60].
+  trackingCooldownSec: number;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -162,6 +167,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   // Live camera - no selection until the user picks one
   liveCameraDeviceId: null,
   liveCameraLabel: null,
+  // Video tracking cooldown default: 5 seconds between failed NCC/LK retries
+  trackingCooldownSec: 5,
 };
 
 // Install state that can be managed by parent for persistence
@@ -2125,6 +2132,35 @@ export function DetectionSettingsDialog({
                 />
               </div>
             )}
+
+            <div className="settings-row">
+              <label htmlFor="tracking-cooldown">Tracking cooldown (s)</label>
+              <input
+                id="tracking-cooldown"
+                type="number"
+                step={0.5}
+                min={0.5}
+                max={60}
+                value={settings.trackingCooldownSec}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  const clamped = Math.max(0.5, Math.min(60, Number.isFinite(raw) ? raw : 5));
+                  const newSettings: DetectionSettings = {
+                    ...settings,
+                    trackingCooldownSec: clamped,
+                  };
+                  if (applyToImageOnly && activeImageId && onImageSettingsChange) {
+                    onImageSettingsChange(activeImageId, newSettings);
+                  } else {
+                    onSettingsChange(newSettings);
+                  }
+                }}
+              />
+            </div>
+            <p className="setting-hint">
+              Wait this long after origin tracking is lost before retrying NCC against the
+              scalp image. Applies to both live camera and video-file sessions.
+            </p>
           </section>
         </div>
 

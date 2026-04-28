@@ -2151,6 +2151,7 @@ ipcMain.handle(
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
+    cooldownSec?: number,
   ) => {
     return makeBlobServerRequest(
       "/yolo-detect/video-prepare-lk",
@@ -2168,6 +2169,7 @@ ipcMain.handle(
         follicleWidth,
         follicleHeight,
         expectedScale,
+        cooldownSec,
       },
       30000
     );
@@ -2220,6 +2222,7 @@ ipcMain.handle(
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number,
+    cooldownSec?: number,
   ) => {
     return makeBlobServerRequest(
       "/yolo-detect/camera-prepare-lk",
@@ -2237,6 +2240,7 @@ ipcMain.handle(
         follicleHeight,
         firstFrameData,
         expectedScale,
+        cooldownSec,
       },
       30000
     );
