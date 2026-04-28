@@ -3677,8 +3677,15 @@ class YOLODetectionService:
         session['prev_gray'] = gray.copy()
         session['prev_points'] = initial_points
         session['initial_points'] = initial_points.copy()
+        # Identity transform: prev_transform represents the similarity
+        # between initial_points and current_points (both in video-frame
+        # coords). At seed time current == initial, so scale must be 1.0.
+        # `expected_scale` is the source-patch→video scale used by NCC
+        # and lives elsewhere (it's the match_scale used to size the
+        # bbox via _build_lk_match_dict). Mixing them here breaks the
+        # rigid check on the very next frame, demoting tip permanently.
         session['prev_transform'] = {
-            'scale': float(expected_scale),
+            'scale': 1.0,
             'rotation_rad': 0.0,
             'tx': 0.0,
             'ty': 0.0,
