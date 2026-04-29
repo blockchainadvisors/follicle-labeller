@@ -259,6 +259,7 @@ export class FollicleTrackingService {
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number = 1.0,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult> {
     try {
       return await withRetry(
@@ -275,6 +276,7 @@ export class FollicleTrackingService {
           follicleWidth,
           follicleHeight,
           expectedScale,
+          cooldownSec,
         ),
         { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
       );
@@ -318,6 +320,7 @@ export class FollicleTrackingService {
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number = 1.0,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult> {
     try {
       return await withRetry(
@@ -334,6 +337,7 @@ export class FollicleTrackingService {
           follicleHeight,
           firstFrameData,
           expectedScale,
+          cooldownSec,
         ),
         { maxRetries: 3, initialDelayMs: 500, maxDelayMs: 2000, shouldRetry: isConnectionError }
       );

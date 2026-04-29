@@ -212,6 +212,7 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult> {
     return window.electronAPI.yoloDetection.videoPrepareLK(
       videoFilePath,
@@ -226,6 +227,7 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
       follicleWidth,
       follicleHeight,
       expectedScale,
+      cooldownSec,
     ) as Promise<VideoPrepareResult>;
   }
 
@@ -250,6 +252,7 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult> {
     return window.electronAPI.yoloDetection.cameraPrepareLK(
       originPatchData,
@@ -264,6 +267,7 @@ export class ElectronYoloDetectionAdapter implements YoloDetectionAdapter {
       follicleHeight,
       firstFrameData,
       expectedScale,
+      cooldownSec,
     ) as Promise<VideoPrepareResult>;
   }
 

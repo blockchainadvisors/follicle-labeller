@@ -1877,6 +1877,10 @@ class VideoPrepareRequest(BaseModel):
     follicleWidth: float
     follicleHeight: float
     expectedScale: Optional[float] = 1.0
+    # Seconds between failed NCC/LK retries in the state machine (LK path
+    # only — ignored by the NCC-only /video-prepare endpoint). Clamped to
+    # [0.5, 60] service-side; None falls back to a 5 s default.
+    cooldownSec: Optional[float] = None
 
 
 class CameraPrepareRequest(BaseModel):
@@ -1899,6 +1903,7 @@ class CameraPrepareRequest(BaseModel):
     follicleHeight: float
     firstFrameData: str           # base64-encoded JPEG of the first camera frame
     expectedScale: Optional[float] = 1.0
+    cooldownSec: Optional[float] = None
 
 
 class CameraMatchFrameRequest(BaseModel):
@@ -2342,6 +2347,7 @@ async def yolo_detect_video_prepare_lk(req: VideoPrepareRequest):
         follicle_width=req.follicleWidth,
         follicle_height=req.follicleHeight,
         expected_scale=req.expectedScale or 1.0,
+        cooldown_sec=req.cooldownSec,
     )
 
 
@@ -2392,6 +2398,7 @@ async def yolo_detect_camera_prepare_lk(req: CameraPrepareRequest):
         follicle_height=req.follicleHeight,
         first_frame_data=first_frame_bytes,
         expected_scale=req.expectedScale or 1.0,
+        cooldown_sec=req.cooldownSec,
     )
 
 

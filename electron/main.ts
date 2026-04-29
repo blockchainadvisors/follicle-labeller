@@ -6,6 +6,10 @@ import {
   Menu,
   MenuItemConstructorOptions,
   powerMonitor,
+  systemPreferences,
+  shell,
+  desktopCapturer,
+  screen,
 } from "electron";
 import path from "path";
 import fs from "fs";
@@ -74,6 +78,46 @@ function createWindow(): void {
     (_wc, permission, callback) => {
       if (permission === "media") return callback(true);
       callback(false);
+    },
+  );
+
+  // Wire up getDisplayMedia({video: true}) so the renderer can capture
+  // the screen without showing the system picker.
+  //
+  // We deliberately request a SCREEN source (not a window source). On
+  // macOS 13+ window-type capture often fails with "Could not start
+  // video source" — Electron's own samples now use screen capture. The
+  // renderer crops the screen-capture stream down to the window's
+  // bounds in a <canvas> pipeline, so the saved recording still
+  // contains only the app window.
+  mainWindow.webContents.session.setDisplayMediaRequestHandler(
+    async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen"],
+        });
+        if (sources.length === 0) {
+          console.error("[recording] no screen sources available");
+          callback({});
+          return;
+        }
+        // If the window straddles displays, prefer the display the
+        // window is mostly on so the renderer-side crop math lines up.
+        let chosen = sources[0];
+        if (mainWindow) {
+          const winBounds = mainWindow.getBounds();
+          const display = screen.getDisplayMatching(winBounds);
+          // desktopCapturer source ids look like "screen:<displayId>:0"
+          const match = sources.find((s) =>
+            s.id.includes(`:${display.id}:`),
+          );
+          if (match) chosen = match;
+        }
+        callback({ video: chosen });
+      } catch (err) {
+        console.error("[recording] display-media handler failed:", err);
+        callback({});
+      }
     },
   );
 
@@ -2151,6 +2195,7 @@ ipcMain.handle(
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
+    cooldownSec?: number,
   ) => {
     return makeBlobServerRequest(
       "/yolo-detect/video-prepare-lk",
@@ -2168,6 +2213,7 @@ ipcMain.handle(
         follicleWidth,
         follicleHeight,
         expectedScale,
+        cooldownSec,
       },
       30000
     );
@@ -2220,6 +2266,7 @@ ipcMain.handle(
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number,
+    cooldownSec?: number,
   ) => {
     return makeBlobServerRequest(
       "/yolo-detect/camera-prepare-lk",
@@ -2237,6 +2284,7 @@ ipcMain.handle(
         follicleHeight,
         firstFrameData,
         expectedScale,
+        cooldownSec,
       },
       30000
     );
@@ -2602,6 +2650,127 @@ ipcMain.handle(
       };
     }
   }
+);
+
+// ============================================
+// Screen Recording
+// ============================================
+
+// Open a native folder picker for the screen-recording save location.
+ipcMain.handle("dialog:selectRecordingFolder", async () => {
+  const window = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  if (!window) return null;
+
+  const result = await dialog.showOpenDialog(window, {
+    properties: ["openDirectory", "createDirectory"],
+    title: "Choose folder for screen recordings",
+  });
+
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+// Resolve the OS Downloads folder — used as the default save location when
+// the user has not picked one.
+ipcMain.handle("app:getDefaultDownloadsPath", () => {
+  return app.getPath("downloads");
+});
+
+// Return a media-source ID the renderer can pass to getUserMedia to capture
+// just the app's BrowserWindow (not the full screen / OS chrome).
+ipcMain.handle("recording:getSourceId", () => {
+  if (!mainWindow) return null;
+  return mainWindow.getMediaSourceId();
+});
+
+// Return the app window's geometry on its display + the display's
+// backing scale factor and pixel size. The renderer uses this to crop
+// the full-screen capture down to just the app window. We use
+// ``getBounds`` (whole window incl. title bar / chrome), not
+// ``getContentBounds``, so the saved recording shows the full app
+// window — title bar and toolbar included — just without the OS menu
+// bar / dock around it.
+ipcMain.handle("recording:getWindowGeometry", () => {
+  if (!mainWindow) return null;
+  const bounds = mainWindow.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  return {
+    // Window position relative to the display's origin (logical px).
+    x: bounds.x - display.bounds.x,
+    y: bounds.y - display.bounds.y,
+    // Window size (logical px).
+    width: bounds.width,
+    height: bounds.height,
+    // Display backing scale factor (informational; the renderer
+    // computes the actual capture-frame scale from the video element).
+    scaleFactor: display.scaleFactor,
+    // Display logical size — the renderer divides
+    // ``video.videoWidth`` by this to find the true scale of the
+    // captured stream, which can differ from ``scaleFactor`` depending
+    // on how getDisplayMedia hands us frames.
+    displayWidth: display.bounds.width,
+    displayHeight: display.bounds.height,
+  };
+});
+
+// macOS gates screen capture behind a system permission. Other platforms
+// don't, so we report 'granted' there.
+ipcMain.handle("recording:checkScreenPermission", () => {
+  if (process.platform !== "darwin") return "granted";
+  return systemPreferences.getMediaAccessStatus("screen");
+});
+
+// Open the OS settings pane where the user grants screen recording
+// permission. Only meaningful on macOS — Windows/Linux are no-ops.
+ipcMain.handle("recording:openScreenSettings", async () => {
+  if (process.platform === "darwin") {
+    await shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    );
+    return true;
+  }
+  return false;
+});
+
+// Persist the encoded recording buffer to disk. ``folderPath`` is the
+// user's chosen directory or ``null`` to mean "use Downloads".
+ipcMain.handle(
+  "recording:saveBuffer",
+  async (
+    _,
+    buffer: ArrayBuffer,
+    folderPath: string | null,
+    filename: string,
+  ): Promise<{ success: boolean; filePath?: string; error?: string }> => {
+    try {
+      if (!buffer || buffer.byteLength === 0) {
+        return { success: false, error: "Empty recording buffer" };
+      }
+      const folder = folderPath && folderPath.trim().length > 0
+        ? folderPath
+        : app.getPath("downloads");
+
+      // Ensure the folder still exists (user may have deleted it since
+      // picking it). Fall back to Downloads if not.
+      let targetFolder = folder;
+      if (!fs.existsSync(targetFolder)) {
+        console.warn(
+          `[recording] Save folder ${targetFolder} no longer exists, falling back to Downloads`,
+        );
+        targetFolder = app.getPath("downloads");
+      }
+
+      const filePath = path.join(targetFolder, filename);
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      return { success: true, filePath };
+    } catch (error) {
+      console.error("[recording] Failed to save buffer:", error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  },
 );
 
 // ============================================

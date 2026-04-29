@@ -2078,25 +2078,39 @@ export const Toolbar: React.FC = () => {
         // (will be refined when video metadata comes back)
         const expectedScale = 1.0;
 
-        const prepareCall =
-          tracker === 'lk'
-            ? follicleTrackingService.videoPrepareLK.bind(follicleTrackingService)
-            : follicleTrackingService.videoPrepare.bind(follicleTrackingService);
-
-        const result = await prepareCall(
-          fileResult.filePath,
-          originPatch.data,
-          tipPatch.data,
-          originPatch.offsetX,
-          originPatch.offsetY,
-          tipPatch.offsetX,
-          tipPatch.offsetY,
-          initialDx,
-          initialDy,
-          rect.width,
-          rect.height,
-          expectedScale,
-        );
+        // LK path accepts an extra cooldown-seconds arg (user-configurable
+        // in Inference Settings); NCC-only path does not. Branch so
+        // TypeScript picks the right signature.
+        const result = tracker === 'lk'
+          ? await follicleTrackingService.videoPrepareLK(
+              fileResult.filePath,
+              originPatch.data,
+              tipPatch.data,
+              originPatch.offsetX,
+              originPatch.offsetY,
+              tipPatch.offsetX,
+              tipPatch.offsetY,
+              initialDx,
+              initialDy,
+              rect.width,
+              rect.height,
+              expectedScale,
+              detectionSettings.trackingCooldownSec,
+            )
+          : await follicleTrackingService.videoPrepare(
+              fileResult.filePath,
+              originPatch.data,
+              tipPatch.data,
+              originPatch.offsetX,
+              originPatch.offsetY,
+              tipPatch.offsetX,
+              tipPatch.offsetY,
+              initialDx,
+              initialDy,
+              rect.width,
+              rect.height,
+              expectedScale,
+            );
 
         if (!result.success) {
           throw new Error(result.error || "Failed to prepare video session");
@@ -2329,6 +2343,7 @@ export const Toolbar: React.FC = () => {
           rect.height,
           frameDataUrl,
           1.0,
+          detectionSettings.trackingCooldownSec,
         );
 
         if (!result.success) {

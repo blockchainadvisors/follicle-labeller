@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain, ChevronDown } from 'lucide-react';
+import { X, Cpu, Zap, Download, Loader2, AlertCircle, Crosshair, Box, Brain, ChevronDown, Folder, RotateCcw, Video } from 'lucide-react';
 import type { BlobDetectionOptions, GPUInfo, GPUHardwareInfo, ModelInfo, DetectionModelInfo, DetectionMethod, TensorRTStatus, YoloInferenceBackend } from '../../types';
 import { blobService } from '../../services/blobService';
 import { yoloKeypointService } from '../../services/yoloKeypointService';
 import { yoloDetectionService } from '../../services/yoloDetectionService';
 import { useCameraDevices, useCameraPreview } from '../../hooks/useCameraDevices';
+import { useAppPreferencesStore } from '../../store/appPreferencesStore';
 import './DetectionSettingsDialog.css';
 
 export interface DetectionSettings {
@@ -92,6 +93,11 @@ export interface DetectionSettings {
   // Live camera selection (machine-local; intentionally not exported to .fol project files)
   liveCameraDeviceId: string | null;
   liveCameraLabel: string | null;
+
+  // Video tracking: seconds to wait after origin is lost before retrying NCC
+  // against the scalp image. Applies to both file and live-camera sessions.
+  // Clamped backend-side to [0.5, 60].
+  trackingCooldownSec: number;
 }
 
 export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
@@ -162,6 +168,8 @@ export const DEFAULT_DETECTION_SETTINGS: DetectionSettings = {
   // Live camera - no selection until the user picks one
   liveCameraDeviceId: null,
   liveCameraLabel: null,
+  // Video tracking cooldown default: 5 seconds between failed NCC/LK retries
+  trackingCooldownSec: 5,
 };
 
 // Install state that can be managed by parent for persistence
@@ -231,6 +239,47 @@ export function DetectionSettingsDialog({
 }: DetectionSettingsDialogProps) {
   // Track whether we're editing per-image or global settings
   const [applyToImageOnly, setApplyToImageOnly] = useState(hasImageOverride);
+
+  // App-level (machine-local) preferences. These live in a separate store
+  // because they aren't part of the project file — folder paths shouldn't
+  // travel with .fol exports.
+  const screenRecordingFolder = useAppPreferencesStore(
+    (s) => s.screenRecordingFolder,
+  );
+  const setScreenRecordingFolder = useAppPreferencesStore(
+    (s) => s.setScreenRecordingFolder,
+  );
+  const [defaultDownloadsPath, setDefaultDownloadsPath] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (window.electronAPI?.getDefaultDownloadsPath) {
+      window.electronAPI
+        .getDefaultDownloadsPath()
+        .then((p: string) => {
+          if (!cancelled) setDefaultDownloadsPath(p);
+        })
+        .catch((err: unknown) => {
+          console.warn('Failed to resolve Downloads path:', err);
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handlePickRecordingFolder = useCallback(async () => {
+    if (!window.electronAPI?.selectRecordingFolder) return;
+    const chosen = await window.electronAPI.selectRecordingFolder();
+    if (chosen) setScreenRecordingFolder(chosen);
+  }, [setScreenRecordingFolder]);
+
+  const handleResetRecordingFolder = useCallback(() => {
+    setScreenRecordingFolder(null);
+  }, [setScreenRecordingFolder]);
+
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuHardware, setGpuHardware] = useState<GPUHardwareInfo | null>(null);
   const [loadedKeypointModel, setLoadedKeypointModel] = useState<ModelInfo | null>(null);
@@ -2125,6 +2174,86 @@ export function DetectionSettingsDialog({
                 />
               </div>
             )}
+
+            <div className="settings-row">
+              <label htmlFor="tracking-cooldown">Tracking cooldown (s)</label>
+              <input
+                id="tracking-cooldown"
+                type="number"
+                step={0.5}
+                min={0.5}
+                max={60}
+                value={settings.trackingCooldownSec}
+                onChange={(e) => {
+                  const raw = Number(e.target.value);
+                  const clamped = Math.max(0.5, Math.min(60, Number.isFinite(raw) ? raw : 5));
+                  const newSettings: DetectionSettings = {
+                    ...settings,
+                    trackingCooldownSec: clamped,
+                  };
+                  if (applyToImageOnly && activeImageId && onImageSettingsChange) {
+                    onImageSettingsChange(activeImageId, newSettings);
+                  } else {
+                    onSettingsChange(newSettings);
+                  }
+                }}
+              />
+            </div>
+            <p className="setting-hint">
+              Wait this long after origin tracking is lost before retrying NCC against the
+              scalp image. Applies to both live camera and video-file sessions.
+            </p>
+          </section>
+
+          {/* Screen recording — machine-local preference (not part of the
+              project file). Lives here because the only thing that triggers
+              recording is starting a video tracking session. */}
+          <section className="settings-section">
+            <h3 className="screen-recording-heading">
+              <Video size={16} />
+              Screen Recording
+            </h3>
+            <p className="setting-hint">
+              While a video tracking session is running, the app records its
+              own window and saves the result here when tracking stops.
+            </p>
+
+            <div className="recording-folder-row">
+              <div
+                className="recording-folder-path"
+                title={screenRecordingFolder ?? defaultDownloadsPath ?? '~/Downloads'}
+              >
+                {screenRecordingFolder ?? defaultDownloadsPath ?? '~/Downloads'}
+                {screenRecordingFolder === null && (
+                  <span className="recording-folder-default-tag">default</span>
+                )}
+              </div>
+            </div>
+
+            <div className="recording-folder-actions">
+              <button
+                type="button"
+                className="button-secondary recording-folder-button"
+                onClick={handlePickRecordingFolder}
+              >
+                <Folder size={14} />
+                Choose folder…
+              </button>
+              <button
+                type="button"
+                className="button-secondary recording-folder-button"
+                onClick={handleResetRecordingFolder}
+                disabled={screenRecordingFolder === null}
+                title={
+                  screenRecordingFolder === null
+                    ? 'Already using the default Downloads folder'
+                    : 'Reset to the OS Downloads folder'
+                }
+              >
+                <RotateCcw size={14} />
+                Use default (Downloads)
+              </button>
+            </div>
           </section>
         </div>
 

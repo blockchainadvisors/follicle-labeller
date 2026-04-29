@@ -4,6 +4,7 @@ import { useProjectStore } from "../../store/projectStore";
 import { useFollicleStore } from "../../store/follicleStore";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
 import { laserControlService } from "../../services/laserControlService";
+import { screenRecordingService } from "../../services/screenRecordingService";
 import { useLaserStore } from "../../store/laserStore";
 import { drawLaserOverlay } from "../../utils/drawLaserOverlay";
 import { CanvasRenderer } from "../Canvas/CanvasRenderer";
@@ -117,6 +118,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     bitmap: ImageBitmap;
     match: VideoFrameResult["match"];
     frameIndex: number;
+    cooldownRemaining?: number | null;
+    cooldownReason?: "seeking" | "origin_lost" | null;
   } | null>(null);
 
   const isPlayingRef = useRef(true);
@@ -153,6 +156,15 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
   const [scrubHoverFrame, setScrubHoverFrame] = useState<number | null>(null);
   const [scrubHoverX, setScrubHoverX] = useState(0);
   const [memoryWarning, setMemoryWarning] = useState(false);
+
+  // Screen-recording state. ``isRecording`` drives the REC badge in the
+  // header; ``recordingWarning`` is a non-blocking notice shown when the
+  // OS denies screen-capture permission.
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingWarning, setRecordingWarning] = useState<{
+    message: string;
+    canOpenSettings: boolean;
+  } | null>(null);
 
   const [sourcePanelCollapsed, setSourcePanelCollapsed] = useState(false);
   const [sourceViewport, setSourceViewport] = useState<Viewport>({
@@ -227,9 +239,11 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
 
       // Virtual laser: start on first trusted origin, then follow the
       // moving origin via setTarget. Skip updates when the origin was
-      // extrapolated (lostPoint === 'origin') so the laser freezes on
-      // the last trusted position — matches the user's chosen policy.
-      const originLostForLaser = frame.match.lostPoint === "origin";
+      // extrapolated (lostPoint === 'origin') OR the session is in
+      // cooldown (lostPoint === 'both' with markers frozen on the last
+      // trusted position) — matches the user's chosen policy.
+      const originLostForLaser =
+        frame.match.lostPoint === "origin" || frame.match.lostPoint === "both";
       if (!originLostForLaser) {
         const originPixel = {
           x: frame.match.transformedX,
@@ -263,9 +277,12 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
       // matches with a rigid-consistency check. When one point fails
       // (lostPoint set), its position is extrapolated from the other and
       // rendered in a distinct style so the user can tell the tracker is
-      // guessing.
-      const originLost = frame.match.lostPoint === "origin";
-      const tipLost = frame.match.lostPoint === "tip";
+      // guessing. `lostPoint === 'both'` means the session is in cooldown
+      // and both markers are frozen on the last trusted position.
+      const originLost =
+        frame.match.lostPoint === "origin" || frame.match.lostPoint === "both";
+      const tipLost =
+        frame.match.lostPoint === "tip" || frame.match.lostPoint === "both";
 
       // Origin marker — stroked ring (+ crosshair when trusted)
       const cx = frame.match.transformedX * sX;
@@ -350,7 +367,10 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     ctx.restore();
 
     // Draw confidence label in screen space (sharp text at any zoom)
-    if (frame.match) {
+    // Suppressed during cooldown — we render the cooldown label instead.
+    const inCooldown =
+      typeof frame.cooldownRemaining === "number" && frame.cooldownRemaining > 0;
+    if (frame.match && !inCooldown) {
       const sX = baseW / videoWidth;
       const sY = baseH / videoHeight;
       const screenX =
@@ -367,6 +387,20 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         screenX,
         screenY,
       );
+    }
+
+    // Cooldown countdown — shown anchored to the top-left of the
+    // letterboxed video area in screen space. Colour is amber so it
+    // doesn't clash with the teal match colour or the red laser.
+    if (inCooldown) {
+      const remaining = frame.cooldownRemaining as number;
+      const label =
+        frame.cooldownReason === "origin_lost"
+          ? `Reacquiring in ${remaining.toFixed(1)} s…`
+          : `Searching in ${remaining.toFixed(1)} s…`;
+      ctx.fillStyle = "#FFB74D";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillText(label, baseOffsetX + 12, baseOffsetY + 22);
     }
   }, [videoWidth, videoHeight, sourceFollicleId]);
 
@@ -468,6 +502,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         bitmap,
         match: entry.match,
         frameIndex: idx,
+        cooldownRemaining: entry.cooldownRemaining,
+        cooldownReason: entry.cooldownReason,
       };
       redrawCanvas();
     },
@@ -998,6 +1034,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
             frameIndex: result.frameIndex,
             frameDataB64: result.frameData || "",
             match: result.match,
+            cooldownRemaining: result.cooldownRemaining,
+            cooldownReason: result.cooldownReason,
           });
           cacheBytesRef.current += result.frameData?.length || 0;
           processingMaxFrameRef.current = result.frameIndex;
@@ -1191,6 +1229,8 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           bitmap,
           match: result.match,
           frameIndex,
+          cooldownRemaining: result.cooldownRemaining,
+          cooldownReason: result.cooldownReason,
         };
         redrawCanvas();
       } catch (err) {
@@ -1273,12 +1313,96 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     };
   }, []);
 
+  // Screen recording: start when the tracking view mounts, stop on
+  // unmount. handleStop/handleClose also explicitly await stop() so the
+  // recording is flushed before the user-initiated close path; this
+  // effect's cleanup is the safety net for unmounts that don't go
+  // through those handlers (e.g., the parent removing the view because
+  // the session was closed elsewhere).
+  useEffect(() => {
+    let cancelled = false;
+
+    const unsubscribe = screenRecordingService.onStateChange((rec) => {
+      if (!cancelled) setIsRecording(rec);
+    });
+
+    (async () => {
+      const result = await screenRecordingService.start(sessionId);
+      if (cancelled) {
+        // The view unmounted while we were starting — undo it.
+        await screenRecordingService.stop().catch(() => undefined);
+        return;
+      }
+      if (!result.started) {
+        if (result.reason === 'permission') {
+          setRecordingWarning({
+            message:
+              result.message ??
+              'Screen recording disabled — grant access in System Settings.',
+            canOpenSettings: true,
+          });
+        } else if (result.reason === 'unsupported') {
+          // Silent in web mode; only surface this when running in
+          // Electron with no compatible codec (extremely unlikely).
+          if (window.electronAPI) {
+            console.warn(
+              '[recording] unsupported:',
+              result.message ?? 'no compatible recorder',
+            );
+          }
+        } else if (result.reason === 'error') {
+          console.error('[recording] start failed:', result.message);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      // Fire-and-forget on cleanup. handleStop/handleClose already await
+      // the same call when the user triggers them; this branch covers
+      // unmounts that bypass those handlers.
+      screenRecordingService
+        .stop()
+        .then((res) => {
+          if (res.saved && res.filePath) {
+            console.log('[recording] saved to', res.filePath);
+          } else if (!res.saved && res.error && res.error !== 'Recorder not running') {
+            console.warn('[recording] stop returned error:', res.error);
+          }
+        })
+        .catch((err) => {
+          console.error('[recording] cleanup stop failed', err);
+        });
+    };
+  }, [sessionId]);
+
+  const handleOpenScreenRecordingSettings = useCallback(async () => {
+    if (window.electronAPI?.openScreenRecordingSettings) {
+      await window.electronAPI.openScreenRecordingSettings();
+    }
+  }, []);
+
+  const dismissRecordingWarning = useCallback(() => {
+    setRecordingWarning(null);
+  }, []);
+
   // ==================== HANDLERS ====================
 
   const handleStop = useCallback(async () => {
     stoppedRef.current = true;
     setStatus("stopped");
     setIsPlaying(false);
+    // Stop the recorder first so the saved file lines up with what the
+    // user just saw. Failure here shouldn't block the tracker stop.
+    try {
+      const recResult = await screenRecordingService.stop();
+      if (recResult.saved && recResult.filePath) {
+        console.log('[recording] saved to', recResult.filePath);
+      }
+    } catch (err) {
+      console.warn('[recording] stop failed during handleStop', err);
+    }
     try {
       await follicleTrackingService.videoStop(sessionId);
     } catch {
@@ -1289,6 +1413,14 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
   const handleClose = useCallback(async () => {
     stoppedRef.current = true;
     seekRequestIdRef.current++;
+    try {
+      const recResult = await screenRecordingService.stop();
+      if (recResult.saved && recResult.filePath) {
+        console.log('[recording] saved to', recResult.filePath);
+      }
+    } catch (err) {
+      console.warn('[recording] stop failed during handleClose', err);
+    }
     try {
       await follicleTrackingService.videoStop(sessionId);
     } catch {
@@ -1414,6 +1546,15 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         <div className="video-tracking-header-left">
           <div className="video-tracking-title">
             {isCamera ? "Live Camera Tracking" : "Video Tracking"}
+            {isRecording && (
+              <span
+                className="video-tracking-rec-badge"
+                title="Recording app window to disk"
+              >
+                <span className="video-tracking-rec-dot" aria-hidden="true" />
+                REC
+              </span>
+            )}
           </div>
           <div className="video-tracking-stats">
             <span>
@@ -1478,6 +1619,31 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           </button>
         </div>
       </div>
+
+      {recordingWarning && (
+        <div className="video-tracking-rec-warning" role="status">
+          <span className="video-tracking-rec-warning-message">
+            {recordingWarning.message}
+          </span>
+          {recordingWarning.canOpenSettings && (
+            <button
+              className="video-tracking-rec-warning-action"
+              onClick={handleOpenScreenRecordingSettings}
+              type="button"
+            >
+              Open System Settings
+            </button>
+          )}
+          <button
+            className="video-tracking-rec-warning-dismiss"
+            onClick={dismissRecordingWarning}
+            type="button"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Split content: source panel (left) + video panel (right) */}
       <div

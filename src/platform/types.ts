@@ -514,6 +514,7 @@ export interface YoloDetectionAdapter {
     follicleWidth: number,
     follicleHeight: number,
     expectedScale: number,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult>;
 
   /** Match next video frame */
@@ -542,6 +543,7 @@ export interface YoloDetectionAdapter {
     follicleHeight: number,
     firstFrameData: string,
     expectedScale: number,
+    cooldownSec?: number,
   ): Promise<VideoPrepareResult>;
 
   /**

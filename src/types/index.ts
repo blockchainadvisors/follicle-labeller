@@ -337,6 +337,10 @@ export interface DetectionSettingsExport {
 
   // Origin visualization settings
   originPunchDiameter?: number;  // Diameter of punch gripper circle in image pixels
+
+  // Video tracking: seconds to wait after origin is lost before retrying NCC.
+  // Default 5 s; clamped backend-side to [0.5, 60].
+  trackingCooldownSec?: number;
 }
 
 // Project settings container
@@ -769,6 +773,7 @@ declare global {
           follicleWidth: number,
           follicleHeight: number,
           expectedScale: number,
+          cooldownSec?: number,
         ) => Promise<VideoPrepareResult>;
         videoMatchFrame: (
           sessionId: string,
@@ -789,12 +794,36 @@ declare global {
           follicleHeight: number,
           firstFrameData: string,
           expectedScale: number,
+          cooldownSec?: number,
         ) => Promise<VideoPrepareResult>;
         cameraMatchFrame: (
           sessionId: string,
           frameData: string,
         ) => Promise<VideoFrameResult>;
       };
+
+      // Screen recording
+      selectRecordingFolder: () => Promise<string | null>;
+      getDefaultDownloadsPath: () => Promise<string>;
+      getRecordingSourceId: () => Promise<string | null>;
+      getRecordingWindowGeometry: () => Promise<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        scaleFactor: number;
+        displayWidth: number;
+        displayHeight: number;
+      } | null>;
+      checkScreenRecordingPermission: () => Promise<
+        'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+      >;
+      openScreenRecordingSettings: () => Promise<boolean>;
+      saveRecordingBuffer: (
+        buffer: ArrayBuffer,
+        folderPath: string | null,
+        filename: string,
+      ) => Promise<{ success: boolean; filePath?: string; error?: string }>;
     };
   }
 }
@@ -1235,11 +1264,21 @@ export interface VideoFrameResult {
     originConfidence: number;
     tipConfidence: number;
     rigidValid: boolean;
-    lostPoint: 'origin' | 'tip' | null;
+    /**
+     * `'origin'` | `'tip'` — one point was extrapolated from the other.
+     * `'both'` — session is in cooldown (both markers frozen on last trusted
+     *   position while NCC re-acquisition waits out the cooldown timer).
+     * `null` — both points tracked normally.
+     */
+    lostPoint: 'origin' | 'tip' | 'both' | null;
   } | null;
   frameData?: string;  // base64-encoded JPEG of the frame
   done: boolean;
   error?: string;
+  /** Seconds remaining on the seek/re-acquire cooldown, or null when not in cooldown. */
+  cooldownRemaining?: number | null;
+  /** `'seeking'` — never acquired. `'origin_lost'` — lost mid-session. `null` — not in cooldown. */
+  cooldownReason?: 'seeking' | 'origin_lost' | null;
 }
 
 /**
@@ -1250,6 +1289,9 @@ export interface VideoFrameCacheEntry {
   frameIndex: number;
   frameDataB64: string;
   match: VideoFrameResult['match'];
+  /** Seek/track cooldown remaining (s) for this frame, if backend was in cooldown. */
+  cooldownRemaining?: number | null;
+  cooldownReason?: 'seeking' | 'origin_lost' | null;
 }
 
 /**
