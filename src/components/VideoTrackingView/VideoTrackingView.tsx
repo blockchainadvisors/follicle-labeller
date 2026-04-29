@@ -4,6 +4,7 @@ import { useProjectStore } from "../../store/projectStore";
 import { useFollicleStore } from "../../store/follicleStore";
 import { follicleTrackingService } from "../../services/follicleTrackingService";
 import { laserControlService } from "../../services/laserControlService";
+import { screenRecordingService } from "../../services/screenRecordingService";
 import { useLaserStore } from "../../store/laserStore";
 import { drawLaserOverlay } from "../../utils/drawLaserOverlay";
 import { CanvasRenderer } from "../Canvas/CanvasRenderer";
@@ -155,6 +156,15 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
   const [scrubHoverFrame, setScrubHoverFrame] = useState<number | null>(null);
   const [scrubHoverX, setScrubHoverX] = useState(0);
   const [memoryWarning, setMemoryWarning] = useState(false);
+
+  // Screen-recording state. ``isRecording`` drives the REC badge in the
+  // header; ``recordingWarning`` is a non-blocking notice shown when the
+  // OS denies screen-capture permission.
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingWarning, setRecordingWarning] = useState<{
+    message: string;
+    canOpenSettings: boolean;
+  } | null>(null);
 
   const [sourcePanelCollapsed, setSourcePanelCollapsed] = useState(false);
   const [sourceViewport, setSourceViewport] = useState<Viewport>({
@@ -1303,12 +1313,96 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
     };
   }, []);
 
+  // Screen recording: start when the tracking view mounts, stop on
+  // unmount. handleStop/handleClose also explicitly await stop() so the
+  // recording is flushed before the user-initiated close path; this
+  // effect's cleanup is the safety net for unmounts that don't go
+  // through those handlers (e.g., the parent removing the view because
+  // the session was closed elsewhere).
+  useEffect(() => {
+    let cancelled = false;
+
+    const unsubscribe = screenRecordingService.onStateChange((rec) => {
+      if (!cancelled) setIsRecording(rec);
+    });
+
+    (async () => {
+      const result = await screenRecordingService.start(sessionId);
+      if (cancelled) {
+        // The view unmounted while we were starting — undo it.
+        await screenRecordingService.stop().catch(() => undefined);
+        return;
+      }
+      if (!result.started) {
+        if (result.reason === 'permission') {
+          setRecordingWarning({
+            message:
+              result.message ??
+              'Screen recording disabled — grant access in System Settings.',
+            canOpenSettings: true,
+          });
+        } else if (result.reason === 'unsupported') {
+          // Silent in web mode; only surface this when running in
+          // Electron with no compatible codec (extremely unlikely).
+          if (window.electronAPI) {
+            console.warn(
+              '[recording] unsupported:',
+              result.message ?? 'no compatible recorder',
+            );
+          }
+        } else if (result.reason === 'error') {
+          console.error('[recording] start failed:', result.message);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      // Fire-and-forget on cleanup. handleStop/handleClose already await
+      // the same call when the user triggers them; this branch covers
+      // unmounts that bypass those handlers.
+      screenRecordingService
+        .stop()
+        .then((res) => {
+          if (res.saved && res.filePath) {
+            console.log('[recording] saved to', res.filePath);
+          } else if (!res.saved && res.error && res.error !== 'Recorder not running') {
+            console.warn('[recording] stop returned error:', res.error);
+          }
+        })
+        .catch((err) => {
+          console.error('[recording] cleanup stop failed', err);
+        });
+    };
+  }, [sessionId]);
+
+  const handleOpenScreenRecordingSettings = useCallback(async () => {
+    if (window.electronAPI?.openScreenRecordingSettings) {
+      await window.electronAPI.openScreenRecordingSettings();
+    }
+  }, []);
+
+  const dismissRecordingWarning = useCallback(() => {
+    setRecordingWarning(null);
+  }, []);
+
   // ==================== HANDLERS ====================
 
   const handleStop = useCallback(async () => {
     stoppedRef.current = true;
     setStatus("stopped");
     setIsPlaying(false);
+    // Stop the recorder first so the saved file lines up with what the
+    // user just saw. Failure here shouldn't block the tracker stop.
+    try {
+      const recResult = await screenRecordingService.stop();
+      if (recResult.saved && recResult.filePath) {
+        console.log('[recording] saved to', recResult.filePath);
+      }
+    } catch (err) {
+      console.warn('[recording] stop failed during handleStop', err);
+    }
     try {
       await follicleTrackingService.videoStop(sessionId);
     } catch {
@@ -1319,6 +1413,14 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
   const handleClose = useCallback(async () => {
     stoppedRef.current = true;
     seekRequestIdRef.current++;
+    try {
+      const recResult = await screenRecordingService.stop();
+      if (recResult.saved && recResult.filePath) {
+        console.log('[recording] saved to', recResult.filePath);
+      }
+    } catch (err) {
+      console.warn('[recording] stop failed during handleClose', err);
+    }
     try {
       await follicleTrackingService.videoStop(sessionId);
     } catch {
@@ -1444,6 +1546,15 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
         <div className="video-tracking-header-left">
           <div className="video-tracking-title">
             {isCamera ? "Live Camera Tracking" : "Video Tracking"}
+            {isRecording && (
+              <span
+                className="video-tracking-rec-badge"
+                title="Recording app window to disk"
+              >
+                <span className="video-tracking-rec-dot" aria-hidden="true" />
+                REC
+              </span>
+            )}
           </div>
           <div className="video-tracking-stats">
             <span>
@@ -1508,6 +1619,31 @@ const VideoTrackingViewInner: React.FC<InnerProps> = ({ session, onClose }) => {
           </button>
         </div>
       </div>
+
+      {recordingWarning && (
+        <div className="video-tracking-rec-warning" role="status">
+          <span className="video-tracking-rec-warning-message">
+            {recordingWarning.message}
+          </span>
+          {recordingWarning.canOpenSettings && (
+            <button
+              className="video-tracking-rec-warning-action"
+              onClick={handleOpenScreenRecordingSettings}
+              type="button"
+            >
+              Open System Settings
+            </button>
+          )}
+          <button
+            className="video-tracking-rec-warning-dismiss"
+            onClick={dismissRecordingWarning}
+            type="button"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Split content: source panel (left) + video panel (right) */}
       <div
