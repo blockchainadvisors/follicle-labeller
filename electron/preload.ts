@@ -1045,6 +1045,63 @@ const electronAPI = {
         frameData,
       ),
   },
+
+  // ============================================
+  // Screen Recording
+  // ============================================
+
+  // Open a native folder picker for the screen-recording save location.
+  // Returns the chosen directory, or null if the user cancelled.
+  selectRecordingFolder: (): Promise<string | null> =>
+    ipcRenderer.invoke("dialog:selectRecordingFolder"),
+
+  // Resolve the OS Downloads folder. Used as the implicit default when the
+  // user has not picked a custom folder.
+  getDefaultDownloadsPath: (): Promise<string> =>
+    ipcRenderer.invoke("app:getDefaultDownloadsPath"),
+
+  // Get a media-source ID for the renderer to pass to getUserMedia so it
+  // captures only the app's BrowserWindow (not the full screen).
+  getRecordingSourceId: (): Promise<string | null> =>
+    ipcRenderer.invoke("recording:getSourceId"),
+
+  // Get the app window's geometry on its display + the display scale
+  // factor. Used to crop a full-screen capture down to just the window.
+  getRecordingWindowGeometry: (): Promise<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    scaleFactor: number;
+    displayWidth: number;
+    displayHeight: number;
+  } | null> => ipcRenderer.invoke("recording:getWindowGeometry"),
+
+  // Check macOS screen-recording permission. Returns 'granted', 'denied',
+  // 'restricted', 'not-determined', or 'unknown'. Always 'granted' on
+  // Windows/Linux.
+  checkScreenRecordingPermission: (): Promise<
+    "not-determined" | "granted" | "denied" | "restricted" | "unknown"
+  > => ipcRenderer.invoke("recording:checkScreenPermission"),
+
+  // Open the OS settings pane to grant screen recording permission. macOS
+  // only — returns false on other platforms.
+  openScreenRecordingSettings: (): Promise<boolean> =>
+    ipcRenderer.invoke("recording:openScreenSettings"),
+
+  // Write an encoded recording buffer to disk. ``folderPath`` is the user's
+  // chosen folder, or null/empty to use the OS Downloads folder.
+  saveRecordingBuffer: (
+    buffer: ArrayBuffer,
+    folderPath: string | null,
+    filename: string,
+  ): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(
+      "recording:saveBuffer",
+      buffer,
+      folderPath,
+      filename,
+    ),
 };
 
 // Expose the API to the renderer process

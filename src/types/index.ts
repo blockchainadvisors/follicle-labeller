@@ -801,6 +801,29 @@ declare global {
           frameData: string,
         ) => Promise<VideoFrameResult>;
       };
+
+      // Screen recording
+      selectRecordingFolder: () => Promise<string | null>;
+      getDefaultDownloadsPath: () => Promise<string>;
+      getRecordingSourceId: () => Promise<string | null>;
+      getRecordingWindowGeometry: () => Promise<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        scaleFactor: number;
+        displayWidth: number;
+        displayHeight: number;
+      } | null>;
+      checkScreenRecordingPermission: () => Promise<
+        'not-determined' | 'granted' | 'denied' | 'restricted' | 'unknown'
+      >;
+      openScreenRecordingSettings: () => Promise<boolean>;
+      saveRecordingBuffer: (
+        buffer: ArrayBuffer,
+        folderPath: string | null,
+        filename: string,
+      ) => Promise<{ success: boolean; filePath?: string; error?: string }>;
     };
   }
 }
